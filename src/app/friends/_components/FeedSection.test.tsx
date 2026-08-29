@@ -84,12 +84,22 @@ function makeComment(over: Partial<FeedComment> = {}): FeedComment {
 let postPlan: Array<Result<FeedPostView[]> | Promise<Result<FeedPostView[]>>> = [];
 let commentPlan: Array<Result<Comments> | Promise<Result<Comments>>> = [];
 let authorPlan: Array<Map<string, FeedAuthor>> = [];
-let addResult: Result<FeedComment> = { ok: true, value: makeComment({ id: 'comment-2' }) };
+/**
+ * A promise is allowed here for the same reason `postPlan` allows one: a write
+ * that resolves AFTER the viewer has changed account is a case of its own, and it
+ * cannot be staged without holding the write open across the switch.
+ */
+let addResult: Result<FeedComment> | Promise<Result<FeedComment>> = {
+  ok: true,
+  value: makeComment({ id: 'comment-2' }),
+};
 
 let authStatus: 'signed-in' | 'signed-out' = 'signed-in';
 /** Which account is signed in — a switch between two of them is its own case. */
 let viewer = VIEWER;
 let epoch = 1;
+/** Whether the browser Supabase client resolves. `null` is an outage, not an empty Feed. */
+let clientAvailable = true;
 
 function next<T>(plan: T[]): T {
   return plan.length > 1 ? (plan.shift() as T) : plan[0];
@@ -127,7 +137,7 @@ vi.mock('@/hooks/useAuth', () => ({
 }));
 
 vi.mock('@/lib/supabase/client', () => ({
-  getBrowserSupabase: () => ({}),
+  getBrowserSupabase: () => (clientAvailable ? {} : null),
 }));
 
 vi.mock('@/lib/accountCache', () => ({
@@ -170,6 +180,7 @@ beforeEach(() => {
   commentPlan = [{ ok: true, value: new Map([['post-1', [makeComment()]]]) }];
   authorPlan = [NAMED];
   authorRequests.length = 0;
+  clientAvailable = true;
   // A DISTINCT body, because a confirmed addition is now staged into the thread
   // until a successful read supersedes it — reusing the existing reply's text
   // would make every assertion about "the reply already on screen" ambiguous.
@@ -200,6 +211,37 @@ describe('FeedSection — the failure banner belongs to the session that failed'
       await screen.findByTestId('feed-load-failed'),
       'the banner stopped rendering for the case it exists for',
     ).toBeTruthy();
+  });
+
+  test('an unconfigured browser client is an outage, not an empty Feed', async () => {
+    // Round 9 (MEDIUM, codex): the null-client branch returned quietly, so a
+    // SIGNED-IN viewer whose client failed to initialise got no banner and no
+    // posts — a surface claiming there is nothing to see. It is the same false
+    // ready state the two read branches refuse, one step earlier, and it bypassed
+    // fetchFeedPosts(null), which reports the unavailability correctly.
+    clientAvailable = false;
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    expect(
+      await screen.findByTestId('feed-load-failed'),
+      'a signed-in viewer with no client was shown an empty Feed instead of a failure',
+    ).toBeTruthy();
+  });
+
+  test('a signed-OUT visitor with no client is still not told the Feed failed', async () => {
+    // The negative half: the signed-out early return comes first, so the branch
+    // above must not resurrect the banner this describe block exists to keep off a
+    // visitor who has no Feed to load in the first place.
+    clientAvailable = false;
+    authStatus = 'signed-out';
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('feed-load-failed'),
+        'a signed-out visitor was told a Feed they have no access to could not be loaded',
+      ).toBeNull(),
+    );
   });
 });
 
@@ -499,6 +541,36 @@ describe('FeedComments — a confirmed write is not undone by a failed read', ()
       screen.getByText('landed anyway').closest('li')?.textContent,
       'the viewer own confirmed reply rendered under the Someone fallback',
     ).toContain('Viewer');
+  });
+
+  test('a reply confirmed AFTER an account switch is not staged into the next account’s Feed', async () => {
+    const user = userEvent.setup();
+    // Round 9 (HIGH, codex). The confirmed-writes overlay is account-scoped and is
+    // cleared during the render that changes account — but that reset runs BEFORE
+    // the write returns. FeedComments holds the onChanged callback from the render
+    // that mounted it, so an add still in flight when the viewer switches resolves
+    // into the NEXT account's state and withPending rendered A's words under B,
+    // including where feed_comments RLS would refuse that row outright.
+    const held = deferred<Result<FeedComment>>();
+    addResult = held.promise;
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    await user.click(await screen.findByTestId('feed-reply'));
+    await user.type(screen.getByTestId('feed-comment-input'), 'account A words');
+    await user.click(screen.getByTestId('feed-comment-submit'));
+
+    // Account B signs in while A's write is still open, then A's write lands.
+    viewer = OTHER_VIEWER;
+    epoch = 2;
+    held.resolve({ ok: true, value: makeComment({ id: 'late', body: 'account A words', authorId: VIEWER }) });
+    await held.promise;
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText('account A words'),
+        'a comment one account wrote was staged into another account’s Feed',
+      ).toBeNull(),
+    );
   });
 
   test('a reply the server confirmed added is not lost when the follow-up read fails', async () => {

@@ -20,13 +20,26 @@ import {
 } from '@/lib/feed.server';
 import FeedComments, { type ConfirmedWrite } from './FeedComments';
 
-/** Confirmed writes not yet reflected by a successful read. */
+/**
+ * Confirmed writes not yet reflected by a successful read.
+ *
+ * `owner` IS PART OF THE VALUE, not bookkeeping beside it. An overlay is
+ * audience-scoped to the account whose write produced it (V8-R-FEED-006), and a
+ * write can land AFTER that account is gone: `FeedComments` holds the `onChanged`
+ * callback from the render that mounted it, so an add or a delete still in flight
+ * when the viewer switches accounts resolves into the NEXT account's state. The
+ * render-time reset cannot help — it runs before the write returns. Stamping the
+ * owner and refusing to read an overlay that belongs to somebody else is what
+ * makes the late write inert instead of a cross-account injection.
+ */
 type PendingWrites = {
+  /** The viewer whose confirmed writes these are. `null` means "nobody's". */
+  readonly owner: string | null;
   readonly added: readonly FeedComment[];
   readonly removedIds: ReadonlySet<string>;
 };
 
-const EMPTY_PENDING: PendingWrites = { added: [], removedIds: new Set() };
+const EMPTY_PENDING: PendingWrites = { owner: null, added: [], removedIds: new Set() };
 
 /**
  * One thread as the viewer should see it: what the last successful read returned,
@@ -201,7 +214,17 @@ export default function FeedSection({
       return;
     }
     const supabase = getBrowserSupabase();
-    if (supabase === null) return;
+    if (supabase === null) {
+      // AN UNCONFIGURED CLIENT IS AN OUTAGE, NOT AN EMPTY FEED, and returning
+      // quietly here made the two indistinguishable for a SIGNED-IN viewer: no
+      // banner, no posts, and a surface claiming there is nothing to see. It is
+      // the same false ready state the two read branches below refuse, one step
+      // earlier — and this branch bypassed even `fetchFeedPosts(null)`, which
+      // reports the unavailability correctly. Signed-out callers never reach
+      // here: they returned above, where there genuinely is no Feed to load.
+      setLoadFailed(true);
+      return;
+    }
 
     // An account switch mid-flight must not land another account's Feed, and a
     // superseded refresh must not land its own account's older one.
@@ -321,7 +344,17 @@ export default function FeedSection({
                 // has not landed, and substituting an empty array here is what
                 // made FeedComments claim "No replies yet." for a thread nobody
                 // had read. A post with a settled empty thread HAS an entry.
-                comments={withPending(threads.get(post.id) ?? null, post.id, pending)}
+                // AND THE OVERLAY ONLY APPLIES TO THE ACCOUNT THAT MADE IT. A
+                // write still in flight when the viewer switched accounts
+                // resolves into this component's state afterwards — the render
+                // reset ran before the write returned, so it cannot have cleared
+                // it — and applying it here rendered one account's reply under
+                // another, including where the server would refuse that row.
+                comments={withPending(
+                  threads.get(post.id) ?? null,
+                  post.id,
+                  pending.owner === viewerId ? pending : EMPTY_PENDING,
+                )}
                 // The BASELINE, not the overlay: a staged reply is something we
                 // know, and it must not be mistaken for the thread having loaded.
                 unreadBaseline={threads.get(post.id) === undefined}
@@ -334,14 +367,25 @@ export default function FeedSection({
                   // Recorded BEFORE the re-read is issued, so a read that fails
                   // cannot undo a write the server already accepted.
                   if (confirmed !== undefined) {
-                    setPending((prev) => ({
-                      added: confirmed.added === undefined
-                        ? prev.added
-                        : [...prev.added, confirmed.added],
-                      removedIds: confirmed.removedId === undefined
-                        ? prev.removedIds
-                        : new Set([...prev.removedIds, confirmed.removedId]),
-                    }));
+                    setPending((prev) => {
+                      // `viewerId` here is the one this render closed over, which
+                      // is the account that ISSUED the write — not necessarily the
+                      // one on screen when it returns. Stamping it is what lets the
+                      // reader above refuse an overlay that is not theirs.
+                      //
+                      // And never accumulate onto somebody else's overlay: if the
+                      // account changed, `prev` belongs to them, so start clean.
+                      const base = prev.owner === viewerId ? prev : EMPTY_PENDING;
+                      return {
+                        owner: viewerId,
+                        added: confirmed.added === undefined
+                          ? base.added
+                          : [...base.added, confirmed.added],
+                        removedIds: confirmed.removedId === undefined
+                          ? base.removedIds
+                          : new Set([...base.removedIds, confirmed.removedId]),
+                      };
+                    });
                   }
                   void refresh();
                 }}

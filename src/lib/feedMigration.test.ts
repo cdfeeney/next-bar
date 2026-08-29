@@ -175,6 +175,51 @@ describe('0069 — one definition of the Feed audience gate', () => {
     }
   });
 
+  it('the ONE granted hide-free helper carries its party guard, and the guard is the whole of it', () => {
+    // Round 9 (CRITICAL, codex): feed_post_visible_to_party is SECURITY DEFINER,
+    // granted, takes a caller-supplied post id and deliberately ignores the
+    // caller's own report — so its guard is the only thing standing between it and
+    // a liveness oracle over content the caller has HIDDEN. The guard was
+    // "yourself, or anybody if you authored the post", and the self half let any
+    // authenticated holder of a post uuid poll it. The self arm now also requires a
+    // real feed_post_tags row, which is exactly the consent-surface population that
+    // needs the question.
+    //
+    // Round 9 (MEDIUM, codex): none of this was pinned at all — the guard could be
+    // deleted outright while every other assertion stayed green. Whole normalised
+    // body, so a widened or removed term cannot slip past.
+    expect(sqlShape(functionBody('public.feed_post_visible_to_party('))).toContain(
+      'select ( auth.uid() is not null'
+      + ' and p_post_id is not null'
+      + ' and p_profile_id is not null'
+      + ' and ( public.is_feed_post_author(p_post_id, auth.uid())'
+      + ' or ( p_profile_id = auth.uid()'
+      + ' and exists ( select 1 from public.feed_post_tags t'
+      + ' where t.post_id = p_post_id and t.profile_id = auth.uid() ) ) ) )'
+      + ' and public.feed_post_visible_to(p_profile_id, p_post_id);',
+    );
+  });
+
+  it('the hide-free helpers a DEFINER can reach are not granted to an application role', () => {
+    // Round 9 (CRITICAL, codex). can_view_feed_comment is hide-free by design and
+    // was granted to authenticated, so a caller who had reported a comment could
+    // still poll whether it was live. Its only caller is report_content, which is
+    // SECURITY DEFINER and holds EXECUTE as the owner, so the grant bought nothing
+    // and cost an oracle. Same reasoning that keeps feed_post_destination_is_live
+    // un-granted.
+    expect(SQL).toContain(
+      'revoke all on function public.can_view_feed_comment(uuid) from public, anon, authenticated;',
+    );
+    expect(SQL, 'can_view_feed_comment is granted to an application role again')
+      .not.toContain('grant execute on function public.can_view_feed_comment(uuid) to authenticated;');
+    // And the two definer verbs ask the INTERNAL rule, not the granted wrapper —
+    // routing them through a grantable entry point is what forced its guard wide.
+    expect(sqlShape(functionBody('public.report_content(')), 'report_content asks the granted wrapper again')
+      .not.toContain('public.feed_post_visible_to_party(');
+    expect(sqlShape(functionBody('public.can_view_feed_comment(')), 'can_view_feed_comment asks the granted wrapper again')
+      .not.toContain('public.feed_post_visible_to_party(');
+  });
+
   it('is_feed_post_recipient is GONE, not merely un-granted', () => {
     // Round 8 (CRITICAL, codex): SECURITY DEFINER, granted to authenticated, guarded
     // only by "answer about your own id" — so a recipient who kept a post uuid could
@@ -212,12 +257,22 @@ describe('0069 — the reporter hide reaches every surface of the post', () => {
     // readable after a block, after the two stopped being mutual friends, and after
     // the post was deleted or its destination retired.
     //
-    // Asserted as the whole normalised expression, because the grouping IS the
-    // requirement — see `sqlShape`.
+    // Asserted as the whole normalised USING CLAUSE — `using ( ` through its
+    // closing paren — because the grouping IS the requirement, see `sqlShape`.
+    //
+    // Round 9 (MEDIUM, claude): this assertion used to start at `(auth.uid()` and
+    // stop at the second arm's inner paren, so it pinned an interior SUBSTRING
+    // while its three siblings pinned whole clauses. A widening disjunct added
+    // anywhere outside it — `using ( true or ( ...the pinned text... ) )` — left
+    // the substring intact and every one of the suite's assertions green, while
+    // feed_post_tags became readable to every authenticated account. The negative
+    // loop above screens five specific substrings and none of them appear in such
+    // a widening. Anchoring both ends is what makes "and nothing else" real.
     expect(sqlShape(policyBody('feed_post_tags: readable with post'))).toContain(
-      '(auth.uid() = profile_id and public.feed_post_visible_to_party(post_id, auth.uid()))'
+      'using ( (auth.uid() = profile_id'
+      + ' and public.feed_post_visible_to_party(post_id, auth.uid()))'
       + ' or ( public.can_view_feed_post(post_id)'
-      + ' and not public.is_blocked_between(auth.uid(), public.feed_post_tags.profile_id) )',
+      + ' and not public.is_blocked_between(auth.uid(), public.feed_post_tags.profile_id) ) )',
     );
   });
 
@@ -634,7 +689,7 @@ describe('0069 — a write carries its own authorization, not an older snapshot'
     expect(
       afterWrite,
       'the post-write feed_post arm is inverted, so every permitted post report rolls back',
-    ).toContain('if not public.feed_post_visible_to_party(v_ref::uuid, auth.uid()) then raise exception');
+    ).toContain('if not public.feed_post_visible_to(auth.uid(), v_ref::uuid) then raise exception');
     expect(
       afterWrite,
       'the post-write comment arm is inverted, so every permitted comment report rolls back',
@@ -660,7 +715,7 @@ describe('0069 — a write carries its own authorization, not an older snapshot'
       body,
       'the report path asks the hide-carrying gate, so a report undoes itself',
     ).not.toContain('public.can_view_feed_post(v_ref::uuid)');
-    expect(body).toContain('public.feed_post_visible_to_party(v_ref::uuid, auth.uid())');
+    expect(body).toContain('public.feed_post_visible_to(auth.uid(), v_ref::uuid)');
   });
 });
 
