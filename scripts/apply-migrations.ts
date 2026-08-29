@@ -77,6 +77,7 @@ import {
   type CatalogBootstrapRow,
 } from './lib/catalogBootstrap';
 import { MIGRATION_LEDGER_DDL } from './lib/migrationLedger';
+import { normalisedSql } from '../src/lib/effectiveMigration';
 import { deriveLabel, parseRef, resolveTarget } from './lib/migration-target-guard';
 import { readClassification } from './lib/classification';
 
@@ -223,7 +224,18 @@ try {
     .sort()
     .map((name) => ({
       name,
-      sql: readFileSync(join(migrationsDir, name), 'utf-8'),
+      // NORMALISED BEFORE IT IS EXECUTED, exactly as apply-migration-set.ts does.
+      //
+      // This runner read the RAW buffer, and on a core.autocrlf=true checkout that means the
+      // SERVER STORES CRLF while the repository commits LF. Postgres does not care, but
+      // pg_proc.prosrc then differs from the committed text for every function the run creates —
+      // which is exactly the applied-versus-committed evidence nightOutsRls.live.test.ts carries.
+      // After B3 it failed on five night-out functions for precisely this reason, every length
+      // delta equal to the newline count. CLAUDE.md already records the same defect in the set
+      // applier (hash and execute the same string, round-9); the bootstrap runner never learned
+      // it, so a database bootstrapped here was not byte-comparable with one migrated through
+      // that applier.
+      sql: normalisedSql(readFileSync(join(migrationsDir, name), 'utf-8')),
     }));
 } catch (err) {
   console.error(`Could not read ${migrationsDir}:`, err);
