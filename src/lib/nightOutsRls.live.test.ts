@@ -210,21 +210,32 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     // fixture for, and it fails in BOTH directions — a new anon grant appears,
     // and a deliberate one silently disappearing appears too.
     //
+    // KEYED ON THE SIGNATURE, NOT THE NAME (round-10 panel, both lanes).
+    // `has_function_privilege` answers per-oid, but collapsing those answers to
+    // `proname` hid a whole class of grant: 0068 grants anon the `(date)`
+    // overload of `night_out_scheduled_start` (line 779) and deliberately keeps
+    // the `(uuid)` one authenticated-only (line 831, because it reveals the same
+    // fact through a side door to a declined or revoked invitee). Under a name
+    // set, granting anon that second overload changes nothing — the name is
+    // already present — so the assertion stayed green while a new anon-reachable
+    // surface keyed by plan id opened. `night_out_media_expires_at` and
+    // `night_out_media_window` carry the same uuid/date pair.
+    //
     // The six below are each deliberate, and five of them are reads. The sixth,
     // `rsvp_night_out_by_token`, is a genuine anon WRITE — 0068 grants it for
     // token-gated anonymous RSVP, served by `public.night_out_anon_rsvps` — so
     // this test's title is about the writes it enumerates, never a claim that
     // no anon write exists.
     const ANON_EXECUTABLE = [
-      'night_out_scheduled_start',
-      'preview_night_out',
-      'preview_night_out_attendees',
-      'preview_night_out_detail',
-      'preview_night_out_shortlist',
-      'rsvp_night_out_by_token',
+      'night_out_scheduled_start(date)',
+      'preview_night_out(uuid)',
+      'preview_night_out_attendees(uuid)',
+      'preview_night_out_detail(uuid)',
+      'preview_night_out_shortlist(uuid)',
+      'rsvp_night_out_by_token(uuid, uuid, text)',
     ];
     const { rows } = await db.query(`
-      select p.proname,
+      select p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as signature,
              has_function_privilege('anon', p.oid, 'EXECUTE') as anon_execute
         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'public' and p.proname like '%night_out%'`);
@@ -232,9 +243,10 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     expect(rows.length, 'no %night_out% routines found; the read itself failed').toBeGreaterThan(
       ANON_EXECUTABLE.length,
     );
-    const anonGranted = Array.from(
-      new Set(rows.filter((r) => r.anon_execute === true).map((r) => r.proname as string)),
-    ).sort();
+    const anonGranted = rows
+      .filter((r) => r.anon_execute === true)
+      .map((r) => r.signature as string)
+      .sort();
     expect(anonGranted, 'the set of anon-executable night_out routines').toEqual(
       [...ANON_EXECUTABLE].sort(),
     );

@@ -47,10 +47,19 @@ export type NightOutPlanFields = {
   /** The rows, ready to render above the CTA. */
   fields: JSX.Element;
   /**
-   * Apply the three edits to a plan that now exists. Never throws and never
-   * reports a failure as a success; what did not land is shown in `fields`.
+   * Apply the three edits to a plan that now exists, and RETURN the ones the
+   * server declined. Never throws and never reports a failure as a success.
+   *
+   * IT RETURNS THEM RATHER THAN PAINTING THEM (round-10 panel, both lanes).
+   * Two defects came from this hook owning the refusal message. It rendered
+   * inside the creation form, which `router.push` unmounts a round trip later,
+   * so the one thing the owner needed to read was the one thing they could not;
+   * and `setRefused` fired with no identity check, so a cross-tab account switch
+   * mid-apply painted "we couldn't save the area" about account A's plan into
+   * account B's view, where nothing could clear it. Both are the caller's
+   * business: it owns the epoch guard and it decides whether to navigate.
    */
-  apply: (supabase: SupabaseClient, planId: string) => Promise<void>;
+  apply: (supabase: SupabaseClient, planId: string) => Promise<readonly string[]>;
 };
 
 /** 'YYYY-MM-DDTHH:mm' — what `<input type="datetime-local">` reads and writes. */
@@ -95,8 +104,21 @@ export function useNightOutPlanFields({
    */
   hasInvitees?: boolean;
 } = {}): NightOutPlanFields {
-  const [start, setStart] = useState(defaultStartValue);
-  const [startDefault] = useState(defaultStartValue);
+  /**
+   * THE DEFAULT IS DERIVED, NOT FROZEN AT MOUNT (round-10 panel, Codex HIGH).
+   *
+   * `useState(defaultStartValue)` captured the night key once. A form left open
+   * across the 4:00 AM rollover then displayed YESTERDAY at 9:00 PM while
+   * `createNightOut` used today's key, so the plan was created for a night the
+   * form never showed — and `apply` skipped the write as "unchanged", so
+   * nothing corrected it. Recomputing per render makes the row follow the clock,
+   * and keying "unchanged" on `startEdit === null` rather than on a string
+   * comparison means an untouched row can never write a stale instant: it writes
+   * nothing at all and lets the server's own default — the plan's own night at
+   * 9:00 PM — stand. Same `edit ?? derived` shape the Area row already uses.
+   */
+  const [startEdit, setStartEdit] = useState<string | null>(null);
+  const start = startEdit ?? defaultStartValue();
   /**
    * NO-003: "reuses the area already known from Tonight." That is the
    * neighbourhood of the bar this account pinned tonight — the one area the app
@@ -110,7 +132,6 @@ export function useNightOutPlanFields({
   const area = areaEdit ?? inherited;
   const [deadlineMode, setDeadlineMode] = useState<DeadlineMode>('none');
   const [deadline, setDeadline] = useState('');
-  const [refused, setRefused] = useState<readonly string[]>([]);
 
   /**
    * The night this device believes it is, checked BEFORE the write rather than
@@ -122,13 +143,25 @@ export function useNightOutPlanFields({
   const startOffNight =
     startIso !== null && nycNightKey(new Date(startIso)) !== nycNightKey();
 
+  const deadlineIso = deadlineMode === 'time' ? isoOf(deadline) : null;
+  /**
+   * "Pick a time" chosen and no time picked. Said in the ROW, before the tap.
+   *
+   * This used to be reported afterwards as a refused edit, which was false
+   * twice over: no RPC was ever called, so nothing refused it, and the notice
+   * arrived on a screen the owner was already leaving (round-10 panel, Claude).
+   * An empty field is simply not a deadline, so voting stays open — which the
+   * row now says while it can still be acted on.
+   */
+  const deadlineMissing = deadlineMode === 'time' && deadlineIso === null;
+
   const apply = useCallback(
-    async (supabase: SupabaseClient, planId: string): Promise<void> => {
+    async (supabase: SupabaseClient, planId: string): Promise<readonly string[]> => {
       const failed: string[] = [];
-      // UNCHANGED IS NOT UNSET. A start left at 9:00 PM is already the server's
-      // own default, so there is nothing to write and no way for that write to
+      // UNCHANGED IS NOT UNSET. An untouched row is already the server's own
+      // default, so there is nothing to write and no way for that write to
       // fail; an edited one is written, and an off-night one is not attempted.
-      if (startIso !== null && start !== startDefault && !startOffNight) {
+      if (startEdit !== null && startIso !== null && !startOffNight) {
         if (!(await setNightOutStart(supabase, planId, startIso))) failed.push('the time');
       }
       const trimmedArea = area.trim();
@@ -136,22 +169,18 @@ export function useNightOutPlanFields({
         if (!(await setNightOutArea(supabase, planId, trimmedArea))) failed.push('the area');
       }
       // 'none' IS THE DEFAULT AND NEEDS NO WRITE — `voting_closes_at` starts
-      // null, which is what "No deadline" means.
-      if (hasInvitees && deadlineMode === 'time') {
-        const closesIso = isoOf(deadline);
-        if (
-          closesIso === null
-          || !(await setNightOutVotingDeadline(supabase, planId, closesIso))
-        ) {
+      // null, which is what "No deadline" means. A blank field is the same
+      // thing and is narrated by `deadlineMissing` above, not reported here:
+      // an edit that never reached the server was never refused by it.
+      if (hasInvitees && deadlineIso !== null) {
+        if (!(await setNightOutVotingDeadline(supabase, planId, deadlineIso))) {
           failed.push('the voting deadline');
         }
       }
-      setRefused(failed);
+      return failed;
     },
-    [start, startDefault, startIso, startOffNight, area, deadlineMode, deadline, hasInvitees],
+    [startEdit, startIso, startOffNight, area, deadlineIso, hasInvitees],
   );
-
-  const deadlineIso = deadlineMode === 'time' ? isoOf(deadline) : null;
 
   const fields = (
     <div className="mt-4 space-y-3 text-left" data-testid="night-out-plan-fields">
@@ -165,7 +194,7 @@ export function useNightOutPlanFields({
           className={ROW}
           value={start}
           disabled={disabled}
-          onChange={(e) => setStart(e.target.value)}
+          onChange={(e) => setStartEdit(e.target.value)}
         />
         {startOffNight ? (
           <p className="mt-1 text-sm text-red-400" data-testid="when-off-night">
@@ -225,16 +254,14 @@ export function useNightOutPlanFields({
                   Voting closes {remainingLabel(deadlineIso)}.
                 </p>
               ) : null}
+              {deadlineMissing ? (
+                <p className="mt-1 text-sm text-red-400" data-testid="deadline-missing">
+                  Pick a time, or voting stays open.
+                </p>
+              ) : null}
             </>
           ) : null}
         </fieldset>
-      ) : null}
-
-      {refused.length > 0 ? (
-        <p className="text-sm text-red-400" role="status" data-testid="plan-fields-refused">
-          Your night out was created, but we couldn&apos;t save{' '}
-          {refused.join(' or ')}. Open the plan and try again.
-        </p>
       ) : null}
     </div>
   );

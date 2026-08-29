@@ -412,6 +412,14 @@ export default function StartNightOutButton({
   const [createdPlanId, setCreatedPlanId] = useState<string | null>(null);
   const [inviteFailures, setInviteFailures] = useState(0);
   /**
+   * The planning edits the server declined, and the token of the plan they are
+   * about. Held HERE rather than in the rows hook so that the epoch guard in
+   * `handleStart` gates them like every other async result, and so that they
+   * outlive the navigation that used to destroy them.
+   */
+  const [refusedEdits, setRefusedEdits] = useState<readonly string[]>([]);
+  const [openToken, setOpenToken] = useState<string | null>(null);
+  /**
    * V8-R-NO-002 / NO-003 / NO-005 — the form's When, Area and Voting closes
    * rows. They own their own state, their own validation and their own refusal
    * message; this component owns only the plan they are applied to.
@@ -558,6 +566,14 @@ export default function StartNightOutButton({
     // attributed to the wrong account, and a direct contradiction of this
     // effect's own stated invariant.
     setError(false);
+    // The planning-edit refusal and the plan it offers to open, for the same
+    // reason and by the same rule (round-10, Claude). While the rows hook owned
+    // this message, this effect could not reach it at all, so account B kept a
+    // claim about account A's night out with nothing able to clear it. Owning
+    // the state here is what makes it clearable, and this is where it is
+    // cleared.
+    setRefusedEdits([]);
+    setOpenToken(null);
     // `busy` is NOT blindly cleared: an in-flight create belonging to the
     // account still on screen must keep Start disabled, or a sign-out/sign-in
     // round trip re-arms it mid-create and the next tap makes a second plan for
@@ -725,9 +741,16 @@ export default function StartNightOutButton({
       // The three owner edits, applied to the plan that now exists — the rows
       // are on the CREATION form (the ledger's own entry point for all three)
       // but the RPCs take a plan id, so they can only run here. They never
-      // block reaching the plan: every one of them has a server-side default,
-      // and a refusal is reported by the rows themselves.
-      await planFields.apply(supabase, planId);
+      // block CREATING the plan: every one of them has a server-side default,
+      // so the plan is real and complete whatever they answer.
+      //
+      // The refusals are RETURNED and held here, not painted by the hook. That
+      // is the epoch guard: `apply` is an await like every other one in this
+      // function, and the account can change under it, so the check below is
+      // what stops account A's refusal from being rendered into account B's
+      // view (round-10 panel, Claude). Whether they also stop the navigation is
+      // decided after the invites, once there is a plan to offer instead.
+      const refusedEdits = await planFields.apply(supabase, planId);
       if (owner !== liveUserId.current) return;
 
       // Invitations are sent AFTER the plan exists and BEFORE navigating, so the
@@ -755,6 +778,23 @@ export default function StartNightOutButton({
         return;
       }
       if (!mounted.current) return;
+      // A REFUSED EDIT STOPS THE NAVIGATION, because navigating IS how the
+      // report was lost (round-10 panel, both lanes). The old shape painted
+      // "we couldn't save the time" and then pushed a route one tick later, so
+      // the message existed for a sub-second window; and its advice, "open the
+      // plan and try again", named a screen with no When/Area/deadline editors,
+      // because this form is the only caller of those three RPCs in `src`.
+      //
+      // So the report stays on the screen that can carry it, next to the plan
+      // it is about. It promises nothing it cannot keep: the night out exists,
+      // these edits did not land, and Open it goes there. Start is already
+      // disabled by `createdPlanId`, so this cannot become a second plan.
+      if (refusedEdits.length > 0) {
+        setBusy(false);
+        setRefusedEdits(refusedEdits);
+        setOpenToken(plan.shareToken);
+        return;
+      }
       // NOT cleared here — see `forgetStartedNightOut`.
       router.push(`/night-out/${plan.shareToken}`);
     } finally {
@@ -792,6 +832,21 @@ export default function StartNightOutButton({
             ? "One invite didn't send — you can share the link instead."
             : `${inviteFailures} invites didn't send — you can share the link instead.`}
         </p>
+      ) : null}
+      {refusedEdits.length > 0 && openToken !== null ? (
+        <div className="mt-2" data-testid="plan-fields-refused">
+          <p className="text-sm text-red-400" role="status">
+            Your night out was created, but we couldn&apos;t save{' '}
+            {refusedEdits.join(' or ')}.
+          </p>
+          <button
+            type="button"
+            onClick={() => router.push(`/night-out/${openToken}`)}
+            className="mt-2 rounded-full border px-5 py-2 text-sm"
+          >
+            Open it
+          </button>
+        </div>
       ) : null}
       {readFailed ? (
         <div className="mt-2">

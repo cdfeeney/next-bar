@@ -38,33 +38,6 @@ export default function FeedSection({
   /** Opens the story viewer on this author's queue. Keyed by profile id. */
   onOpenStory: (authorId: string) => void;
 }): JSX.Element {
-  /**
-   * READY-AND-EMPTY LIVES HERE, not in the caller (round-10 directive (c)).
-   * `page.tsx` used to mount this component only when `entries` was non-empty
-   * and draw the empty copy itself, which made the Feed's own emptiness decide
-   * whether the Feed rendered at all. A component that cannot be reached when
-   * it has nothing to show also cannot be reached when it has something the
-   * caller's emptiness test does not see, so the test moved inside.
-   */
-  if (entries.length === 0) {
-    return (
-      <section data-testid="feed-empty" aria-labelledby="feed-empty-heading">
-        <h2
-          id="feed-empty-heading"
-          className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3"
-        >
-          Feed
-        </h2>
-        <div className="rounded-2xl border border-border bg-surface p-5">
-          <p className="text-sm leading-relaxed">
-            Nothing here yet. Stories from you and the friends who follow you
-            back show up here for 24 hours.
-          </p>
-        </div>
-      </section>
-    );
-  }
-
   return (
     <section data-testid="friends-feed" aria-labelledby="feed-heading">
       <h2

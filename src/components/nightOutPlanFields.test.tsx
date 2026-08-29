@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 /**
  * THE THREE ROWS OF THE START A NIGHT OUT FORM (V8-R-NO-002, NO-003, NO-005).
@@ -42,19 +43,28 @@ import { useNightOutPlanFields } from './NightOutPlanFields';
 const PLAN = '11111111-1111-4111-8111-111111111111';
 const supabase = {} as never;
 
-/** A host for the hook that also exposes `apply` as a button, as the form does. */
+/**
+ * A host for the hook that also exposes `apply` as a button, as the form does —
+ * and RENDERS WHAT APPLY RETURNED, because the caller owns that message now.
+ * The hook used to paint it itself, which is how it came to be rendered into
+ * the wrong account's view and then destroyed by navigation.
+ */
 function Harness({ hasInvitees = true }: { hasInvitees?: boolean }): JSX.Element {
   const planFields = useNightOutPlanFields({ hasInvitees });
+  const [refused, setRefused] = useState<readonly string[] | null>(null);
   return (
     <div>
       {planFields.fields}
       <button
         type="button"
         data-testid="create"
-        onClick={() => void planFields.apply(supabase, PLAN)}
+        onClick={() => void planFields.apply(supabase, PLAN).then(setRefused)}
       >
         Start
       </button>
+      {refused !== null ? (
+        <p data-testid="refused">{refused.length === 0 ? 'none' : refused.join(' or ')}</p>
+      ) : null}
     </div>
   );
 }
@@ -193,7 +203,7 @@ describe('the Voting closes row (V8-R-NO-005)', () => {
   });
 });
 
-describe('a refusal is reported, never swallowed', () => {
+describe('a refusal is RETURNED, never swallowed and never painted here', () => {
   test('names each edit the server declined', async () => {
     setNightOutStart.mockResolvedValue(false);
     setNightOutArea.mockResolvedValue(false);
@@ -206,19 +216,91 @@ describe('a refusal is reported, never swallowed', () => {
     });
     screen.getByTestId('create').click();
     await waitFor(() =>
-      expect(screen.getByTestId('plan-fields-refused').textContent).toMatch(
-        /the time or the area/,
-      ),
+      expect(screen.getByTestId('refused').textContent).toBe('the time or the area'),
     );
   });
 
-  test('says nothing when everything landed', async () => {
+  test('returns an EMPTY list when everything landed', async () => {
     render(<Harness />);
     fireEvent.change(screen.getByLabelText(/^Area/), {
       target: { value: 'East Village' },
     });
     screen.getByTestId('create').click();
-    await waitFor(() => expect(setNightOutArea).toHaveBeenCalledTimes(1));
-    expect(screen.queryByTestId('plan-fields-refused')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('none'));
+    expect(setNightOutArea).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * The hook must not render the refusal itself. It did, and the message then
+   * belonged to a component the caller navigates away from — and to whichever
+   * account happened to be on screen when the RPC settled. Both panels filed
+   * it; this is the assertion that keeps it fixed.
+   */
+  test('the rows themselves render no refusal message', async () => {
+    setNightOutArea.mockResolvedValue(false);
+    render(<Harness />);
+    fireEvent.change(screen.getByLabelText(/^Area/), {
+      target: { value: 'East Village' },
+    });
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('the area'));
+    expect(
+      screen.getByTestId('night-out-plan-fields').textContent,
+    ).not.toMatch(/couldn|could not/i);
+  });
+});
+
+describe('the two defects the round-10 panel found by triggering them', () => {
+  /**
+   * CODEX, HIGH. The default start was captured by `useState` at mount, so a
+   * form left open across the 4:00 AM rollover displayed YESTERDAY at 9:00 PM
+   * while `createNightOut` used today's key — and `apply` skipped the write as
+   * "unchanged", so nothing corrected it. The stub's night key flips at
+   * 2026-08-21T08:00:00Z, which is 4:00 AM New York.
+   */
+  test('an untouched When row follows the rollover instead of freezing at mount', async () => {
+    render(<Harness />);
+    expect((screen.getByLabelText('When') as HTMLInputElement).value).toBe(
+      '2026-08-20T21:00',
+    );
+
+    // Cross 4:00 AM with the form still open, then re-render.
+    vi.setSystemTime(Date.parse('2026-08-21T08:30:00.000Z'));
+    fireEvent.change(screen.getByLabelText(/^Area/), { target: { value: 'x' } });
+    expect((screen.getByLabelText('When') as HTMLInputElement).value).toBe(
+      '2026-08-21T21:00',
+    );
+    // And it is not an off-night start, because it moved with the night.
+    expect(screen.queryByTestId('when-off-night')).toBeNull();
+
+    // Still nothing to write: untouched means "the server's own default".
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(setNightOutArea).toHaveBeenCalledTimes(1));
+    expect(setNightOutStart).not.toHaveBeenCalled();
+  });
+
+  /**
+   * CLAUDE, MEDIUM. "Pick a time" with the field left blank pushed "the voting
+   * deadline" onto the refusal list without any RPC being called — a refusal
+   * attributed to a server that was never asked, delivered after the fact.
+   */
+  test('a blank deadline is stated in the row, and is not reported as a refusal', async () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByLabelText('Pick a time'));
+    expect(screen.getByTestId('deadline-missing')).toBeTruthy();
+
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('none'));
+    expect(setNightOutVotingDeadline).not.toHaveBeenCalled();
+
+    // Filling it in clears the notice and restores the real write.
+    fireEvent.change(screen.getByLabelText('Voting closes at'), {
+      target: { value: '2026-08-21T22:00' },
+    });
+    expect(screen.queryByTestId('deadline-missing')).toBeNull();
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });

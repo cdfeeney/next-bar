@@ -203,26 +203,51 @@ export default function SocialPage(): JSX.Element {
         {tab === 'feed' ? (
           <Panel id="feed">
             {rail}
-            {/* FEEDSECTION MOUNTS WHENEVER THE PANEL HAS AN ANSWER, empty or
-                not (round-10 directive (c), raised on wp5). Gating the MOUNT on
-                `stories.feed.length > 0` makes every post the Feed will ever
-                carry unreachable the moment the last entry drops out — today
-                that emptiness is only a 24-hour story expiry, but the gate is
-                on the component rather than on its content, so anything the
-                Feed grows later inherits the same disappearance. The empty
-                copy moved INSIDE FeedSection, which is the only place that can
-                tell "read it, nothing there" from "did not render".
-
-                READY-AND-EMPTY IS STILL ITS OWN STATE. Rendering nothing here
-                made a signed-in account with no friends' stories look identical
-                to a surface that had not finished loading — the exact collapse
+            {/* READY-AND-EMPTY IS ITS OWN STATE. Rendering nothing here made a
+                signed-in account with no friends' stories look identical to a
+                surface that had not finished loading — the exact collapse
                 StoriesEmptyState exists to prevent, reintroduced one level
                 down. The rail above already distinguishes signed-out and
-                unreachable; this is the fourth case, and it is why the mount is
-                still conditional on `status === 'ready'`: a feed we could not
-                read must never be drawn as a feed with nothing in it. */}
+                unreachable; this is the fourth case.
+
+                ROUND-10 DIRECTIVE (c), NOT DONE HERE AND DELIBERATELY SO. The
+                directive asked that FeedSection mount unconditionally, because
+                on wp5's branch it is the home of PERSISTENT Feed posts and
+                gating its mount on a 24-hour story count makes them unreachable
+                the moment the last story expires. That is a real defect there.
+                It is not one here: this FeedSection renders only its `entries`
+                prop, which IS `stories.feed`, and its own docblock records that
+                there is no separate Feed-memory backend and that permanent Feed
+                history is V9. So the gate below is equivalent to the component's
+                own emptiness and hides nothing.
+                The only shape that both mounts unconditionally and keeps this
+                state honest moves the empty branch INTO FeedSection.tsx, which
+                belongs to goal g-f1e128da and is on neither this lane's write
+                scope nor the five paths the directive opened; the round-10
+                Codex panel ruled that write out of scope. Landing it in
+                page.tsx alone instead would delete this branch and turn
+                e2e/story-rail.spec.ts:435 red, and that spec is not this lane's
+                either. The fix therefore belongs to whoever owns g-f1e128da,
+                where the persistent posts actually live. */}
             {stories.status === 'ready' ? (
-              <FeedSection entries={stories.feed} onOpenStory={openStories} />
+              stories.feed.length > 0 ? (
+                <FeedSection entries={stories.feed} onOpenStory={openStories} />
+              ) : (
+                <section data-testid="feed-empty" aria-labelledby="feed-empty-heading">
+                  <h2
+                    id="feed-empty-heading"
+                    className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3"
+                  >
+                    Feed
+                  </h2>
+                  <div className="rounded-2xl border border-border bg-surface p-5">
+                    <p className="text-sm leading-relaxed">
+                      Nothing here yet. Stories from you and the friends who
+                      follow you back show up here for 24 hours.
+                    </p>
+                  </div>
+                </section>
+              )
             ) : null}
           </Panel>
         ) : null}

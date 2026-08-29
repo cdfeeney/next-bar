@@ -1763,7 +1763,13 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     // No deadline, with the picked time stated in words.
     await expect(page.getByLabel('No deadline')).toBeChecked();
     await page.getByLabel('Pick a time').check();
+    // Chosen but not yet picked: said in the ROW, while it can still be acted
+    // on. This used to be reported after creation as a refused edit, which was
+    // false twice — no RPC was ever called, and the notice arrived on a screen
+    // the owner was already leaving (round-10 panel).
+    await expect(page.getByTestId('deadline-missing')).toBeVisible();
     await page.getByLabel('Voting closes at').fill(`${night}T23:00`);
+    await expect(page.getByTestId('deadline-missing')).toHaveCount(0);
     await expect(page.getByTestId('deadline-remaining')).toContainText(/in about/i);
   });
 

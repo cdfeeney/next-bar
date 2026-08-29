@@ -590,6 +590,54 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     );
   });
 
+  /**
+   * Round-10 panel, both lanes. `planFields.apply` used to paint its own
+   * refusal and `handleStart` pushed the route one round trip later, so the one
+   * message the owner needed lived for a sub-second window — and its advice,
+   * "open the plan and try again", named a screen with no When/Area/deadline
+   * editors, because this form is the only caller of those three RPCs in `src`.
+   *
+   * No mock of `@/lib/nightOutPlan` here on purpose: the real wrappers run
+   * against this suite's `{}` supabase stub, so `supabase.rpc` is undefined,
+   * `setOne` catches the throw, and the edit is refused for real.
+   */
+  test('a refused planning edit holds the screen instead of navigating away from its own report', async () => {
+    const user = userEvent.setup();
+    render(<StartNightOutButton />);
+    await user.type(screen.getByLabelText(/^Area/), 'East Village');
+    await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
+    await waitFor(() => expect(createCalls).toBe(1));
+
+    const notice = await screen.findByTestId('plan-fields-refused');
+    expect(notice.textContent).toMatch(/couldn.t save the area/i);
+    // THE POINT: no route change destroyed it.
+    expect(pushed, 'navigated away from the refusal report').toEqual([]);
+    // And it promises nothing it cannot keep — the plan is one tap away.
+    await user.click(screen.getByRole('button', { name: /open it/i }));
+    expect(pushed).toEqual(['/night-out/tok-1']);
+  });
+
+  test("a refused edit for A is not shown as B's after an in-place account switch", async () => {
+    // The other half of the same finding (Claude): while the rows hook owned
+    // this message, the reset effect could not reach it, so B kept a claim
+    // about A's night out with nothing able to clear it.
+    const user = userEvent.setup();
+    const view = render(<StartNightOutButton />);
+    await user.type(screen.getByLabelText(/^Area/), 'East Village');
+    await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
+    expect(await screen.findByTestId('plan-fields-refused')).toBeTruthy();
+
+    currentUser = USER_B;
+    view.rerender(<StartNightOutButton />);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('plan-fields-refused'),
+        "B was shown a refusal about A's night out",
+      ).toBeNull(),
+    );
+  });
+
   test('a parked plan survives the tab closing, so tomorrow-morning Start is not a second plan', async () => {
     // Cold-panel round 2 (Codex). The record lived in sessionStorage, which the
     // browser discards when the TAB closes — so a create whose follow-up read

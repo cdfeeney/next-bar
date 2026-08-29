@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NIGHT_ROLLOVER_HOUR } from './nightKey';
-import { committedFunctionBody, definingMigration } from './effectiveMigration';
+import { committedFunctionBody, definingMigration, sqlView } from './effectiveMigration';
 
 /**
  * ONE ROLLOVER HOUR, ASSERTED IN THE LOCAL GATE.
@@ -36,18 +36,29 @@ describe('the night rollover has exactly one hour on both sides', () => {
     const body = committedFunctionBody(file as string, 'nyc_night_key');
     expect(body, `could not read the nyc_night_key body out of ${file}`).not.toBeNull();
 
-    const flat = (body as string).replace(/\s+/g, ' ');
-    expect(flat, `${file} must subtract the contract's ${NIGHT_ROLLOVER_HOUR} hours`).toContain(
-      `interval '${NIGHT_ROLLOVER_HOUR} hours'`,
+    /**
+     * THE COMMENT-FREE VIEW, and the WHOLE expression (round-10 panel, both
+     * lanes). Two holes closed here, both of which let the boundary move while
+     * this test stayed green.
+     *
+     * `committedFunctionBody` returns the RAW body, comments included, so
+     * `- make_interval(hours => 6)  -- was interval '4 hours'` satisfied a
+     * `toContain` on the 4-hour text and even a count of interval literals,
+     * because the only match was inside the comment. `sqlView(...).code` strips
+     * comments and keeps literal contents, which is exactly the view this
+     * assertion needs.
+     *
+     * And matching fragments could not see the SIGN: `+ interval '4 hours'`
+     * passed every previous assertion while advancing the date around 8:00 PM.
+     * So the whole normalised expression is compared, derived from the constant
+     * so the two halves cannot drift. Any redefinition of this function now
+     * fails here and has to be re-derived deliberately — which, for the one
+     * expression the entire night boundary rests on, is the point.
+     */
+    const flat = sqlView(body as string).code.replace(/\s+/g, ' ').trim();
+    expect(flat, `${file}'s nyc_night_key body is not the D-C-39 expression`).toBe(
+      `select (((p_at at time zone 'America/New_York') - interval '${NIGHT_ROLLOVER_HOUR} hours'))::date`,
     );
-    // The other half: no OTHER interval hides in the same body. Without this a
-    // file could satisfy the line above and still shift the boundary elsewhere.
-    const intervals = flat.match(/interval '\d+ hours'/g) ?? [];
-    expect(intervals, `${file} states more than one hour offset`).toEqual([
-      `interval '${NIGHT_ROLLOVER_HOUR} hours'`,
-    ]);
-    // And it is New York that is being offset, never UTC.
-    expect(flat).toContain("at time zone 'America/New_York'");
     // 30s, not the 5s default: `definingMigration` reads and skeletonises every
     // .sql file in the directory once, cold, and 0066 alone is larger than the
     // whole chain before it. Measured at ~2.4s alone and ~6.8s with the lane's
