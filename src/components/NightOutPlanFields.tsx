@@ -6,6 +6,7 @@ import { getBarById } from '@/lib/catalog';
 import { nycNightKey } from '@/lib/nightKey';
 import { useMyPresence } from '@/app/friends/_components/usePinnedHandles';
 import {
+  remainingLabel,
   setNightOutArea,
   setNightOutStart,
   setNightOutVotingDeadline,
@@ -183,15 +184,6 @@ function isoOf(value: string): string | null {
    * conventional resolution.
    */
   return nycOffsetMs(at.getTime()) === naive - at.getTime() ? at.toISOString() : null;
-}
-
-/** "in about 40 minutes" / "in about 2 hours", for NO-005's words-not-colour rule. */
-function remainingLabel(iso: string, now: number = Date.now()): string {
-  const minutes = Math.round((Date.parse(iso) - now) / 60_000);
-  if (!Number.isFinite(minutes) || minutes <= 0) return 'immediately';
-  if (minutes < 60) return `in about ${minutes} minute${minutes === 1 ? '' : 's'}`;
-  const hours = Math.round(minutes / 60);
-  return `in about ${hours} hour${hours === 1 ? '' : 's'}`;
 }
 
 const ROW = 'block w-full min-h-[44px] rounded-2xl border border-border bg-surface px-4 py-2 text-text touch-manipulation';

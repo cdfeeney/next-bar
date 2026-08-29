@@ -8,6 +8,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBarById } from '@/lib/catalog';
 import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/lib/pendingInvite';
 import { forgetStartedNightOut } from '@/components/StartNightOutButton';
+import { remainingLabel } from '@/lib/nightOutPlan';
 import NightOutMedia from './NightOutMedia';
 import InvitePreview from './InvitePreview';
 import {
@@ -191,7 +192,8 @@ const DEADLINE_GRACE_MS = 1_000;
 const MIN_RECHECK_MS = 60_000;
 const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
 /**
- * The longest we will wait for a deadline this device believes is still AHEAD.
+ * How much CLOCK SKEW the approach tolerates — and, therefore, how long before
+ * a deadline this device believes is still ahead we start asking every minute.
  *
  * Waiting an "ahead" deadline exactly is only right if the two clocks agree. On
  * a device running ten minutes SLOW the server closes voting first while
@@ -199,8 +201,16 @@ const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
  * tap in that window is refused instead of the surface having gone read-only
  * (round-10 round 7, Codex). The behind case already had a floor for the
  * disagreement; this is the same tolerance on the other side.
+ *
+ * IT IS A WINDOW, NOT A CAP (round-10 round 8, both lanes). Round 7 wrote
+ * `Math.min(delay, 60_000)`, which does not mean "notice the deadline a minute
+ * late" — it means "ask again every minute, forever". A plan opened hours
+ * before its deadline re-ran `loadMemberView`'s FIVE RPCs every sixty seconds
+ * for the whole wait. Ten minutes is the tolerance, the figure round 7's own
+ * trigger named: outside the window one wait until it opens, inside it a read a
+ * minute, about eleven per deadline in total.
  */
-const MAX_APPROACH_MS = 60_000;
+const SKEW_TOLERANCE_MS = 10 * 60_000;
 
 /**
  * When to ask the server again about a deadline only the server enforces.
@@ -223,10 +233,20 @@ const MAX_APPROACH_MS = 60_000;
  * AND A DEADLINE AHEAD IS NOT WAITED INDEFINITELY EITHER (round-10 round 7,
  * Codex). "Waited exactly" is correct only when the clocks agree; on a slow
  * device the server closes first and this surface stays editable for the whole
- * skew. Capping the approach at a minute makes the tolerance symmetric.
+ * skew. The approach therefore opens `SKEW_TOLERANCE_MS` before the deadline
+ * and asks every minute inside it, which makes the tolerance symmetric without
+ * turning the timer into a permanent poll (round-10 round 8 — see that
+ * constant; the previous shape polled for the entire ahead period).
  */
 function clampRecheck(delayMs: number): number {
-  const wait = delayMs > 0 ? Math.min(delayMs, MAX_APPROACH_MS) : MIN_RECHECK_MS;
+  if (delayMs <= 0) return MIN_RECHECK_MS;
+  const wait =
+    delayMs > SKEW_TOLERANCE_MS
+      ? // Still outside the approach window: sleep until it opens, in ONE wait.
+        delayMs - SKEW_TOLERANCE_MS
+      : // Inside it: a minute, or the exact remaining time when that is sooner,
+        // so a deadline five seconds away is still not re-read after sixty.
+        Math.min(delayMs, MIN_RECHECK_MS);
   return Math.min(wait, MAX_REARM_MS);
 }
 
@@ -283,6 +303,20 @@ export default function NightOutPage({
    * what made adding the second one feel out of scope.
    */
   const viewEpoch = useRef(0);
+  /**
+   * WHICH MEMBER LOAD IS NEWER — the epoch cannot say, and now something must.
+   *
+   * Round-10 round 8, Codex. `viewEpoch` separates VIEWS; two loads of the same
+   * view share it, so a later one wins on screen only if it also lands later.
+   * The deadline timer makes that ordinary: it issues a load as voting closes
+   * while a pre-deadline one is still stalled, the new closed board paints, and
+   * then the old response passes the same epoch and puts Suggest, Vote and
+   * Remove back — every one of which the server now refuses. Loads are numbered
+   * on issue and a response older than the newest one already painted is
+   * dropped, which is also a failure to paint, so it answers false.
+   */
+  const memberLoadSeq = useRef(0);
+  const memberPaintedSeq = useRef(0);
   // Guards every withRefresh action against re-entrant taps. See withRefresh.
   const actionInFlight = useRef(false);
   /**
@@ -357,6 +391,8 @@ export default function NightOutPage({
       if (!supabase) return false;
       const epoch = startedAt ?? viewEpoch.current;
       if (epoch !== viewEpoch.current) return false;
+      memberLoadSeq.current += 1;
+      const seq = memberLoadSeq.current;
       const [plan, members, board, voting, anonRsvps] = await Promise.all([
         getNightOut(supabase, planId),
         getNightOutMembers(supabase, planId),
@@ -370,6 +406,10 @@ export default function NightOutPage({
       // The view moved while we were away: this answer belongs to a session, or
       // a plan, that is no longer the one on screen.
       if (epoch !== viewEpoch.current) return false;
+      // ...and a newer load of the SAME view has already painted. See
+      // `memberLoadSeq`.
+      if (seq <= memberPaintedSeq.current) return false;
+      memberPaintedSeq.current = seq;
       setState({
         kind: 'member',
         plan,
@@ -962,11 +1002,29 @@ export default function NightOutPage({
         <section className="mt-8">
           <h2 className="font-semibold">Where should we go?</h2>
           {/* V8-R-NO-005. "Participants see it and cannot change it" — so it is
-              stated on the plan, on both sides of the deadline. */}
+              stated on the plan, on both sides of the deadline.
+
+              AND IN REMAINING MINUTES, NOT ONLY AS A CLOCK TIME (round-10 round
+              8, Codex). NO-005's accessibility line is "expressed in time and
+              remaining minutes in words, never by colour alone", and the owner's
+              own form has said both since it was written — but this page, the
+              only surface a participant ever sees, stated the absolute New York
+              time alone. "Voting closes Friday at 11:00 PM" leaves the reader to
+              do the arithmetic against a zone that may not be theirs, which is
+              the half the rule exists to remove. Same sentence, one shared
+              `remainingLabel`.
+
+              Only while voting is OPEN: once it has closed there is nothing
+              remaining to state, and "in about 0 minutes" would be a countdown
+              to an event that has already happened. It is re-rendered by the
+              same `deadlineTick` that re-asks the server, so it is refreshed
+              through the approach window rather than frozen at load — the
+              wording is deliberately coarse ("about N hours") so that the one
+              long wait outside that window cannot make it wrong. */}
           {voting?.votingClosesAt != null ? (
             <p className="mt-1 text-xs opacity-60" data-testid="night-out-deadline">
               {voting.votingOpen
-                ? `Voting closes ${deadlineLabel(voting.votingClosesAt)}.`
+                ? `Voting closes ${deadlineLabel(voting.votingClosesAt)} — ${remainingLabel(voting.votingClosesAt)}.`
                 : `Voting closed ${deadlineLabel(voting.votingClosesAt)}.`}
             </p>
           ) : null}

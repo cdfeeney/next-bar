@@ -846,6 +846,142 @@ describe('the offline queue (V8-R-INV-003)', () => {
     );
   });
 
+  /**
+   * ROUND-10 ROUND 8, both lanes. Module scope fixed the writes racing but put
+   * the lock's span past the span of the thing that paints from it: the settle
+   * runs in the UNMOUNTED instance's closure, where every setState is a no-op,
+   * and the live instance derived `rsvpBusy` once at mount and was never told
+   * again. Three disabled buttons and no message until a reload.
+   */
+  test('a write that settles after an unmount and remount gives the controls back', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    let release: (value: 'sent') => void = () => undefined;
+    submitAnonRsvp.mockReturnValueOnce(
+      new Promise<'sent'>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    const first = renderPreview();
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    // Leaving the night-out route entirely — the bottom nav, a back gesture.
+    // Not the A → B → A reuse every earlier revision reasoned about.
+    first.unmount();
+    renderPreview();
+    // The hold survives, which is the point of module scope: coming back to an
+    // invite whose write is still out looks busy.
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-going')).toBeDisabled(),
+    );
+
+    release('sent');
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('invite-rsvp-going'),
+        'the settle released the hold in a dead closure and never told this instance',
+      ).not.toBeDisabled(),
+    );
+  });
+
+  /**
+   * ROUND-10 ROUND 8, both lanes. The stale branch painted the answer that
+   * landed but left `answered.current` false, so a re-entry read still in the
+   * air — carrying a snapshot from before the write committed — passed the
+   * guard and painted the un-answered state straight over it.
+   */
+  test('an answer painted by a stale settle survives the re-entry read', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    let releaseWrite: (value: 'sent') => void = () => undefined;
+    submitAnonRsvp.mockReturnValueOnce(
+      new Promise<'sent'>((resolve) => {
+        releaseWrite = resolve;
+      }),
+    );
+    // Reads: mount A, the move to B, and the return to A — the last of which is
+    // the one that must not win. It was issued before the write committed, so
+    // the answer it carries is honestly "none"; it is simply older.
+    let releaseRead: (value: { kind: 'none' }) => void = () => undefined;
+    fetchAnonRsvp
+      .mockResolvedValueOnce({ kind: 'none' })
+      .mockResolvedValueOnce({ kind: 'none' })
+      .mockReturnValueOnce(
+        new Promise<{ kind: 'none' }>((resolve) => {
+          releaseRead = resolve;
+        }),
+      );
+
+    const { rerender } = renderPreview();
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    const at = (token: string): JSX.Element => (
+      <InvitePreview
+        token={token}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />
+    );
+    rerender(at(OTHER_TOKEN));
+    rerender(at(TOKEN));
+    await waitFor(() => expect(fetchAnonRsvp).toHaveBeenCalledTimes(3));
+
+    releaseWrite('sent');
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(/going/i),
+    );
+
+    releaseRead({ kind: 'none' });
+    await waitFor(() => expect(screen.getByTestId('invite-rsvp-sent')).toBeTruthy());
+    expect(
+      screen.getByTestId('invite-rsvp-sent').textContent,
+      'the delayed re-entry read overwrote an answer the server already held',
+    ).toMatch(/going/i);
+  });
+
+  /**
+   * ROUND-10 ROUND 8, Codex. V8-R-INV-003's "an offline response is queued and
+   * explicitly labelled as not yet sent" is a property of the ANSWER, not of
+   * what happens to be on screen when it fails. The stale branch dropped it:
+   * the answer was never sent, never held, and nothing said so.
+   */
+  test('an offline write that fails after navigation is still queued', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    let release: (value: 'unreachable') => void = () => undefined;
+    submitAnonRsvp.mockReturnValueOnce(
+      new Promise<'unreachable'>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    const { rerender } = renderPreview();
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <InvitePreview
+        token={OTHER_TOKEN}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-going')).not.toBeDisabled(),
+    );
+
+    queueRsvp.mockClear();
+    release('unreachable');
+    await waitFor(() =>
+      expect(
+        queueRsvp,
+        'the stale branch bypassed the offline queue, losing the answer entirely',
+      ).toHaveBeenCalledWith(TOKEN, 'going'),
+    );
+  });
+
   test('says the answer was not sent when the queue itself could not be written', async () => {
     submitAnonRsvp.mockResolvedValue('unreachable');
     queueRsvp.mockReturnValue(false);

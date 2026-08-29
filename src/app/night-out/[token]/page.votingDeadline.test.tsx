@@ -247,4 +247,96 @@ describe('the plan page reaches its own voting deadline', () => {
       expect(screen.getByTestId('night-out-voting-closed')).toBeTruthy(),
     );
   });
+
+  /**
+   * ROUND-10 ROUND 8, BOTH LANES — the twin of the media-window cost case, and
+   * again the reason both copies of `clampRecheck` change together. Round 7's
+   * `Math.min(delay, 60_000)` polled for the ENTIRE ahead period, and here each
+   * poll is `loadMemberView`'s five RPCs. A plan opened three hours before its
+   * deadline made 180 of them for nothing.
+   */
+  test('a deadline hours ahead is waited for, not polled every minute', async () => {
+    vi.setSystemTime(Date.parse(CLOSES_AT) - 3 * 60 * 60 * 1_000);
+    fetchNightOutVoting.mockResolvedValue({
+      votingClosesAt: CLOSES_AT,
+      votingOpen: true,
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('member-board')).toBeTruthy());
+    expect(fetchNightOutVoting).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(
+      fetchNightOutVoting,
+      'an ahead deadline was polled once a minute for the whole ahead period',
+    ).toHaveBeenCalledTimes(1);
+
+    // ...and the approach still opens in time to absorb a ten-minute skew.
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1_000 + 21 * 60_000);
+    expect(fetchNightOutVoting.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  /**
+   * ROUND-10 ROUND 8, Codex. `viewEpoch` separates VIEWS, not reads of the same
+   * view, so a stalled pre-deadline load that returned after a post-deadline one
+   * passed the guard and re-enabled Vote, Suggest and Remove — every one of
+   * which the server now refuses.
+   */
+  test('an older member load cannot reopen voting a newer one closed', async () => {
+    let releaseStalled: (value: unknown) => void = () => undefined;
+    fetchNightOutVoting
+      .mockResolvedValueOnce({ votingClosesAt: CLOSES_AT, votingOpen: true })
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          releaseStalled = resolve;
+        }),
+      )
+      .mockResolvedValue({ votingClosesAt: CLOSES_AT, votingOpen: false });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('member-board')).toBeTruthy());
+    expect(screen.queryByTestId('night-out-voting-closed')).toBeNull();
+
+    // The deadline passes. The timer re-arms on its own tick, so a later load
+    // goes out while the earlier one is still stalled and answers 'closed'.
+    await vi.advanceTimersByTimeAsync(3 * 61_000);
+    await waitFor(() =>
+      expect(screen.getByTestId('night-out-voting-closed')).toBeTruthy(),
+    );
+
+    // The older load lands, still saying voting was open.
+    releaseStalled({ votingClosesAt: CLOSES_AT, votingOpen: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      screen.queryByTestId('night-out-voting-closed'),
+      'an older load passed the same view epoch and put voting back',
+    ).toBeTruthy();
+  });
+
+  /**
+   * V8-R-NO-005's accessibility line: "the deadline is expressed in time AND
+   * REMAINING MINUTES in words, never by colour alone". The owner's form has
+   * said both since it was written; this page — the only surface a participant
+   * ever sees — stated the absolute New York time alone (round-10 round 8,
+   * Codex).
+   */
+  test('a participant is told how long is left, not only the clock time', async () => {
+    vi.setSystemTime(Date.parse(CLOSES_AT) - 40 * 60_000);
+    fetchNightOutVoting.mockResolvedValue({
+      votingClosesAt: CLOSES_AT,
+      votingOpen: true,
+    });
+
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId('night-out-deadline')).toBeTruthy(),
+    );
+    const words = screen.getByTestId('night-out-deadline').textContent ?? '';
+    expect(words, 'the absolute time is still stated').toMatch(/9:00\s*PM/);
+    expect(
+      words,
+      'a participant got a clock time in a zone that may not be theirs, and no remaining minutes',
+    ).toMatch(/in about 40 minutes/);
+  });
 });

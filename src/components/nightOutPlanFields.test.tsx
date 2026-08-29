@@ -19,7 +19,13 @@ const setNightOutArea = vi.fn();
 const setNightOutVotingDeadline = vi.fn();
 let presence: { barId: string | null } | null = null;
 
-vi.mock('@/lib/nightOutPlan', () => ({
+// PARTIAL: the three RPC writers are spied, `remainingLabel` is the real one.
+// It is a pure formatter that moved into this module in round-10 round 8 so the
+// plan page could state the same sentence (V8-R-NO-005 wants remaining minutes
+// in words for PARTICIPANTS, not only for the owner setting the deadline), and
+// stubbing it would leave the words assertion below testing the stub.
+vi.mock('@/lib/nightOutPlan', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/nightOutPlan')>()),
   setNightOutStart: (...a: unknown[]) => setNightOutStart(...a),
   setNightOutArea: (...a: unknown[]) => setNightOutArea(...a),
   setNightOutVotingDeadline: (...a: unknown[]) => setNightOutVotingDeadline(...a),

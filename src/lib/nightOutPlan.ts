@@ -22,6 +22,28 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * "in about 40 minutes" / "in about 2 hours", for NO-005's accessibility rule:
+ * "the deadline is expressed in time and remaining minutes IN WORDS, never by
+ * colour alone".
+ *
+ * It lives here, and not in the owner's form where it was written, because the
+ * rule is about what a PARTICIPANT can read and the participant's surface is
+ * the plan page (round-10 round 8, Codex — the plan page stated the absolute
+ * New York time and nothing else, so everyone except the owner setting the
+ * deadline got half the requirement). `src/lib/nightOutPlan.ts` is already the
+ * shared client half of the three owner edits and is in this lane's scope, so
+ * the two callers share one sentence rather than drifting like the two copies
+ * of `clampRecheck` did.
+ */
+export function remainingLabel(iso: string, now: number = Date.now()): string {
+  const minutes = Math.round((Date.parse(iso) - now) / 60_000);
+  if (!Number.isFinite(minutes) || minutes <= 0) return 'immediately';
+  if (minutes < 60) return `in about ${minutes} minute${minutes === 1 ? '' : 's'}`;
+  const hours = Math.round(minutes / 60);
+  return `in about ${hours} hour${hours === 1 ? '' : 's'}`;
+}
+
 async function setOne(
   supabase: SupabaseClient,
   fn: string,

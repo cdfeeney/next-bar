@@ -240,4 +240,75 @@ describe('the media window re-asks the server at its own boundary', () => {
       expect(screen.getByTestId('night-out-add-photo')).toBeTruthy(),
     );
   });
+
+  /**
+   * ROUND-10 ROUND 8, BOTH LANES. Round 7 capped an AHEAD wait at a minute to
+   * tolerate a slow clock. `Math.min(delay, 60_000)` does not mean "notice it a
+   * minute late"; it means "ask again every minute, forever" — and the media
+   * window stays open for 24 hours, so a left-open recap re-ran both its RPCs
+   * 1,440 times a day while the code claimed at most one extra read per
+   * approach. The tolerance is a WINDOW now: outside it, one wait.
+   */
+  test('a boundary hours ahead is waited for, not polled every minute', async () => {
+    // Three hours before the expiry, on the open side.
+    vi.setSystemTime(Date.parse(EXPIRES_AT) - 3 * 60 * 60 * 1_000);
+    fetchNightOutMediaWindow.mockResolvedValue(OPEN);
+
+    render(<NightOutMedia planId={PLAN} canAddPhoto />);
+    await waitFor(() => expect(fetchNightOutMediaWindow).toHaveBeenCalledTimes(1));
+
+    // Half an hour of sitting on the page. The approach window has not opened,
+    // so nothing is re-read: the previous shape had made thirty round trips.
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(
+      fetchNightOutMediaWindow,
+      'an ahead boundary was polled once a minute for the whole ahead period',
+    ).toHaveBeenCalledTimes(1);
+
+    // ...and the approach still opens in time to absorb a ten-minute skew.
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1_000 + 21 * 60_000);
+    expect(fetchNightOutMediaWindow.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  /**
+   * ROUND-10 ROUND 8, Codex. The epoch separates PLANS; two reads of the SAME
+   * plan share it, so the later one won on screen only if it also landed later.
+   * A stalled pre-expiry read that returns AFTER a post-expiry one put
+   * Add-a-photo and Archive back, for writes the server now refuses.
+   */
+  test('an older window response cannot reopen controls a newer one closed', async () => {
+    vi.setSystemTime(Date.parse(EXPIRES_AT) - 60_000);
+    let releaseFirst: (value: typeof OPEN) => void = () => undefined;
+    fetchNightOutMediaWindow
+      // The mount read answers immediately so the component settles.
+      .mockResolvedValueOnce(OPEN)
+      // The boundary read STALLS — this is the one that must not win.
+      .mockReturnValueOnce(
+        new Promise<typeof OPEN>((resolve) => {
+          releaseFirst = resolve;
+        }),
+      )
+      .mockResolvedValue(CLOSED);
+
+    render(<NightOutMedia planId={PLAN} canAddPhoto />);
+    await waitFor(() =>
+      expect(screen.getByTestId('night-out-add-photo')).toBeTruthy(),
+    );
+
+    // The expiry passes: read 2 is issued and stalls. The timer re-arms on its
+    // own tick rather than on the answer, so a later read goes out regardless
+    // and comes back 'closed' first — which is the whole ordering this guards.
+    await vi.advanceTimersByTimeAsync(3 * 61_000);
+    await waitFor(() =>
+      expect(screen.queryByTestId('night-out-add-photo')).toBeNull(),
+    );
+
+    // Now the older read lands, still saying the window was open.
+    releaseFirst(OPEN);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      screen.queryByTestId('night-out-add-photo'),
+      'an older response passed the plan-only epoch guard and reopened an expired window',
+    ).toBeNull();
+  });
 });

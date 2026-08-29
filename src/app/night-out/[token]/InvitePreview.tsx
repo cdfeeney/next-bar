@@ -1,6 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getBarById } from '@/lib/catalog';
 import type { NightOutPreview } from '@/lib/nightOuts.server';
@@ -65,6 +71,57 @@ import {
 const rsvpWritesInFlight = new Set<string>();
 
 /**
+ * Live instances have to be TOLD when a hold is taken or released.
+ *
+ * Round-10 round 8, BOTH lanes. Moving the lock to module scope fixed the
+ * writes racing, but it moved the lock's span past the span of the thing that
+ * paints from it. Tap Going, leave the route (this instance UNMOUNTS), come
+ * back: the fresh instance derives `rsvpBusy` from the set at mount and is
+ * never told anything again, because the write settles inside the DEAD
+ * instance's closure — its epoch never moved, so it takes the non-stale path,
+ * deletes the hold, and calls `setRsvpBusy(false)` on a component that no
+ * longer exists. The live instance's token-change effect cannot help: the token
+ * did not change. Three disabled buttons and no message, until a reload.
+ *
+ * `StartNightOutButton` hit the identical shape one cycle earlier and its
+ * `creatingListeners` is the answer that was already written down: a
+ * module-level version read through `useSyncExternalStore`, which is React 18's
+ * own contract for state that lives outside the tree. Same problem, same
+ * mechanism — inventing a third one here would just be a second thing to keep
+ * in step.
+ *
+ * Every mutation of the set goes through `holdRsvpWrite` / `releaseRsvpWrite`
+ * so there is no path that changes it without saying so.
+ */
+let rsvpFlightVersion = 0;
+const rsvpFlightListeners = new Set<() => void>();
+
+function subscribeRsvpFlight(listener: () => void): () => void {
+  rsvpFlightListeners.add(listener);
+  return () => {
+    rsvpFlightListeners.delete(listener);
+  };
+}
+
+function getRsvpFlightVersion(): number {
+  return rsvpFlightVersion;
+}
+
+function markRsvpFlightChanged(): void {
+  rsvpFlightVersion += 1;
+  for (const listener of rsvpFlightListeners) listener();
+}
+
+function holdRsvpWrite(inviteToken: string): void {
+  rsvpWritesInFlight.add(inviteToken);
+  markRsvpFlightChanged();
+}
+
+function releaseRsvpWrite(inviteToken: string): void {
+  if (rsvpWritesInFlight.delete(inviteToken)) markRsvpFlightChanged();
+}
+
+/**
  * Empty the lock. For TESTS, and the reason it has to exist is the same reason
  * the lock is module-scoped: a hold is released when its write settles, and a
  * suite that deliberately leaves a write hanging — which is most of the ones
@@ -74,6 +131,7 @@ const rsvpWritesInFlight = new Set<string>();
  */
 export function resetRsvpWritesInFlight(): void {
   rsvpWritesInFlight.clear();
+  markRsvpFlightChanged();
 }
 
 export default function InvitePreview({
@@ -230,8 +288,11 @@ export default function InvitePreview({
     // rendered three enabled buttons whose every tap the guard swallowed in
     // silence — no disable, no message, nothing — which is precisely what this
     // component says elsewhere must never be offered. Returning to an invite
-    // that is still busy now looks busy.
-    setRsvpBusy(rsvpWritesInFlight.has(token));
+    // that is still busy now looks busy. The derivation itself moved to the
+    // `rsvpFlightTick` effect below (round-10 round 8) so that it runs whenever
+    // the SET changes and not only when the token does — that effect covers
+    // this case too, on mount and on every token change, so deriving it twice
+    // here would only be a second thing to keep in step.
 
     const supabase = getBrowserSupabase();
     if (supabase === null) return;
@@ -268,6 +329,26 @@ export default function InvitePreview({
     })();
   }, [token]);
 
+  /**
+   * `rsvpBusy` follows the module lock, for THIS invite, whoever changed it.
+   *
+   * The subscription is what makes the disabled state recoverable across an
+   * unmount: the settling write releases its hold in a dead closure, but the
+   * release goes through `releaseRsvpWrite`, which bumps the version, which
+   * wakes every live instance — including one that mounted after the write
+   * started and has no other way to learn it finished (round-10 round 8, both
+   * lanes). Keyed on the token too, so returning to a different invite
+   * re-derives from that invite's hold rather than the previous one's.
+   */
+  const rsvpFlightTick = useSyncExternalStore(
+    subscribeRsvpFlight,
+    getRsvpFlightVersion,
+    getRsvpFlightVersion,
+  );
+  useEffect(() => {
+    setRsvpBusy(rsvpWritesInFlight.has(token));
+  }, [rsvpFlightTick, token]);
+
   const answer = useCallback(
     async (choice: RsvpChoice): Promise<void> => {
       // The REF, not the state: an automatic queued delivery holds the same
@@ -292,7 +373,7 @@ export default function InvitePreview({
       // when the tap's round trip returns — or the delivery can start in
       // between and overwrite what the recipient just asked for.
       answered.current = true;
-      rsvpWritesInFlight.add(heldToken);
+      holdRsvpWrite(heldToken);
       setRsvpBusy(true);
       setRsvpError(null);
       const result =
@@ -306,7 +387,7 @@ export default function InvitePreview({
         // genuinely settled, so a later write for the SAME invite is safe to
         // allow — and holds for other invites are untouched, which is why the
         // lock is a set rather than one slot.
-        rsvpWritesInFlight.delete(heldToken);
+        releaseRsvpWrite(heldToken);
         // If the invite it belonged to is the one back on screen, the buttons
         // it was disabling have to come back with it — AND the answer it
         // actually recorded has to come back with them (round-10 round 7,
@@ -317,6 +398,16 @@ export default function InvitePreview({
         if (liveToken.current === heldToken) {
           setRsvpBusy(false);
           if (result === 'sent') {
+            // AND `answered` GOES WITH THE PAINT (round-10 round 8, both
+            // lanes). Painting without setting it left the flag false, so a
+            // re-entry read still in the air — issued when we came back, and
+            // carrying a snapshot from BEFORE this write committed — passed the
+            // `!answered.current` guard and painted `none` (or the unreadable
+            // notice) straight over the answer that had just landed. The
+            // invariant is the one this ref was introduced for: a stale read
+            // may not overwrite a fresher local truth, and a write that has
+            // settled is exactly that.
+            answered.current = true;
             setRsvp(choice);
             setRsvpUnreadable(false);
           }
@@ -330,9 +421,42 @@ export default function InvitePreview({
         // reached through the stale door. A sent answer is sent whoever is on
         // screen, so the queue it satisfies is spent here too.
         if (result === 'sent') clearQueuedRsvp(heldToken);
+        // AND AN OFFLINE ANSWER IS STILL QUEUED (round-10 round 8, Codex).
+        // "An offline response is QUEUED and explicitly labelled as not yet
+        // sent" (V8-R-INV-003) is a property of the ANSWER, not of what happens
+        // to be on screen when it fails. This branch dropped it: tap Going,
+        // navigate away and back while the request is out, have it fail
+        // unreachable, and the recipient's answer was gone — never sent, never
+        // held, and nothing said so. The queue is keyed by token, so holding it
+        // needs no instance at all; only the LABEL does, which is why the
+        // notice is painted just for the invite on screen.
+        if (result === 'unreachable') {
+          const held = queueRsvp(heldToken, choice);
+          if (liveToken.current === heldToken) {
+            setQueued(held ? choice : null);
+            setRsvpError(
+              held
+                ? "You're offline — we'll send this the moment you're back."
+                : "That hasn't been sent yet — try again in a moment.",
+            );
+          }
+        }
+        // A REFUSAL IS DURABLE, so the held answer cannot land either — the
+        // same reasoning as the live branch below, which clears the queue on a
+        // refusal because every reason the server declines is a property of the
+        // plan rather than of the answer.
+        if (result === 'refused') {
+          clearQueuedRsvp(heldToken);
+          if (liveToken.current === heldToken) {
+            setQueued(null);
+            setRsvpError(
+              "We couldn't record that — this invitation may have expired. Let the host know directly.",
+            );
+          }
+        }
         return;
       }
-      rsvpWritesInFlight.delete(heldToken);
+      releaseRsvpWrite(heldToken);
       if (result === 'sent') {
         answered.current = true;
         clearQueuedRsvp(token);
@@ -423,7 +547,7 @@ export default function InvitePreview({
       if (supabase === null || key === null) return;
       const heldToken = token;
       const startedAt = epoch.current;
-      rsvpWritesInFlight.add(heldToken);
+      holdRsvpWrite(heldToken);
       // Visibly in flight, exactly as a tap is: the controls disable for the
       // moment the delivery holds the lock, so the recipient is never offered a
       // tap that the guard would silently swallow.
@@ -433,22 +557,37 @@ export default function InvitePreview({
       // changed paints nothing and releases only its OWN hold, never whatever
       // the invite now on screen may be holding.
       if (cancelled || startedAt !== epoch.current) {
-        rsvpWritesInFlight.delete(heldToken);
+        releaseRsvpWrite(heldToken);
         // Same rules as the stale branch in `answer()`: give the controls back
         // if this invite is the one on screen, paint the answer that actually
-        // landed, and spend the queue a sent answer satisfied wherever the
-        // viewer has gone.
+        // landed, mark it answered so a re-entry read cannot overwrite it
+        // (round-10 round 8 — this branch had the identical gap), and spend the
+        // queue a sent answer satisfied wherever the viewer has gone.
         if (liveToken.current === heldToken) {
           setRsvpBusy(false);
           if (result === 'sent') {
+            answered.current = true;
             setRsvp(pending);
             setQueued(null);
           }
         }
         if (result === 'sent') clearQueuedRsvp(heldToken);
+        // A refusal is durable here too, so the held answer is spent rather
+        // than left promising a delivery that cannot happen — the same rule the
+        // live branch below applies, which this one skipped.
+        if (result === 'refused') {
+          clearQueuedRsvp(heldToken);
+          if (liveToken.current === heldToken) {
+            setQueued(null);
+            setRsvpError(
+              "We couldn't record that — this invitation may have expired. Let the host know directly.",
+            );
+          }
+        }
+        // 'unreachable' keeps the queue exactly as it is, for the next event.
         return;
       }
-      rsvpWritesInFlight.delete(heldToken);
+      releaseRsvpWrite(heldToken);
       setRsvpBusy(false);
       // The queue moved on while we were away — the recipient answered again,
       // and that newer choice is the one that must be sent and shown.

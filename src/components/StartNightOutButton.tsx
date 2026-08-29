@@ -534,6 +534,18 @@ export default function StartNightOutButton({
    * is about to succeed and navigate.
    */
   const opening = useRef(false);
+  /**
+   * THIS instance is deliberately HOLDING the plan rather than opening it.
+   *
+   * Set when the create and its read both succeeded and the screen is
+   * explaining why it did not navigate — a failed invite, a night that rolled
+   * over, refused or uncertain plan edits. A ref, not the `openToken` state,
+   * because the tick effect must be able to read it without taking it as a
+   * dependency: re-running that effect on every hold is exactly what this is
+   * preventing. Cleared wherever the held screen is (an account change, and a
+   * retry that navigates).
+   */
+  const holdingOpen = useRef(false);
 
   // Re-arm the recovery affordance instead of the Start button. A plan created
   // in this session but never opened is the one state where offering "Start" is
@@ -661,6 +673,10 @@ export default function StartNightOutButton({
     setOpenToken(null);
     setNightMoved(null);
     setEditsUncertain(false);
+    // The hold belonged to the account that is leaving. Clearing the screen
+    // without clearing this would leave the tick effect permanently muted for
+    // whoever signs in next.
+    holdingOpen.current = false;
     // And the invite-failure count, for exactly the same reason (round-10
     // round 2, Codex). It was survivable before only because navigation always
     // followed it; now that a failure HOLDS the screen, an in-place account
@@ -705,6 +721,22 @@ export default function StartNightOutButton({
     // parked and will report the outcome itself. Re-deriving here would announce
     // a read failure that has not happened.
     if (opening.current) return;
+    /**
+     * ...AND SO IS A HOLD (round-10 round 8, Claude gate).
+     *
+     * `opening` covers the moment BEFORE the outcome is known. A hold is the
+     * moment after: the create succeeded, the follow-up read succeeded, and
+     * this instance deliberately did not navigate because an invite failed, the
+     * night rolled over, or the plan edits were refused or uncertain. The
+     * parked record is left in place on purpose — only the plan page spends it
+     * — so `recallStarted` below still answers, and any cross-tab `STARTED_KEY`
+     * write in ANY tab of the origin routes through `markCreatingChanged` and
+     * re-runs this effect. It then announced "this page couldn't open it" over
+     * a screen that had just explained precisely why it had not: two Open-it
+     * controls and two contradictory sentences, one of them false, because the
+     * read did not fail. A held screen already IS the report.
+     */
+    if (holdingOpen.current) return;
     setBusy(creatingOwners.has(userId));
     const parked = recallStarted(userId);
     if (parked === null || parked.nightKey !== nycNightKey()) return;
@@ -991,6 +1023,9 @@ export default function StartNightOutButton({
         setNightMoved(planEdits.nightMoved);
         setEditsUncertain(editsTimedOut);
         setOpenToken(plan.shareToken);
+        // See `holdingOpen`: from here the parked record is left deliberately,
+        // and the create-settled tick must not read it as a failed open.
+        holdingOpen.current = true;
         return;
       }
       // NOT cleared here — see `forgetStartedNightOut`.

@@ -1577,7 +1577,16 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   itCommitting('a concurrent duplicate invite at the cap boundary is idempotent, not a failure (criterion 3)', async () => {
     const db2 = new Client({
       connectionString: URL as string,
-      ssl: { rejectUnauthorized: false },
+      // THE SAME TLS THE GATE AUTHORISED, exactly as the primary connection
+      // above — and for a stronger reason (round-10 round 8, Claude). This
+      // hardcoded `rejectUnauthorized: false`, which accepts ANY certificate,
+      // on the one session in the suite that COMMITS. With PGSSLROOTCERT set
+      // the target is verified TLS with a pinned CA, so this connection was
+      // silently downgrading it: on an untrusted network an active MITM could
+      // take the staging role's password and the committed DML from it. It is
+      // also precisely what the comment eight lines above forbids — rebuilding
+      // the config here lets the suite connect with one nobody verified.
+      ssl: (TARGET as { ssl: object }).ssl,
       statement_timeout: 30000,
       application_name: 'v8-3-invite-race-b',
     });

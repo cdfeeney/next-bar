@@ -48,7 +48,10 @@ vi.mock('@/lib/nightOuts.server', () => ({
 }));
 /** When true the plan RPCs never answer. Reset per test. */
 let planRpcsHang = true;
-vi.mock('@/lib/nightOutPlan', () => ({
+// PARTIAL, so the real `remainingLabel` survives — see the note on the same
+// mock in nightOutPlanFields.test.tsx.
+vi.mock('@/lib/nightOutPlan', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/nightOutPlan')>()),
   setNightOutStart: () =>
     planRpcsHang ? new Promise<boolean>(() => undefined) : Promise.resolve(true),
   setNightOutArea: () =>

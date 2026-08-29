@@ -1158,6 +1158,44 @@ describe('StartNightOutButton — account invitations (criterion 2, invited-acco
     expect(pushed).toEqual(['/night-out/tok-1']);
   });
 
+  /**
+   * ROUND-10 ROUND 8, Claude gate. A held screen leaves the parked record in
+   * place on purpose — only the plan page spends it — so any `STARTED_KEY`
+   * write in ANY tab of the origin routed through `markCreatingChanged`, re-ran
+   * the create-settled effect, found the record still parked tonight and
+   * announced "this page couldn't open it": two Open-it controls and two
+   * contradictory sentences, one of them false, because the read had succeeded
+   * and the hold was deliberate. A held screen already IS the report.
+   */
+  test('a cross-tab create does not repaint the recovery panel over a held report', async () => {
+    inviteFails = true;
+    const user = userEvent.setup();
+    render(<StartNightOutButton inviteeIds={[FRIEND_A, FRIEND_B]} />);
+    await user.click(screen.getByRole('button'));
+    expect(await screen.findByText(/2 invites didn't send/)).toBeTruthy();
+
+    // Another tab of the same origin creates or opens a night out. The store is
+    // ONE map for the origin and the other tab merges rather than replaces, so
+    // our own parked record is still there — which is exactly the state that
+    // made the tick effect announce a read failure.
+    const other = JSON.stringify({
+      ...JSON.parse(window.localStorage.getItem(STARTED_KEY) ?? '{}'),
+      [USER_B]: { planId: PLAN_ID, nightKey },
+    });
+    window.localStorage.setItem(STARTED_KEY, other);
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: STARTED_KEY, oldValue: null, newValue: other }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(
+      screen.queryByText(/couldn't open it/i),
+      'a cross-tab write repainted a read failure that never happened',
+    ).toBeNull();
+    expect(screen.getAllByRole('button', { name: /open it/i })).toHaveLength(1);
+    expect(screen.getByText(/2 invites didn't send/)).toBeTruthy();
+  });
+
   test('creating with nobody selected invites nobody and still works', async () => {
     const user = userEvent.setup();
     render(<StartNightOutButton />);

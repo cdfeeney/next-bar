@@ -27,17 +27,32 @@ const BOUNDARY_GRACE_MS = 1_000;
 const MIN_RECHECK_MS = 60_000;
 const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
 /**
- * The longest we will wait for a boundary this device believes is still AHEAD.
+ * How much CLOCK SKEW the approach tolerates — and, therefore, how long before
+ * a boundary this device believes is still ahead we start asking every minute.
  *
  * Waiting an "ahead" boundary exactly is only right if the two clocks agree. On
  * a device running ten minutes SLOW the server crosses first, starts serving
  * media and accepting the writes, and this recap goes on hiding both controls
  * for the whole skew because its own timer is not due yet (round-10 round 7,
  * Codex). The behind case already had a floor for the disagreement; this is the
- * same tolerance on the other side, and it costs at most one extra read per
- * boundary approach.
+ * same tolerance on the other side.
+ *
+ * IT IS A WINDOW, NOT A CAP (round-10 round 8, both lanes). Round 7 wrote
+ * `Math.min(delay, 60_000)`, which does not mean "notice the boundary a minute
+ * late" — it means "ask again every minute, forever". The media window can be
+ * open for 24 hours and a future plan sits days ahead, so a left-open recap
+ * re-ran both its RPCs 1,440 times a day and the plan page re-ran five, while
+ * the comment right here claimed at most one extra read per approach. That
+ * sentence was false and the cost was real.
+ *
+ * A skew tolerance has to be a stated number rather than an unbounded one, so
+ * here it is: ten minutes, the figure round 7's own trigger named. Outside the
+ * window we sleep until it opens; inside it we ask every minute. Cost per
+ * boundary is bounded at about eleven reads instead of one per minute for the
+ * whole ahead period, and a server that crosses up to ten minutes early is
+ * still noticed within a minute.
  */
-const MAX_APPROACH_MS = 60_000;
+const SKEW_TOLERANCE_MS = 10 * 60_000;
 
 /**
  * When to ask the server again about a boundary only the server owns.
@@ -54,9 +69,10 @@ const MAX_APPROACH_MS = 60_000;
  * AND A BOUNDARY AHEAD IS NOT WAITED INDEFINITELY EITHER (round-10 round 7,
  * Codex). "Waited exactly" is correct only when the clocks agree; on a slow
  * device the server crosses first and this surface stays on the wrong side for
- * the whole skew. Capping the approach at a minute makes the tolerance
- * symmetric: neither direction of skew can hide a boundary for longer than one
- * extra read.
+ * the whole skew. The approach therefore opens `SKEW_TOLERANCE_MS` before the
+ * boundary and asks every minute inside it, which makes the tolerance
+ * symmetric without turning the timer into a permanent poll (round-10 round 8 —
+ * see that constant; the previous shape polled for the entire ahead period).
  *
  * The plan page carries the same rule for its voting deadline. One shared
  * module would be better and is not available: `src/lib/` outside
@@ -65,7 +81,14 @@ const MAX_APPROACH_MS = 60_000;
  * prevented. Recorded rather than silently duplicated.
  */
 function clampRecheck(delayMs: number): number {
-  const wait = delayMs > 0 ? Math.min(delayMs, MAX_APPROACH_MS) : MIN_RECHECK_MS;
+  if (delayMs <= 0) return MIN_RECHECK_MS;
+  const wait =
+    delayMs > SKEW_TOLERANCE_MS
+      ? // Still outside the approach window: sleep until it opens, in ONE wait.
+        delayMs - SKEW_TOLERANCE_MS
+      : // Inside it: a minute, or the exact remaining time when that is sooner,
+        // so a boundary five seconds away is still not re-read after sixty.
+        Math.min(delayMs, MIN_RECHECK_MS);
   return Math.min(wait, MAX_REARM_MS);
 }
 
@@ -159,9 +182,25 @@ export default function NightOutMedia({
    * would have honoured.
    */
   const epoch = useRef(0);
+  /**
+   * WHICH READ IS NEWER — the epoch cannot say, and now something must.
+   *
+   * Round-10 round 8, Codex. The epoch only separates PLANS; two reads of the
+   * SAME plan share it, so the later one wins on screen only if it also lands
+   * later. The boundary timer makes that ordinary rather than exotic: it issues
+   * a read as the window closes while an earlier one is still stalled, the new
+   * `closed` paints, then the old `open` lands and passes the epoch guard —
+   * putting Add-a-photo and Archive back after expiry, where every tap is
+   * refused by the server. Reads are numbered on issue and a response older
+   * than the newest one already painted is dropped.
+   */
+  const readSeq = useRef(0);
+  const paintedSeq = useRef(0);
 
   const refresh = useCallback(async (): Promise<void> => {
     const startedAt = epoch.current;
+    readSeq.current += 1;
+    const seq = readSeq.current;
     const supabase = getBrowserSupabase();
     if (supabase === null) {
       // Unconfigured client is a FAILED read, not an empty night.
@@ -176,7 +215,8 @@ export default function NightOutMedia({
       fetchNightOutMedia(supabase, planId),
       fetchNightOutMediaWindow(supabase, planId),
     ]);
-    if (startedAt !== epoch.current) return;
+    if (startedAt !== epoch.current || seq <= paintedSeq.current) return;
+    paintedSeq.current = seq;
     setItems(nextItems);
     setMediaWindow(nextWindow);
     setLoading(false);
