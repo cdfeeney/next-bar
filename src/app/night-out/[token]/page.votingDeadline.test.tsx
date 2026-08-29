@@ -188,4 +188,30 @@ describe('the plan page reaches its own voting deadline', () => {
     await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1_000 + 60_000);
     expect(fetchNightOutVoting).toHaveBeenCalledTimes(3);
   });
+
+  /**
+   * ROUND-9 PANEL. The floor round 7 introduced for a deadline already BEHIND
+   * this device was applied to every delay, so a deadline five seconds AHEAD
+   * was re-read after sixty: Suggest, Vote and Remove stayed editable for most
+   * of a minute past an expiry the server was already enforcing, and the first
+   * tap in that window was refused instead of the page having gone read-only.
+   */
+  test('a deadline a few seconds ahead is not rounded up to a minute', async () => {
+    vi.setSystemTime(Date.parse(CLOSES_AT) - 5_000);
+    fetchNightOutVoting
+      .mockResolvedValueOnce({ votingClosesAt: CLOSES_AT, votingOpen: true })
+      .mockResolvedValue({ votingClosesAt: CLOSES_AT, votingOpen: false });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId('member-board')).toBeTruthy());
+    expect(screen.queryByTestId('night-out-voting-closed')).toBeNull();
+
+    // Ten seconds — past the deadline and its grace, nowhere near the floor.
+    await vi.advanceTimersByTimeAsync(10_000);
+    await waitFor(() => expect(fetchNightOutVoting).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByTestId('night-out-voting-closed')).toBeTruthy(),
+    );
+  });
 });

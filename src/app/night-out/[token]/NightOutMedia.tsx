@@ -16,21 +16,7 @@ import {
   fetchNightOutMedia,
   fetchNightOutMediaWindow,
 } from '@/lib/nightOutMedia/server';
-
-/**
- * A second past the boundary, so the server has unambiguously crossed it by its
- * own clock when we ask; the floor, which is what a boundary this device thinks
- * is already behind waits instead of never arming at all; and the longest
- * single wait before the timer re-arms.
- */
-const BOUNDARY_GRACE_MS = 1_000;
-const MIN_RECHECK_MS = 60_000;
-const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
-
-/** The one place the three bounds meet, so no caller can apply two of them. */
-function clampRecheck(delayMs: number): number {
-  return Math.min(Math.max(delayMs, MIN_RECHECK_MS), MAX_REARM_MS);
-}
+import { boundaryRecheckMs } from '@/lib/boundaryRecheck';
 
 /**
  * The Night Out recap's photos, and the two things the contract says you may do
@@ -183,10 +169,17 @@ export default function NightOutMedia({
    * Archive and every photo the server was serving. That is the exact harm
    * V8-R-NO-008's failure clause names.
    *
-   * So a boundary always arms, and `MIN_RECHECK_MS` is the floor. The cost of
-   * disagreement is one read a minute WHILE the server and this device
-   * disagree, which ends the moment the server crosses: the next answer names
-   * a different side, and its boundary is hours away.
+   * So a boundary always arms, and `MIN_RECHECK_MS` is the floor FOR THAT CASE
+   * ONLY. The cost of disagreement is one read a minute WHILE the server and
+   * this device disagree, which ends the moment the server crosses: the next
+   * answer names a different side, and its boundary is hours away.
+   *
+   * A BOUNDARY STILL AHEAD IS WAITED FOR EXACTLY (round-9 panel). The floor was
+   * applied to every delay, so a window opening or expiring five seconds from
+   * now was re-read after sixty — leaving Add-a-photo and Archive unavailable,
+   * or still offered, for the best part of a minute past the server's own
+   * boundary. `boundaryRecheckMs` is the one place that distinction lives now;
+   * it was duplicated here and in the plan page, and round 8 fixed neither.
    *
    * A CANCELLED PLAN HAS A BOUNDARY TOO (round-7 panel, Codex). Only 'before'
    * and 'open' armed, so a cancelled plan — whose archive control deliberately
@@ -218,7 +211,7 @@ export default function NightOutMedia({
       // that needs to keep asking.
       setBoundaryTick((n) => n + 1);
       void refresh();
-    }, clampRecheck(at - Date.now() + BOUNDARY_GRACE_MS));
+    }, boundaryRecheckMs(at));
     return () => clearTimeout(timer);
   }, [mediaWindow, boundaryTick, refresh]);
 

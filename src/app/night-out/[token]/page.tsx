@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { getBarById } from '@/lib/catalog';
+import { boundaryRecheckMs } from '@/lib/boundaryRecheck';
 import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/lib/pendingInvite';
 import { forgetStartedNightOut } from '@/components/StartNightOutButton';
 import NightOutMedia from './NightOutMedia';
@@ -178,22 +179,6 @@ function deadlineLabel(instant: string): string {
     minute: '2-digit',
     timeZone: 'America/New_York',
   }).format(at);
-}
-
-/**
- * A second past the deadline, so the server has crossed it by its own clock
- * when we ask; the floor, which is what a deadline this device thinks is
- * already behind waits instead of never arming at all; and the longest single
- * wait before the timer re-arms, because `setTimeout` silently fires
- * immediately past ~24.8 days.
- */
-const DEADLINE_GRACE_MS = 1_000;
-const MIN_RECHECK_MS = 60_000;
-const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
-
-/** The one place the three bounds meet, so no caller can apply two of them. */
-function clampRecheck(delayMs: number): number {
-  return Math.min(Math.max(delayMs, MIN_RECHECK_MS), MAX_REARM_MS);
 }
 
 function nightDateLabel(nightKey: string): string {
@@ -438,9 +423,18 @@ export default function NightOutPage({
    * answers `votingOpen: true`, and the response reaches React after the
    * instant has passed — no skewed clock required, just latency. Vote, Suggest
    * and Remove then stayed live indefinitely for a plan the server had made
-   * read-only. So it arms regardless, with `MIN_RECHECK_MS` as the floor: while
-   * this device and the server disagree it costs one read a minute, and that
-   * ends the moment the server says closed, because a closed vote arms nothing.
+   * read-only. So it arms regardless, with `MIN_RECHECK_MS` as the floor FOR
+   * THAT CASE: while this device and the server disagree it costs one read a
+   * minute, and that ends the moment the server says closed, because a closed
+   * vote arms nothing.
+   *
+   * A DEADLINE STILL AHEAD IS WAITED FOR EXACTLY (round-9 panel). The floor was
+   * applied to every delay, so a deadline five seconds away was re-read after
+   * sixty: Suggest, Vote and Remove stayed editable for most of a minute past
+   * an expiry the server was already enforcing, and the first tap in that
+   * window was refused instead of the page having gone read-only. The rule
+   * lives in `boundaryRecheckMs` now — this file and NightOutMedia each had
+   * their own copy of it, and the panel filed the same defect against both.
    */
   useEffect(() => {
     if (state.kind !== 'member') return;
@@ -457,7 +451,7 @@ export default function NightOutPage({
       // silence, exactly where the asking has to continue.
       setDeadlineTick((n) => n + 1);
       void loadMemberView(planId, startedAt);
-    }, clampRecheck(at - Date.now() + DEADLINE_GRACE_MS));
+    }, boundaryRecheckMs(at));
     return () => clearTimeout(timer);
   }, [state, deadlineTick, loadMemberView]);
 

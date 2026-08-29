@@ -184,4 +184,28 @@ describe('the media window re-asks the server at its own boundary', () => {
       expect(screen.getByTestId('night-out-add-photo')).toBeTruthy(),
     );
   });
+
+  /**
+   * ROUND-9 PANEL. The floor round 7 introduced for a boundary already BEHIND
+   * this device was applied to every delay, so a boundary five seconds AHEAD
+   * waited a full minute — leaving Add-a-photo unavailable, or still offered,
+   * for about fifty-four seconds past the server's own instant. The floor is
+   * for the disagreement case; a boundary still ahead is waited for exactly.
+   */
+  test('a boundary a few seconds ahead is not rounded up to a minute', async () => {
+    vi.setSystemTime(Date.parse(OPENS_AT) - 5_000);
+    fetchNightOutMediaWindow.mockResolvedValueOnce(BEFORE).mockResolvedValue(OPEN);
+
+    render(<NightOutMedia planId={PLAN} canAddPhoto />);
+
+    await waitFor(() => expect(fetchNightOutMediaWindow).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('night-out-add-photo')).toBeNull();
+
+    // Ten seconds — past the boundary and its grace, nowhere near the floor.
+    await vi.advanceTimersByTimeAsync(10_000);
+    await waitFor(() => expect(fetchNightOutMediaWindow).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByTestId('night-out-add-photo')).toBeTruthy(),
+    );
+  });
 });

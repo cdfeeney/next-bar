@@ -19,6 +19,16 @@
  *  - Plan CREATION with its people picker is `StartNightOutButton`, which
  *    needs a settled invitee list and therefore lives on the group screen it
  *    is selected from. The card here is the entry point into that flow.
+ *
+ * WHERE THIS CARD LEADS (round-9 panel). `/friends/consensus` was filed as
+ * "the legacy consensus screen" rather than the Start a Night Out form, and it
+ * was: the form there had a CTA and none of the three rows the ledger names as
+ * NO-002's, NO-003's and NO-005's entry point, so an owner could not set When,
+ * Area or Voting closes anywhere in the product. The rows now render above that
+ * CTA (`NightOutPlanFields`), which is what makes this destination the planning
+ * form the requirement asks for. The route keeps its name — it is also where
+ * Group Favorites and the people picker live, and NO-005's row exists only
+ * once somebody is selected there.
  */
 
 import Link from 'next/link';

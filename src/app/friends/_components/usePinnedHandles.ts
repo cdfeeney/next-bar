@@ -102,9 +102,24 @@ export function usePinnedHandles(): PinnedHandlesState {
    *
    * ponytail: covers a skew up to the settle window; a clock hours out is a
    * device problem no client-side window can paper over.
+   *
+   * A ROLLOVER THIS HOOK NEVER SAW STILL COUNTS (round-9 panel). Arming only on
+   * an OBSERVED key change misses the commonest arrival of all: mounting when
+   * the device has ALREADY rolled over. The key is then simply the new night's
+   * from the first render, no change is ever observed, `rolledAt` stays null,
+   * and the settle polling never runs — so a device ten minutes fast, opened at
+   * real 3:55 AM, reads the night in progress and goes on showing those pins
+   * after the server expires them at 4:00, until a remount. The window is a
+   * property of WHERE THE CLOCK IS, not of what this instance happened to
+   * watch: if fifteen minutes ago was a different night, we are inside it.
    */
   const nightRef = useRef(night);
-  const rolledAt = useRef<number | null>(null);
+  const [mountedInsideSettle] = useState(
+    () => nycNightKey(new Date(Date.now() - ROLLOVER_SETTLE_MS)) !== night,
+  );
+  const rolledAt = useRef<number | null>(
+    mountedInsideSettle ? Date.now() : null,
+  );
   useNightRefresh(() => {
     const key = nycNightKey();
     if (key !== nightRef.current) {

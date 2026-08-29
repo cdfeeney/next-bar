@@ -146,6 +146,14 @@ export default function InvitePreview({
     // /night-out/A → /night-out/B without remounting, so that path is the
     // ordinary one, not an edge.
     setRsvpBusy(false);
+    // ...AND THE REF THAT IS THE ACTUAL LOCK (round-9 panel). Round 3 reset the
+    // STATE, which is only what paints `disabled`; the mutual-exclusion guard
+    // both writers take is `rsvpBusyRef`, and it was left held. So the new
+    // invite rendered ENABLED RSVP buttons whose every tap returned at the
+    // guard — visibly answerable, silently inert — and a request for the
+    // previous token that never settles held it that way for good. The two
+    // halves of one flag have to be reset together.
+    rsvpBusyRef.current = false;
 
     const supabase = getBrowserSupabase();
     if (supabase === null) return;
@@ -213,11 +221,16 @@ export default function InvitePreview({
             // reached the server, so the answer is held rather than lost.
             ('unreachable' as const)
           : await submitAnonRsvp(supabase, token, key, choice);
-      rsvpBusyRef.current = false;
       if (startedAt !== epoch.current) {
-        setRsvpBusy(false);
+        // A STALE WRITE DOES NOT RELEASE THE LIVE LOCK (round-9 panel, the same
+        // fix's other half). The token effect has already reset both halves for
+        // the invite now on screen, and that invite may be holding them for a
+        // write of its own; clearing them from here would let a second write
+        // start while the first is still in flight, which is exactly the
+        // overlap this lock exists to prevent.
         return;
       }
+      rsvpBusyRef.current = false;
       if (result === 'sent') {
         answered.current = true;
         clearQueuedRsvp(token);
@@ -313,9 +326,12 @@ export default function InvitePreview({
       // tap that the guard would silently swallow.
       setRsvpBusy(true);
       const result = await submitAnonRsvp(supabase, token, key, pending);
+      // Same rule as `answer()` above: a delivery that settles after the invite
+      // changed releases nothing, because the lock it would release is the new
+      // invite's.
+      if (cancelled || startedAt !== epoch.current) return;
       rsvpBusyRef.current = false;
       setRsvpBusy(false);
-      if (cancelled || startedAt !== epoch.current) return;
       // The queue moved on while we were away — the recipient answered again,
       // and that newer choice is the one that must be sent and shown.
       if (readQueuedRsvp(token) !== pending) {

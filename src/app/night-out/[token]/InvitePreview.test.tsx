@@ -48,6 +48,8 @@ import InvitePreview from './InvitePreview';
 
 const TOKEN = '11111111-1111-1111-1111-111111111111';
 const KEY = '22222222-2222-2222-2222-222222222222';
+/** A second invitation, reached by client-side navigation without a remount. */
+const OTHER_TOKEN = '33333333-3333-3333-3333-333333333333';
 
 const PREVIEW = {
   night: '2026-08-20',
@@ -459,6 +461,98 @@ describe('the offline queue (V8-R-INV-003)', () => {
 
     release('sent');
     await waitFor(() => expect(clearQueuedRsvp).toHaveBeenCalledWith(TOKEN));
+  });
+
+  /**
+   * BOTH HALVES OF THE FLAG ARE RESET TOGETHER (round-9 panel).
+   *
+   * Round 3 cleared `rsvpBusy` — the STATE, which is only what paints
+   * `disabled` — when the token changed, and left `rsvpBusyRef`, which is the
+   * lock both writers actually take. So the next invite rendered enabled RSVP
+   * buttons whose every tap returned at the guard: visibly answerable, silently
+   * inert. A request for the previous invite that never settles held it that
+   * way for good.
+   */
+  test('a hung write for the previous invite cannot lock the next one', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    // The write for invite A never settles.
+    submitAnonRsvp.mockReturnValueOnce(new Promise<'sent'>(() => undefined));
+
+    const { rerender } = renderPreview();
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    // Client-side navigation to a second invitation — Next reuses this
+    // component rather than remounting it.
+    submitAnonRsvp.mockResolvedValue('sent');
+    rerender(
+      <InvitePreview
+        token={OTHER_TOKEN}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-going')).not.toBeDisabled(),
+    );
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() =>
+      expect(
+        submitAnonRsvp,
+        'the new invite rendered enabled controls whose taps the old lock swallowed',
+      ).toHaveBeenCalledTimes(2),
+    );
+    expect(submitAnonRsvp).toHaveBeenLastCalledWith(
+      expect.anything(),
+      OTHER_TOKEN,
+      KEY,
+      'going',
+    );
+    await waitFor(() => expect(screen.getByTestId('invite-rsvp-sent')).toBeTruthy());
+  });
+
+  test('the previous invite settling does not release the new one’s lock', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    let releaseA: (value: 'sent') => void = () => undefined;
+    submitAnonRsvp.mockReturnValueOnce(
+      new Promise<'sent'>((resolve) => {
+        releaseA = resolve;
+      }),
+    );
+
+    const { rerender } = renderPreview();
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    // Invite B, with a write of its own held open.
+    submitAnonRsvp.mockReturnValueOnce(new Promise<'sent'>(() => undefined));
+    rerender(
+      <InvitePreview
+        token={OTHER_TOKEN}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-going')).not.toBeDisabled(),
+    );
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(2));
+
+    // A's answer arrives now. It belongs to an invitation nobody is looking at,
+    // and the lock it would release is B's.
+    releaseA('sent');
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-maybe')).toBeDisabled(),
+    );
+    screen.getByTestId('invite-rsvp-maybe').click();
+    expect(
+      submitAnonRsvp,
+      'a stale write released the lock and let a second write start under it',
+    ).toHaveBeenCalledTimes(2);
   });
 
   test('says the answer was not sent when the queue itself could not be written', async () => {
