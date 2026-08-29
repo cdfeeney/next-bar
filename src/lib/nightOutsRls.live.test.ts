@@ -151,14 +151,15 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     }
   });
 
-  it('anon cannot execute any night_out WRITE rpc (criterion 6)', async () => {
+  it('anon is denied the night_out write RPCs, and holds exactly the six deliberate grants (criterion 6)', async () => {
     // The ten write RPCs, plus 0047's authenticated-only definer READ
     // (night_out_is_full_by_token) which anon must also not execute. An
     // earlier round caught this list claiming "all" while omitting
     // decide/invite/respond — the same overstated-claim species as the
-    // criterion-3 grant test. The completeness assertion at the end is what
-    // stops the list silently falling behind the migration again, and it is
-    // what caught 0047's new function on the round it was added.
+    // criterion-3 grant test. This loop is BEHAVIOR: it calls each one as anon
+    // and reads the refusal. Completeness is a separate claim and is asked of
+    // the database's own privileges at the end, because a hand-maintained
+    // "and that is all of them" list is the thing that went stale.
     const writes: Array<[string, string]> = [
       ['create_night_out', "select public.create_night_out(current_date, 'x')"],
       ['cancel_night_out', `select public.cancel_night_out('${randomUUID()}'::uuid)`],
@@ -196,21 +197,47 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       expect(denied, `anon could execute ${name}`).toMatch(/permission denied/i);
     }
 
-    // The list above claims to be exhaustive, so PROVE it against the database
-    // rather than trusting it. Every night_out function that is not the one
-    // anon-granted read (preview) or a member-scoped definer READ must appear.
-    // Without this, adding an 11th write RPC would leave it silently unchecked
-    // and the test would still say "any write rpc".
-    const READS = new Set(['preview_night_out', 'resolve_night_out_by_token',
-      'get_night_out', 'get_night_out_members', 'get_night_out_board', 'night_out_role']);
+    // COMPLETENESS IS ASKED OF THE DATABASE, NOT OF A SECOND HAND-LIST.
+    //
+    // This assertion used to require that every `%night_out%` routine appear in
+    // either `writes` above or a hardcoded READS set, and it went stale exactly
+    // as designed-to: by round 10 it named 29 routines that post-date it, all
+    // of them correctly NOT anon-executable, so the suite failed while the
+    // grants were right. A list that must be edited whenever a migration adds
+    // an RPC will go stale again, so the claim now rests on the privileges the
+    // database actually holds. That is also STRONGER than the loop above: it
+    // covers every routine, including ones whose argument list this file has no
+    // fixture for, and it fails in BOTH directions — a new anon grant appears,
+    // and a deliberate one silently disappearing appears too.
+    //
+    // The six below are each deliberate, and five of them are reads. The sixth,
+    // `rsvp_night_out_by_token`, is a genuine anon WRITE — 0068 grants it for
+    // token-gated anonymous RSVP, served by `public.night_out_anon_rsvps` — so
+    // this test's title is about the writes it enumerates, never a claim that
+    // no anon write exists.
+    const ANON_EXECUTABLE = [
+      'night_out_scheduled_start',
+      'preview_night_out',
+      'preview_night_out_attendees',
+      'preview_night_out_detail',
+      'preview_night_out_shortlist',
+      'rsvp_night_out_by_token',
+    ];
     const { rows } = await db.query(`
-      select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      select p.proname,
+             has_function_privilege('anon', p.oid, 'EXECUTE') as anon_execute
+        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
        where n.nspname = 'public' and p.proname like '%night_out%'`);
-    const covered = new Set(writes.map(([name]) => name));
-    const uncovered = rows
-      .map((r) => r.proname as string)
-      .filter((name) => !READS.has(name) && !covered.has(name));
-    expect(uncovered, 'night_out write RPCs not covered by this denial test').toEqual([]);
+    // A read that returned nothing would make every assertion below vacuous.
+    expect(rows.length, 'no %night_out% routines found; the read itself failed').toBeGreaterThan(
+      ANON_EXECUTABLE.length,
+    );
+    const anonGranted = Array.from(
+      new Set(rows.filter((r) => r.anon_execute === true).map((r) => r.proname as string)),
+    ).sort();
+    expect(anonGranted, 'the set of anon-executable night_out routines').toEqual(
+      [...ANON_EXECUTABLE].sort(),
+    );
   });
 
   it('anon CAN execute exactly the bearer preview, and it leaks no identifiers (criterion 5)', async () => {

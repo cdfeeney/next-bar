@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { nycNightKey } from '@/lib/nightKey';
 import { createNightOut, getNightOut, inviteToNightOut } from '@/lib/nightOuts.server';
+import { useNightOutPlanFields } from './NightOutPlanFields';
 
 /**
  * A plan that was CREATED but never opened, parked where a route change cannot
@@ -411,6 +412,15 @@ export default function StartNightOutButton({
   const [createdPlanId, setCreatedPlanId] = useState<string | null>(null);
   const [inviteFailures, setInviteFailures] = useState(0);
   /**
+   * V8-R-NO-002 / NO-003 / NO-005 — the form's When, Area and Voting closes
+   * rows. They own their own state, their own validation and their own refusal
+   * message; this component owns only the plan they are applied to.
+   */
+  const planFields = useNightOutPlanFields({
+    disabled: busy || createdPlanId !== null,
+    hasInvitees: inviteeIds.some((id) => UUID_RE.test(id)),
+  });
+  /**
    * Minted once per attempt and REUSED across retries. That is the whole point:
    * a create whose response never arrived may already have made the plan, and
    * without a stable key the retry makes a second one (cold panel, Codex).
@@ -712,6 +722,14 @@ export default function StartNightOutButton({
       opening.current = true;
       settleCreate();
 
+      // The three owner edits, applied to the plan that now exists — the rows
+      // are on the CREATION form (the ledger's own entry point for all three)
+      // but the RPCs take a plan id, so they can only run here. They never
+      // block reaching the plan: every one of them has a server-side default,
+      // and a refusal is reported by the rows themselves.
+      await planFields.apply(supabase, planId);
+      if (owner !== liveUserId.current) return;
+
       // Invitations are sent AFTER the plan exists and BEFORE navigating, so the
       // owner learns here if some did not land. A failed invite never blocks
       // reaching the plan — the plan is real either way — but it is never silent
@@ -751,6 +769,7 @@ export default function StartNightOutButton({
 
   return (
     <div className="mt-4 text-center">
+      {planFields.fields}
       <button
         type="button"
         onClick={() => void handleStart()}
