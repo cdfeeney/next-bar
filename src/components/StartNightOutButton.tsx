@@ -64,12 +64,29 @@ const PLAN_EDIT_TIMED_OUT: PlanEditOutcome = {
   nightMoved: null,
 };
 
-/** Resolve `fallback` if `work` has not settled within `ms`. Never rejects. */
-function withBudget<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+/**
+ * Run `start(signal)` with a deadline. On expiry the signal is ABORTED and
+ * `fallback` is returned. Never rejects.
+ *
+ * Aborting is the point (round-10 round 4, Codex). The previous version raced a
+ * promise and walked away, so the work carried on: the owner was told the
+ * planning edits had not saved and the remaining writes then landed anyway,
+ * changing the plan after they had moved on. Stopping the waiting without
+ * stopping the work turns a timeout into a false report.
+ */
+function withBudget<T>(
+  start: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  fallback: T,
+): Promise<T> {
+  const controller = new AbortController();
   return Promise.race([
-    work.catch(() => fallback),
+    start(controller.signal).catch(() => fallback),
     new Promise<T>((resolve) => {
-      setTimeout(() => resolve(fallback), ms);
+      setTimeout(() => {
+        controller.abort();
+        resolve(fallback);
+      }, ms);
     }),
   ]);
 }
@@ -536,6 +553,18 @@ export default function StartNightOutButton({
     identity: userId,
   });
   /**
+   * The LATEST `apply`, readable from inside a long-running `handleStart`.
+   *
+   * Written in a layout effect for the same reason `liveUserId` is: it must be
+   * current against a COMMITTED screen before any external task can observe it,
+   * and a render React throws away must not change what a committed handler
+   * calls.
+   */
+  const applyRef = useRef(planFields.apply);
+  useLayoutEffect(() => {
+    applyRef.current = planFields.apply;
+  }, [planFields.apply]);
+  /**
    * The account on screen RIGHT NOW, readable from inside a stale closure.
    *
    * A counter was the first shape tried and it was wrong here: auth cycling
@@ -808,9 +837,18 @@ export default function StartNightOutButton({
       // and a late settle can no longer paint anything because `apply` returns
       // its answer instead of rendering it.
       const planEdits = await withBudget(
+        // `applyRef`, not the `apply` this closure captured (round-10 round 4,
+        // Codex). `handleStart` runs across several awaits, and the rows can
+        // re-render underneath it — most concretely when `fetchMyPresence`
+        // resolves mid-create and seeds the Area from the bar you pinned
+        // tonight. The captured callback would then write the values the form
+        // had when Start was TAPPED while the screen shows the ones it has now,
+        // creating a plan with no area and saying nothing. Reading the ref at
+        // invocation takes the rows as they actually stand.
+        //
         // `nightKey` is the ONE reading of the clock this attempt used, and the
         // rows compare their displayed night against it — see `nightMoved`.
-        planFields.apply(supabase, planId, nightKey),
+        (signal) => applyRef.current(supabase, planId, nightKey, signal),
         PLAN_EDIT_BUDGET_MS,
         PLAN_EDIT_TIMED_OUT,
       );

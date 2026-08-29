@@ -83,6 +83,13 @@ export type NightOutPlanFields = {
     planId: string,
     /** The night `create_night_out` actually used, read once at submit. */
     planNight: string,
+    /**
+     * Aborts the REMAINING writes. Checked before each one, so a caller that
+     * has stopped waiting also stops the work — see the budget in
+     * `StartNightOutButton`. Without it, telling the owner an edit did not save
+     * and then saving it a minute later is a report that was simply untrue.
+     */
+    signal?: AbortSignal,
   ) => Promise<PlanEditOutcome>;
 };
 
@@ -287,8 +294,21 @@ export function useNightOutPlanFields({
       supabase: SupabaseClient,
       planId: string,
       planNight: string,
+      signal?: AbortSignal,
     ): Promise<PlanEditOutcome> => {
       const failed: string[] = [];
+      /**
+       * Checked before EVERY write, not once at the top.
+       *
+       * The caller's budget stopped waiting but not working (round-10 round 4,
+       * Codex): the first RPC ran long, the owner was told the planning details
+       * had not saved, and then the remaining writes went out anyway and changed
+       * the plan behind them. An edit we have already reported as not landed
+       * must not land. What has ALREADY gone to the server is beyond recall —
+       * that is the honest limit of a client-side abort, and it is why the
+       * report says these edits may not have saved rather than that they failed.
+       */
+      const stopped = (): boolean => signal?.aborted === true;
       // The night these rows were SHOWING, against the night the plan is for.
       // Only an untouched row can differ silently: an edited one that lands on
       // another night is already narrated by `startOffNight` and not sent.
@@ -298,18 +318,21 @@ export function useNightOutPlanFields({
       // default, so there is nothing to write and no way for that write to
       // fail; an edited one is written, and an off-night one is not attempted.
       if (startEdit !== null && startIso !== null && !startOffNight) {
-        if (!(await setNightOutStart(supabase, planId, startIso))) failed.push('the time');
+        if (stopped()) failed.push('the time');
+        else if (!(await setNightOutStart(supabase, planId, startIso))) failed.push('the time');
       }
       const trimmedArea = area.trim();
       if (trimmedArea !== '') {
-        if (!(await setNightOutArea(supabase, planId, trimmedArea))) failed.push('the area');
+        if (stopped()) failed.push('the area');
+        else if (!(await setNightOutArea(supabase, planId, trimmedArea))) failed.push('the area');
       }
       // 'none' IS THE DEFAULT AND NEEDS NO WRITE — `voting_closes_at` starts
       // null, which is what "No deadline" means. A blank field is the same
       // thing and is narrated by `deadlineMissing` above, not reported here:
       // an edit that never reached the server was never refused by it.
       if (hasInvitees && deadlineIso !== null) {
-        if (!(await setNightOutVotingDeadline(supabase, planId, deadlineIso))) {
+        if (stopped()) failed.push('the voting deadline');
+        else if (!(await setNightOutVotingDeadline(supabase, planId, deadlineIso))) {
           failed.push('the voting deadline');
         }
       }

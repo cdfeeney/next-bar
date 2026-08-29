@@ -83,6 +83,33 @@ function Harness({
   );
 }
 
+/** The same host, plus the abort signal the create path passes through. */
+function HarnessWithSignal({ signal }: { signal: AbortSignal }): JSX.Element {
+  const planFields = useNightOutPlanFields({ hasInvitees: true });
+  const [outcome, setOutcome] = useState<PlanEditOutcome | null>(null);
+  return (
+    <div>
+      {planFields.fields}
+      <button
+        type="button"
+        data-testid="create"
+        onClick={() =>
+          void planFields
+            .apply(supabase, PLAN, '2026-08-20', signal)
+            .then(setOutcome)
+        }
+      >
+        Start
+      </button>
+      {outcome !== null ? (
+        <p data-testid="refused">
+          {outcome.refused.length === 0 ? 'none' : outcome.refused.join(' or ')}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -339,6 +366,70 @@ describe('the two defects the round-3 panel found by triggering them', () => {
       expect(screen.getByTestId('night-moved').textContent).toBe('none'),
     );
     expect(setNightOutStart).not.toHaveBeenCalled();
+  });
+});
+
+describe('an abandoned apply stops writing (round-10 round 4, Codex)', () => {
+  /**
+   * The caller's budget used to stop WAITING without stopping the WORK: the
+   * first RPC ran long, the owner was told the planning details had not saved,
+   * and the remaining writes then went out and changed the plan behind them.
+   * An edit already reported as not landed must not land.
+   */
+  test('an abort between writes skips the rest and reports them as not saved', async () => {
+    const controller = new AbortController();
+    // The first write settles, and aborts on its way out — standing in for a
+    // caller whose deadline expired while this RPC was in flight.
+    setNightOutStart.mockImplementation(async () => {
+      controller.abort();
+      return true;
+    });
+
+    render(<HarnessWithSignal signal={controller.signal} />);
+    fireEvent.change(screen.getByLabelText('When'), {
+      target: { value: '2026-08-20T22:30' },
+    });
+    fireEvent.change(screen.getByLabelText(/^Area/), {
+      target: { value: 'East Village' },
+    });
+    fireEvent.click(screen.getByLabelText('Pick a time'));
+    fireEvent.change(screen.getByLabelText('Voting closes at'), {
+      target: { value: '2026-08-20T23:00' },
+    });
+
+    screen.getByTestId('create').click();
+    await waitFor(() =>
+      expect(screen.getByTestId('refused').textContent).toBe(
+        'the area or the voting deadline',
+      ),
+    );
+    // The two later writes were never issued...
+    expect(setNightOutArea).not.toHaveBeenCalled();
+    expect(setNightOutVotingDeadline).not.toHaveBeenCalled();
+    // ...and the one already sent is not retracted, because it cannot be. It is
+    // simply not among the edits reported as unsaved.
+    expect(setNightOutStart).toHaveBeenCalledTimes(1);
+  });
+
+  test('an un-aborted apply still writes all three', async () => {
+    const controller = new AbortController();
+    render(<HarnessWithSignal signal={controller.signal} />);
+    fireEvent.change(screen.getByLabelText('When'), {
+      target: { value: '2026-08-20T22:30' },
+    });
+    fireEvent.change(screen.getByLabelText(/^Area/), {
+      target: { value: 'East Village' },
+    });
+    fireEvent.click(screen.getByLabelText('Pick a time'));
+    fireEvent.change(screen.getByLabelText('Voting closes at'), {
+      target: { value: '2026-08-20T23:00' },
+    });
+
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('none'));
+    expect(setNightOutStart).toHaveBeenCalledTimes(1);
+    expect(setNightOutArea).toHaveBeenCalledTimes(1);
+    expect(setNightOutVotingDeadline).toHaveBeenCalledTimes(1);
   });
 });
 

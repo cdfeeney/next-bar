@@ -64,6 +64,21 @@ vi.mock('@/lib/supabase/client', () => ({
   getBrowserSupabase: () => ({}),
 }));
 
+/** The bar this account has pinned tonight, or null. Seeds the Area row. */
+let presence: { barId: string | null } | null = null;
+vi.mock('@/app/friends/_components/usePinnedHandles', () => ({
+  useMyPresence: () => presence,
+}));
+// Spread the real module: the plan rows only need getBarById, and replacing the
+// whole of `catalog` would leave every other consumer in this tree undefined.
+vi.mock('@/lib/catalog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/catalog')>()),
+  getBarById: (id: string) =>
+    id === 'attaboy'
+      ? { id, name: 'Attaboy', neighborhood: 'Lower East Side' }
+      : undefined,
+}));
+
 vi.mock('@/lib/nightOuts.server', () => ({
   createNightOut: async (
     _s: unknown,
@@ -101,6 +116,7 @@ beforeEach(() => {
   authStatus = 'signed-in';
   nightKey = '2026-08-17';
   createKeys = null;
+  presence = null;
   window.localStorage.clear();
   window.sessionStorage.clear();
 });
@@ -674,6 +690,49 @@ describe('StartNightOutButton — a created plan is never lost', () => {
 
     expect(keys.length).toBe(2);
     expect(keys[1], 'a same-night retry minted a new key and could double-create').toBe(keys[0]);
+  });
+
+  /**
+   * Round-10 round 4, Codex. `handleStart` runs across several awaits and used
+   * to call the `apply` its closure captured at the tap. If `fetchMyPresence`
+   * resolved mid-create, the rows re-rendered showing the Area inherited from
+   * the bar pinned tonight, while the captured callback still held the empty
+   * one — so the plan was created with no area and nothing said, under a form
+   * that was displaying one.
+   *
+   * `@/lib/nightOutPlan` is deliberately NOT mocked in this file, so the real
+   * wrappers run against the `{}` supabase stub and refuse. That is what makes
+   * this observable: an area that reaches `apply` is REFUSED and named, and an
+   * area that never reaches it is simply absent from the report.
+   */
+  test('an Area that arrives mid-create is applied, not the empty one captured at the tap', async () => {
+    const user = userEvent.setup();
+    let releaseCreate: (value: string) => void = () => undefined;
+    heldCreate = new Promise<string>((resolve) => {
+      releaseCreate = resolve;
+    });
+
+    const view = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
+    await waitFor(() => expect(createCalls).toBe(1));
+    // Tapped with the Area row empty.
+    expect((screen.getByLabelText(/^Area/) as HTMLInputElement).value).toBe('');
+
+    // Presence resolves while the create is still in flight, and the row now
+    // shows the neighbourhood of the bar pinned tonight.
+    presence = { barId: 'attaboy' };
+    view.rerender(<StartNightOutButton />);
+    expect((screen.getByLabelText(/^Area/) as HTMLInputElement).value).toBe(
+      'Lower East Side',
+    );
+
+    releaseCreate(PLAN_ID);
+
+    const notice = await screen.findByTestId('plan-fields-refused');
+    expect(
+      notice.textContent,
+      'the create used the Area captured at the tap, not the one on screen',
+    ).toMatch(/couldn.t save the area/i);
   });
 
   test("a refused edit for A is not shown as B's after an in-place account switch", async () => {

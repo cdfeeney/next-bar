@@ -555,6 +555,59 @@ describe('the offline queue (V8-R-INV-003)', () => {
     ).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * Round-10 round 4, Codex. The two tests above pushed the lock toward being
+   * CLEARED on a token change; this one is what that clearing broke. Going back
+   * to an invite whose write is still out could start a second write for the
+   * same row, and the upsert is last-write-wins, so the earlier choice could
+   * land last while the screen showed the later one. The lock names its invite
+   * now, which is what lets all three hold at once.
+   */
+  test('returning to an invite whose write is still out cannot start a second one', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    // A's write never settles.
+    submitAnonRsvp.mockReturnValueOnce(new Promise<'sent'>(() => undefined));
+
+    const { rerender } = renderPreview();
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+
+    const toB = (
+      <InvitePreview
+        token={OTHER_TOKEN}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />
+    );
+    const toA = (
+      <InvitePreview
+        token={TOKEN}
+        preview={PREVIEW}
+        signedIn={false}
+        onSignIn={() => undefined}
+      />
+    );
+
+    // A → B, which must NOT be blocked by A's outstanding write...
+    rerender(toB);
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-going')).not.toBeDisabled(),
+    );
+
+    // ...then B → A, where A's first write is still in flight.
+    rerender(toA);
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-maybe')).not.toBeDisabled(),
+    );
+    screen.getByTestId('invite-rsvp-maybe').click();
+
+    expect(
+      submitAnonRsvp,
+      'a second write for the same invite started while the first was still out',
+    ).toHaveBeenCalledTimes(1);
+  });
+
   test('says the answer was not sent when the queue itself could not be written', async () => {
     submitAnonRsvp.mockResolvedValue('unreachable');
     queueRsvp.mockReturnValue(false);
