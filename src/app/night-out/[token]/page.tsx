@@ -6,7 +6,6 @@ import Link from 'next/link';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { getBarById } from '@/lib/catalog';
-import { boundaryRecheckMs } from '@/lib/boundaryRecheck';
 import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/lib/pendingInvite';
 import { forgetStartedNightOut } from '@/components/StartNightOutButton';
 import NightOutMedia from './NightOutMedia';
@@ -179,6 +178,39 @@ function deadlineLabel(instant: string): string {
     minute: '2-digit',
     timeZone: 'America/New_York',
   }).format(at);
+}
+
+/**
+ * A second past the deadline, so the server has crossed it by its own clock
+ * when we ask; the floor for a deadline this device thinks is ALREADY BEHIND
+ * IT, which is what such a deadline waits instead of never arming at all; and
+ * the longest single wait before the timer re-arms, because `setTimeout`
+ * silently fires immediately past ~24.8 days.
+ */
+const DEADLINE_GRACE_MS = 1_000;
+const MIN_RECHECK_MS = 60_000;
+const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
+
+/**
+ * When to ask the server again about a deadline only the server enforces.
+ *
+ * THE FLOOR IS FOR THE DISAGREEMENT CASE ONLY (round-9 panel). It used to be
+ * `Math.max(delay, MIN_RECHECK_MS)`, which reads as "never poll faster than
+ * once a minute" and behaves as "never notice a deadline sooner than a minute":
+ * a deadline five seconds away was re-read after sixty, so Suggest, Vote and
+ * Remove stayed editable for most of a minute past an expiry the server was
+ * already enforcing, and the first tap in that window was refused instead of
+ * the page having gone read-only. A deadline still AHEAD is waited for
+ * exactly. One already behind cannot change its answer until the server's own
+ * clock crosses, so there the floor is right.
+ *
+ * `NightOutMedia` carries the same rule for its media window, and round 8 fixed
+ * one copy while leaving the other. A shared module in `src/lib/` would be the
+ * repair and is another lane's write scope, so the duplication is recorded here
+ * rather than hidden.
+ */
+function clampRecheck(delayMs: number): number {
+  return Math.min(delayMs > 0 ? delayMs : MIN_RECHECK_MS, MAX_REARM_MS);
 }
 
 function nightDateLabel(nightKey: string): string {
@@ -432,9 +464,9 @@ export default function NightOutPage({
    * applied to every delay, so a deadline five seconds away was re-read after
    * sixty: Suggest, Vote and Remove stayed editable for most of a minute past
    * an expiry the server was already enforcing, and the first tap in that
-   * window was refused instead of the page having gone read-only. The rule
-   * lives in `boundaryRecheckMs` now — this file and NightOutMedia each had
-   * their own copy of it, and the panel filed the same defect against both.
+   * window was refused instead of the page having gone read-only. See
+   * `clampRecheck` above — this file and NightOutMedia each carry the rule,
+   * and the panel filed the same defect against both copies.
    */
   useEffect(() => {
     if (state.kind !== 'member') return;
@@ -451,7 +483,7 @@ export default function NightOutPage({
       // silence, exactly where the asking has to continue.
       setDeadlineTick((n) => n + 1);
       void loadMemberView(planId, startedAt);
-    }, boundaryRecheckMs(at));
+    }, clampRecheck(at - Date.now() + DEADLINE_GRACE_MS));
     return () => clearTimeout(timer);
   }, [state, deadlineTick, loadMemberView]);
 

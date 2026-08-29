@@ -16,7 +16,38 @@ import {
   fetchNightOutMedia,
   fetchNightOutMediaWindow,
 } from '@/lib/nightOutMedia/server';
-import { boundaryRecheckMs } from '@/lib/boundaryRecheck';
+
+/**
+ * A second past the boundary, so the server has unambiguously crossed it by its
+ * own clock when we ask; the floor for a boundary this device thinks is ALREADY
+ * BEHIND IT, which is what such a boundary waits instead of never arming at
+ * all; and the longest single wait before the timer re-arms.
+ */
+const BOUNDARY_GRACE_MS = 1_000;
+const MIN_RECHECK_MS = 60_000;
+const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
+
+/**
+ * When to ask the server again about a boundary only the server owns.
+ *
+ * THE FLOOR IS FOR THE DISAGREEMENT CASE ONLY (round-9 panel). It used to be
+ * `Math.max(delay, MIN_RECHECK_MS)`, which reads as "never poll faster than
+ * once a minute" and behaves as "never notice a boundary sooner than a minute":
+ * a window opening or expiring five seconds from now was re-read after sixty,
+ * so Add-a-photo and Archive stayed on the wrong side of the server's own
+ * instant for about fifty-four seconds. A boundary still AHEAD is waited for
+ * exactly. A boundary already behind cannot change its answer until the
+ * server's clock catches up, so there the floor is right.
+ *
+ * The plan page carries the same rule for its voting deadline. One shared
+ * module would be better and is not available: `src/lib/` outside
+ * `nightOutMedia/` is another lane's write scope, and round 8 fixing one copy
+ * while leaving the other is exactly what a shared module would have
+ * prevented. Recorded rather than silently duplicated.
+ */
+function clampRecheck(delayMs: number): number {
+  return Math.min(delayMs > 0 ? delayMs : MIN_RECHECK_MS, MAX_REARM_MS);
+}
 
 /**
  * The Night Out recap's photos, and the two things the contract says you may do
@@ -178,8 +209,8 @@ export default function NightOutMedia({
    * applied to every delay, so a window opening or expiring five seconds from
    * now was re-read after sixty — leaving Add-a-photo and Archive unavailable,
    * or still offered, for the best part of a minute past the server's own
-   * boundary. `boundaryRecheckMs` is the one place that distinction lives now;
-   * it was duplicated here and in the plan page, and round 8 fixed neither.
+   * boundary. See `clampRecheck` above for why the same rule is spelled out
+   * again on the plan page rather than shared.
    *
    * A CANCELLED PLAN HAS A BOUNDARY TOO (round-7 panel, Codex). Only 'before'
    * and 'open' armed, so a cancelled plan — whose archive control deliberately
@@ -211,7 +242,7 @@ export default function NightOutMedia({
       // that needs to keep asking.
       setBoundaryTick((n) => n + 1);
       void refresh();
-    }, boundaryRecheckMs(at));
+    }, clampRecheck(at - Date.now() + BOUNDARY_GRACE_MS));
     return () => clearTimeout(timer);
   }, [mediaWindow, boundaryTick, refresh]);
 
