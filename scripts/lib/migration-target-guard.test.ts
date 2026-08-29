@@ -1,102 +1,159 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveTarget, TargetRefusal, type TargetInput } from './migration-target-guard';
+import {
+  deriveLabel, parseApiRef, parseRef, resolveTarget, TargetRefusal, type TargetInput,
+} from './migration-target-guard';
+
+const PROD = 'nuhqlvneokucxomguxhi';
+const STAGING = 'wqxovhiovgcijmfzxgby';
+
+const poolerUrl = (ref: string) => `postgresql://postgres.${ref}:pw@aws-0-ca-central-1.pooler.supabase.com:6543/postgres`;
+const apiUrl = (ref: string) => `https://${ref}.supabase.co`;
 
 /**
- * A target that passes every check: label and URL both came from the named
- * secrets file, and the label matches what the operator asked for. Each test
- * breaks exactly one thing so a failure names its own cause.
+ * A target that passes every check: both URLs name the staging project, the operator asked for
+ * staging, and no label contradicts the ref. Each test breaks exactly one thing so a failure names
+ * its own cause.
  */
 function target(overrides: Partial<TargetInput> = {}): TargetInput {
   return {
     env: 'staging',
-    secretsFile: '.env.staging.local',
-    secretsParsed: {
-      DATABASE_URL: 'postgres://u:p@staging.example/db',
-      NEXT_BAR_DATABASE_ENVIRONMENT: 'staging',
-    },
     shellDatabaseUrl: undefined,
-    databaseUrl: 'postgres://u:p@staging.example/db',
+    shellDeclaredEnv: undefined,
+    databaseUrl: poolerUrl(STAGING),
+    apiUrl: apiUrl(STAGING),
     actualEnv: 'staging',
+    classification: { productionRef: PROD, stagingRefs: [STAGING] },
     ...overrides,
   };
 }
 
+describe('parseRef', () => {
+  it('reads the ref from a pooler connection string (it is in the USERNAME)', () => {
+    expect(parseRef(poolerUrl(PROD))).toBe(PROD);
+  });
+
+  it('REFUSES an API URL and a direct connection — the ref must come from the pooler USERNAME', () => {
+    // This test used to assert the opposite. Round 5: a ref read from a HOSTNAME is whatever DNS
+    // says it is, so only the pooler shape — where the ref is in the username the server
+    // authenticates — can identify a connection target. The API URL keeps its own reader,
+    // parseApiRef, because it names no connection and opens no socket.
+    expect(() => parseRef(apiUrl(STAGING))).toThrow(/not a Supabase pooler host/);
+    expect(() => parseRef(`postgresql://postgres:pw@db.${STAGING}.supabase.co:5432/postgres`))
+      .toThrow(/not a Supabase pooler host/);
+    expect(parseApiRef(apiUrl(STAGING))).toBe(STAGING);
+  });
+
+  it('THROWS rather than guessing at something it does not recognise', () => {
+    // It used to return null, and every caller had to remember a null branch. A target nobody can
+    // identify is a stop, not an absence — see target-spoofing.test.ts for why that mattered.
+    expect(() => parseRef('postgres://user:pw@localhost:5432/postgres')).toThrow(TargetRefusal);
+    expect(() => parseRef(undefined)).toThrow(TargetRefusal);
+  });
+});
+
+describe('deriveLabel', () => {
+  it('classifies from the operator-set lists only', () => {
+    const c = { productionRef: PROD, stagingRefs: [STAGING] };
+    expect(deriveLabel(PROD, c)).toBe('production');
+    expect(deriveLabel(STAGING, c)).toBe('staging');
+    expect(deriveLabel('someotherprojectref12', c)).toBeNull();
+  });
+});
+
 describe('resolveTarget', () => {
-  it('accepts a secrets file that supplies both the label and the URL', () => {
+  it('accepts a consistent staging target', () => {
     expect(() => resolveTarget(target())).not.toThrow();
   });
 
-  it('accepts no secrets file when DATABASE_URL was not already exported', () => {
-    expect(() => resolveTarget(target({
-      secretsFile: null,
-      secretsParsed: undefined,
-    }))).not.toThrow();
-  });
-
-  it('refuses a secrets file that names no environment', () => {
-    expect(() => resolveTarget(target({
-      secretsParsed: { DATABASE_URL: 'postgres://u:p@prod.example/db' },
-    }))).toThrow(/sets no NEXT_BAR_DATABASE_ENVIRONMENT/);
-  });
-
-  // The label-only secrets file. `.env.local` supplies the URL through dotenv's
-  // override:false fill-in, so `--env production --execute` prints production
-  // and writes whatever .env.local points at.
-  it('refuses a secrets file that names the environment but not the URL', () => {
+  it('accepts production when --env production and the ref IS production', () => {
     expect(() => resolveTarget(target({
       env: 'production',
-      secretsFile: '.env.production.local',
-      secretsParsed: { NEXT_BAR_DATABASE_ENVIRONMENT: 'production' },
-      databaseUrl: 'postgres://u:p@staging.example/db',
+      databaseUrl: poolerUrl(PROD),
+      apiUrl: apiUrl(PROD),
       actualEnv: 'production',
-    }))).toThrow(/sets no DATABASE_URL/);
-  });
-
-  // The shell-exported URL. With no secrets file, dotenv's override:false
-  // preserves it, so a production connection pairs with .env.local's staging
-  // label and `--env staging --execute` passes every remaining check.
-  it('refuses a shell-exported DATABASE_URL when no secrets file was given', () => {
-    expect(() => resolveTarget(target({
-      secretsFile: null,
-      secretsParsed: undefined,
-      shellDatabaseUrl: 'postgres://u:p@prod.example/db',
-      databaseUrl: 'postgres://u:p@prod.example/db',
-    }))).toThrow(/already set in the environment/);
-  });
-
-  // A secrets file loads with override:true, so it replaces the exported value
-  // and the pairing is intact. Refusing here would break the documented way to
-  // reach a non-default target from a shell that happens to export the var.
-  it('allows a shell-exported DATABASE_URL when a complete secrets file overrides it', () => {
-    expect(() => resolveTarget(target({
-      shellDatabaseUrl: 'postgres://u:p@prod.example/db',
     }))).not.toThrow();
   });
 
-  it('refuses when DATABASE_URL resolved to nothing', () => {
-    expect(() => resolveTarget(target({
-      secretsFile: null,
-      secretsParsed: undefined,
-      databaseUrl: undefined,
-    }))).toThrow(/DATABASE_URL is not set/);
+  it('returns the DERIVED label, never the declared one', () => {
+    const resolved = resolveTarget(target({ actualEnv: undefined }));
+    expect(resolved.label).toBe('staging');
   });
 
-  it('refuses when the environment label is missing', () => {
+  // ── THE INCIDENT'S PAIRING, REPRODUCED EXACTLY ────────────────────────────────────────────────
+  //
+  // 2026-08-28: `.env.staging.local` carried a staging DATABASE_URL and NEXT_PUBLIC_SUPABASE_URL
+  // but NO label. dotenv's `override: false` let the repo-root `.env.local` supply
+  // NEXT_BAR_DATABASE_ENVIRONMENT=production, so the STAGING connection string was married to the
+  // word "production". Under the old rule — `--env` compared against that label — this inverted the
+  // guard completely: `--env production --execute` would have been ACCEPTED while pointed at
+  // staging, and `--env staging` REFUSED. Nothing was typed wrong; the file layout did it.
+  describe("today's pairing: staging URL pair via --secrets-file, production label from .env.local", () => {
+    const pairing = (env: string) => target({
+      env,
+      databaseUrl: poolerUrl(STAGING),
+      apiUrl: apiUrl(STAGING),
+      actualEnv: 'production', // inherited from .env.local, NOT from the secrets file
+    });
+
+    it('REFUSES --env production, because the ref is staging', () => {
+      expect(() => resolveTarget(pairing('production'))).toThrow(TargetRefusal);
+      expect(() => resolveTarget(pairing('production'))).toThrow(/ref wqxovhiovgcijmfzxgby is staging/);
+    });
+
+    it('ACCEPTS --env staging once the contradicting label is gone', () => {
+      // The label is what was wrong, so with it absent the ref alone identifies the target and the
+      // honest command is accepted. (With the stale label still present, rule 3 refuses — proven
+      // by the case above and the one below.)
+      expect(() => resolveTarget(target({ env: 'staging', actualEnv: undefined }))).not.toThrow();
+    });
+  });
+
+  it('REFUSES when the declared label contradicts the ref, whatever --env says', () => {
+    expect(() => resolveTarget(target({ env: 'staging', actualEnv: 'production' })))
+      .toThrow(/says "production" but ref wqxovhiovgcijmfzxgby is staging/);
+  });
+
+  it('REFUSES a contradicting label exported in the SHELL, which a secrets file would overwrite', () => {
+    // `--secrets-file` loads with override:true, so a shell label is replaced before the loaded
+    // value is read. Snapshotted separately, or a human who exports the wrong label is silently
+    // corrected instead of refused.
+    expect(() => resolveTarget(target({ shellDeclaredEnv: 'production', actualEnv: 'staging' })))
+      .toThrow(/in the shell says "production"/);
+  });
+
+  it('REFUSES when DATABASE_URL and NEXT_PUBLIC_SUPABASE_URL name different projects', () => {
+    expect(() => resolveTarget(target({ apiUrl: apiUrl(PROD) })))
+      .toThrow(/pooler hostname is shared/);
+  });
+
+  it('REFUSES an unclassified project rather than defaulting it to anything', () => {
     expect(() => resolveTarget(target({
-      secretsFile: null,
-      secretsParsed: undefined,
+      databaseUrl: poolerUrl('unclassifiedproject99'),
+      apiUrl: apiUrl('unclassifiedproject99'),
       actualEnv: undefined,
-    }))).toThrow(/cannot be identified/);
+    }))).toThrow(/unknown project unclassifiedproject99/);
   });
 
-  it('refuses when the named env disagrees with the loaded label', () => {
-    expect(() => resolveTarget(target({ env: 'production' })))
-      .toThrow(/but the loaded environment is/);
+  it('REFUSES a shell DATABASE_URL that names a different project than the loaded one', () => {
+    expect(() => resolveTarget(target({ shellDatabaseUrl: poolerUrl(PROD) })))
+      .toThrow(/will not choose/);
   });
 
-  it('throws TargetRefusal rather than exiting the process', () => {
-    expect(() => resolveTarget(target({ env: 'production' })))
-      .toThrow(TargetRefusal);
+  it('accepts a shell DATABASE_URL naming the SAME project — the ref is the identity', () => {
+    expect(() => resolveTarget(target({ shellDatabaseUrl: poolerUrl(STAGING) }))).not.toThrow();
+  });
+
+  it('REFUSES when DATABASE_URL is missing or unparseable', () => {
+    expect(() => resolveTarget(target({ databaseUrl: undefined }))).toThrow(/DATABASE_URL is not set/);
+    // Refused by the ENDPOINT rule now, and earlier than before: localhost is neither the pooler
+    // nor a direct db.<ref>.supabase.co host, so the question of which project it is never arises.
+    expect(() => resolveTarget(target({ databaseUrl: 'postgres://u:p@localhost/db' })))
+      .toThrow(/not a Supabase pooler host/);
+    // "refusing to guess" is still reachable, on a host this tooling DOES accept whose username
+    // carries no ref — the case where the endpoint is fine and the project is unknowable.
+    expect(() => resolveTarget(target({
+      databaseUrl: 'postgresql://postgres:pw@aws-0-ca-central-1.pooler.supabase.com:5432/postgres',
+    }))).toThrow(/refusing to guess/);
   });
 });

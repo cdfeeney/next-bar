@@ -14,9 +14,13 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:release": "node scripts/run-e2e-release.mjs",
     "db:migrate": "tsx scripts/apply-migrations.ts",
+    "db:bootstrap": "tsx scripts/apply-migrations.ts --bootstrap",
     "check:migrations": "tsx scripts/check-migration-ledger.ts",
     "check:contract": "node scripts/check-release-contract.mjs docs/V8-TRACEABILITY-LEDGER.json",
-    "check:catalog-bundle": "node scripts/check-client-catalog-bundle.mjs"
+    "check:catalog-bundle": "node scripts/check-client-catalog-bundle.mjs",
+    "db:whoami": "tsx scripts/db-whoami.mts",
+    "db:dump": "tsx scripts/db-dump.mts",
+    "db:reset-staging": "tsx scripts/db-reset-staging.mts"
   },
   "dependencies": {
     "@capacitor/core": "^8.5.0",
@@ -39,6 +43,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
+    "@types/jsdom": "^30.0.0",
     "@types/leaflet": "1.9.12",
     "@types/node": "22.9.0",
     "@types/pg": "^8.20.0",

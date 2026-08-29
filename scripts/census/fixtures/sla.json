@@ -1,0 +1,22 @@
+[
+  {
+    "licensepermitid": "0001-23-100001",
+    "premisescounty": "New York",
+    "description": "Additional Bar",
+    "legalname": "MOCK ALEHOUSE LLC",
+    "actualaddressofpremises": "100 Mock St",
+    "city": "NEW YORK",
+    "zipcode": "10009",
+    "georeference": { "type": "Point", "coordinates": [-73.957, 40.7146] }
+  },
+  {
+    "licensepermitid": "0001-23-100002",
+    "premisescounty": "New York",
+    "description": "Club",
+    "legalname": "FIXTURE TAVERN CORP",
+    "actualaddressofpremises": "400 Slope Rd",
+    "city": "NEW YORK",
+    "zipcode": "10003",
+    "georeference": { "type": "Point", "coordinates": [-73.9793, 40.6725] }
+  }
+]

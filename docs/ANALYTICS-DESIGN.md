@@ -74,7 +74,8 @@ if per-user funnels are ever wanted, that's a new consented design.
 
 ## Morning checklist
 
-1. Review this doc; if approved: apply 0018 (`apply-one-migration` ×2).
+1. Review this doc; if approved: apply 0018 (`apply-migration-set --env staging --execute` ×2;
+   `apply-one-migration` was deleted 2026-08-28).
 2. Set `ANALYTICS_ENABLED=1` (Vercel server env) + `NEXT_PUBLIC_ANALYTICS=1`.
 3. Add the /privacy one-liner when flipping the flag.
 4. Wire `trackEvent` call sites (search submit, share taps, want-to-go

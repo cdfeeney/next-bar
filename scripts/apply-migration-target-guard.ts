@@ -16,6 +16,11 @@
 import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
 
+import { checkDatabaseName, DEFAULT_DATABASE } from './lib/migration-target-guard';
+
+import { readClassification } from './lib/classification';
+import type { Classification } from './lib/migration-target-guard';
+
 /**
  * A Supabase project ref is exactly 20 lowercase alphanumeric characters.
  * Accepting any alphanumeric string let a placeholder like `production` sit in
@@ -43,10 +48,14 @@ export interface MigrationTarget {
   productionRef: string;
   /** NEXT_BAR_STAGING_PROJECT_REFS, split and trimmed; empty when unset. */
   stagingRefs: string[];
-  /** pg's resolved database name. */
-  database: string;
-  /** NEXT_BAR_DATABASE_NAME, or the documented default. */
-  expectedDatabase: string;
+  /**
+   * WHICH DATABASE pg resolved, and which one the operator expects. Optional because not every
+   * caller HAS a database to check — the REST path has no database selector at all — but when
+   * either is supplied the pair is verified through the shared `checkDatabaseName`, so a caller
+   * that knows its database cannot have that knowledge silently dropped.
+   */
+  database?: string;
+  expectedDatabase?: string;
 }
 
 /** Returns the refusal reason, or null when the target is verified. */
@@ -82,11 +91,7 @@ export function checkMigrationTarget(target: MigrationTarget): string | null {
     if (ref !== productionRef) {
       return '--env production, but DATABASE_URL does not point at the production project ref';
     }
-    // The database check belongs here TOO, and leaving it to the staging path
-    // below put the hole on the most dangerous route (round-4 panel, Codex,
-    // HIGH): a production ref reaching a second database inside the production
-    // project was accepted by every caller of this shared guard.
-    return checkDatabaseName(target.database, target.expectedDatabase, env);
+    return null;
   }
 
   if (ref === productionRef) {
@@ -106,47 +111,14 @@ export function checkMigrationTarget(target: MigrationTarget): string | null {
   if (!stagingRefs.includes(ref)) {
     return `--env ${env}, but DATABASE_URL's project ref is not in NEXT_BAR_STAGING_PROJECT_REFS`;
   }
-  return checkDatabaseName(target.database, target.expectedDatabase, env);
-}
 
-/**
- * WHICH DATABASE, decided by CONFIGURATION rather than by the URL being asked
- * about. `checkConnectionEndpoint` proves pg resolved the database the URL's
- * path names — self-consistency, which is necessary and not sufficient: a URL
- * whose path simply says `/shadow` agrees with itself, and every other check
- * passes because the project ref, the host and the port are all still the
- * allowlisted ones. If that database carries the pinned migration row, an
- * --execute would downgrade and unrecord an unintended database (round-3 panel,
- * Codex, HIGH). One cluster serves many databases; naming which one is expected
- * is the only thing that can tell them apart.
- *
- * `postgres` is Supabase's database for every project, so it is the default
- * rather than a required variable — a check nobody can run because it needs new
- * configuration is a check that gets deleted. NEXT_BAR_DATABASE_NAME overrides
- * it for a project that genuinely uses another.
- */
-export function checkDatabaseName(
-  database: string,
-  expectedDatabase: string,
-  env: string,
-): string | null {
-  const actual = database.trim();
-  const expected = expectedDatabase.trim();
-  if (!expected) {
-    return `NEXT_BAR_DATABASE_NAME is set but empty, so --env ${env}'s database cannot be verified`;
-  }
-  if (!actual) return 'could not determine which database DATABASE_URL reaches';
-  if (actual !== expected) {
-    return `--env ${env}, but DATABASE_URL reaches the database ${JSON.stringify(actual)} `
-      + `rather than the expected ${JSON.stringify(expected)}`;
+  // WHICH DATABASE, when the caller knows one. Delegated to the shared check rather than restated,
+  // so the release branch has exactly one definition of it (ported 2026-08-29 — see 6c23780).
+  if (target.database !== undefined || target.expectedDatabase !== undefined) {
+    return checkDatabaseName(target.database ?? '', target.expectedDatabase ?? DEFAULT_DATABASE, env);
   }
   return null;
 }
-
-/** libpq's default when the connection string names no port. */
-const DEFAULT_PG_PORT = '5432';
-/** Supabase serves every project from `postgres`; NEXT_BAR_DATABASE_NAME overrides it. */
-const DEFAULT_DATABASE = 'postgres';
 
 /**
  * The Supabase pooler carries the project ref in the USERNAME as
@@ -167,80 +139,14 @@ export function resolveProjectRef(effectiveUser: string): string {
 }
 
 /**
- * Refuses when pg's effective endpoint is not the one the connection string's
- * authority names. pg gives query parameters precedence over the authority, so
- * `?host=` / `?port=` (or PGHOST / PGPORT) silently redirect a connection whose
- * username — and therefore whose project ref — still looks allowlisted. The ref
- * check answers "which project", this answers "which endpoint"; verifying the
- * ref for an endpoint nobody inspected is the same fail-open by another route.
+ * THE ENDPOINT RULES MOVED TO scripts/lib/migration-target-guard.ts.
  *
- * Empty on either side is UNVERIFIABLE, not "no objection": a host-less
- * authority (`postgres:///db?host=elsewhere`) parses cleanly and would
- * otherwise skip the comparison entirely.
+ * They lived here, and only here, which is why the shared guard certified a project ref for an
+ * endpoint nobody had inspected — round 4's two CRITICALs and its HIGH, all reachable through
+ * `apply-migrations.ts` and `db-reset-staging.mts`, neither of which comes through this file.
+ * `checkConnectionEndpoint` is now exported from the shared guard and called by `resolveIdentity`,
+ * so every entry point gets it. Re-adding a copy here is how the divergence happened the first time.
  */
-export function checkConnectionEndpoint(
-  effective: { host: string; port: string; options: string; database: string },
-  authority: { host: string; port: string; database: string },
-): string | null {
-  const effectiveHost = effective.host.trim();
-  const authorityHost = authority.host.trim();
-  if (!authorityHost) return 'DATABASE_URL has no host, so the connection target cannot be verified';
-  if (!effectiveHost) return 'the effective connection host could not be resolved from DATABASE_URL';
-  if (effectiveHost !== authorityHost) {
-    return "the effective connection host does not match DATABASE_URL's authority, "
-      + 'so the target was overridden by a query parameter';
-  }
-
-  if (!effectiveHost.toLowerCase().endsWith(POOLER_HOST_SUFFIX)) {
-    return `DATABASE_URL's host is not a Supabase pooler host (${POOLER_HOST_SUFFIX}), so the `
-      + 'project ref in its username cannot identify the target';
-  }
-
-  // libpq `options` reaches the server in the startup packet, and Supabase's
-  // shared pooler documents `options=reference=<project-ref>` as a way to name
-  // the tenant. That is a second target selector the ref check never sees - the
-  // same channel class as the `?user=` precedence this guard already closed -
-  // and PGOPTIONS supplies it without touching DATABASE_URL at all. This tool
-  // needs no startup options, so any value is refused rather than parsed.
-  if (effective.options.trim()) {
-    return 'the connection carries libpq startup options (from DATABASE_URL or PGOPTIONS), which can '
-      + 'name a different pooler tenant than the username, so the target cannot be verified';
-  }
-
-  const effectivePort = effective.port.trim();
-  // An omitted port is not an unknown one: libpq resolves it to 5432, so that
-  // is what the operator reading the URL is entitled to assume.
-  const authorityPort = authority.port.trim() || DEFAULT_PG_PORT;
-  if (!effectivePort) return 'the effective connection port could not be resolved from DATABASE_URL';
-  if (effectivePort !== authorityPort) {
-    return "the effective connection port does not match DATABASE_URL's authority, "
-      + 'so the target was overridden by a query parameter';
-  }
-
-  // WHICH PROJECT, WHICH SERVER, and now WHICH DATABASE. The ref and the
-  // endpoint together still leave one selector unchecked: a Postgres cluster
-  // serves many databases, Supabase supports more than one per project, and
-  // `?dbname=` / PGDATABASE override the URL path exactly as `?host=` overrides
-  // the authority. Everything above would pass for `.../another_database` on the
-  // allowlisted project — and an in-SQL precondition cannot close it either,
-  // because a second database holding the same migration row answers every
-  // question the SQL can ask (round-1 panel, Codex, HIGH, on the revert runner).
-  //
-  // An omitted path is UNRESOLVED, not a default worth guessing: libpq falls
-  // back to the USERNAME, which on the Supabase pooler is `postgres.<ref>` and
-  // is not a database name at all. Refuse rather than infer.
-  const effectiveDatabase = effective.database.trim();
-  const authorityDatabase = authority.database.trim();
-  if (!authorityDatabase) {
-    return 'DATABASE_URL names no database, so which database it reaches cannot be verified';
-  }
-  if (!effectiveDatabase) return 'the effective database could not be resolved from DATABASE_URL';
-  if (effectiveDatabase !== authorityDatabase) {
-    return "the effective database does not match DATABASE_URL's path, "
-      + 'so the target was overridden by a query parameter or PGDATABASE';
-  }
-  return null;
-}
 
 /**
  * The whole target decision, wired: read the environment the caller just
@@ -270,7 +176,7 @@ export interface AuthorizedTarget {
   /** NEXT_BAR_DATABASE_ENVIRONMENT, which matched the operator's --env. */
   env: string;
   /** pg's own resolution, for the operator-facing report. */
-  effective: { user: string; host: string; port: string; database: string };
+  effective: { user: string; host: string; port: string };
   ref: string;
 }
 
@@ -324,6 +230,51 @@ export function authorizeMigrationTarget(env: string): TargetAuthorization {
   // connection string naming sslrootcert wins over this config and pg loads that
   // file itself. What this config RESOLVES to is checked below, after the target
   // refusals, because a wrong target is the more useful error to show first.
+  // THE CA PATH MAY ONLY COME FROM THE ENVIRONMENT, NEVER FROM THE URL.
+  //
+  // pg reads a `sslrootcert=` named in the connection string ITSELF, at Client construction — so
+  // the file is read a SECOND time, after this function has already authorized the first read. The
+  // authorization then describes one certificate and the socket authenticates with another, and a
+  // CA swapped between the two calls is authenticated by the real client while every check here
+  // still reports the certified host, user and port. Codex reproduced the double read on pg 8.20.0:
+  // two clients built from one config yielded CA-1 then CA-2.
+  //
+  // PGSSLROOTCERT does not have that seam, because THIS function reads the file once and puts the
+  // BYTES in the config. So the URL form is refused outright rather than parsed, and the config
+  // handed back is the one the connection is opened from.
+  // FAIL CLOSED WHEN THE STRING DOES NOT PARSE. Scanning the raw text was the first attempt and
+  // it was bypassable (round 7, HIGH, reproduced on pg 8.20.0):
+  // `postgresql://postgres.<ref>:pw@/postgres?host=<pooler>&%73slrootcert=<path>` is rejected by
+  // `new URL()` for its empty authority, misses a literal `sslrootcert=` match because the key is
+  // percent-encoded, and is then REPAIRED by pg — which decodes the key, honours the host=
+  // override, and reads the file. Anything this guard cannot parse is something it cannot
+  // certify, so it is refused rather than scanned. `resolveIdentity` already refuses unparseable
+  // strings for the same reason.
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(databaseUrl);
+  } catch {
+    return refuse(
+      'DATABASE_URL is not a parseable URL, so its parameters cannot be inspected and what pg '
+      + 'would do with it cannot be certified. Supply a standard postgresql:// URL.',
+    );
+  }
+  // Percent-encoding in the KEY is decoded by pg but not by URLSearchParams, so compare decoded
+  // keys rather than asking for one spelling.
+  const namesSslRootCert = [...parsedUrl.searchParams.keys()].some((key) => {
+    let decoded = key;
+    try { decoded = decodeURIComponent(key); } catch { decoded = key; }
+    return decoded.trim().toLowerCase() === 'sslrootcert';
+  });
+  if (namesSslRootCert) {
+    return refuse(
+      'DATABASE_URL names sslrootcert, and pg would read that file again when it builds the client '
+      + '- after this check has already authorized a different read of it. Put the CA path in '
+      + 'PGSSLROOTCERT instead, which is read once here and travels as bytes in the authorized '
+      + 'config.',
+    );
+  }
+
   const caPath = (process.env.PGSSLROOTCERT ?? '').trim();
   let ca = '';
   if (caPath) {
@@ -342,54 +293,35 @@ export function authorizeMigrationTarget(env: string): TargetAuthorization {
   const probe = new Client(clientConfig) as unknown as {
     connectionParameters?: {
       user?: string; host?: string; port?: number | string; options?: string;
-      database?: string; ssl?: unknown;
+      ssl?: unknown;
     };
   };
   const effective = {
     user: probe.connectionParameters?.user ?? '',
     host: probe.connectionParameters?.host ?? '',
     port: String(probe.connectionParameters?.port ?? ''),
-    database: probe.connectionParameters?.database ?? '',
   };
-  const effectiveOptions = probe.connectionParameters?.options ?? '';
   const ref = resolveProjectRef(effective.user);
 
-  // The ref says WHICH PROJECT; the endpoint says WHICH SERVER. Checking only
-  // the ref verifies a target the tool never inspected, because pg lets
-  // `?host=` / `?port=` override the authority the operator reads.
-  let authority: { host: string; port: string; database: string };
-  try {
-    const parsed = new URL(databaseUrl);
-    // `/postgres` -> `postgres`; an empty path stays empty and is refused below.
-    authority = {
-      host: parsed.hostname,
-      port: parsed.port,
-      database: decodeURIComponent(parsed.pathname.replace(/^\//, '')),
-    };
-  } catch {
-    return refuse('DATABASE_URL is not a parsable URL, so the connection target cannot be verified');
-  }
-  const endpointRefusal = checkConnectionEndpoint(
-    {
-      host: effective.host,
-      port: effective.port,
-      options: effectiveOptions,
-      database: effective.database,
-    },
-    authority,
-  );
-  if (endpointRefusal) return refuse(endpointRefusal);
+  // THE ENDPOINT CHECK IS NOT HERE ANY MORE. resolveTarget() runs it for every entry point via the
+  // shared guard, including the two that never call this function. What remains below is the
+  // CHANNEL-SECURITY layer — TLS and certificate verification — which is this file's own job.
 
-  const productionRef = process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '';
-  const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
-    .split(',').map((value) => value.trim()).filter(Boolean);
+  // FROM THE .env.local FILE, NOT process.env. A `--secrets-file` loads with `override: true`,
+  // so reading the lists from the environment let the very file being pointed at supply the
+  // classification that decides whether it may be written to. The shared reader also refuses a
+  // malformed or double-listed declaration, which this layer never checked at all.
+  let classification: Classification;
+  try {
+    classification = readClassification();
+  } catch (error) {
+    return refuse(error instanceof Error ? error.message : String(error));
+  }
   const refusal = checkMigrationTarget({
     env,
     ref,
-    productionRef,
-    stagingRefs,
-    database: effective.database,
-    expectedDatabase: process.env.NEXT_BAR_DATABASE_NAME ?? DEFAULT_DATABASE,
+    productionRef: classification.productionRef ?? '',
+    stagingRefs: classification.stagingRefs,
   });
   if (refusal) return refuse(refusal);
 
@@ -436,8 +368,9 @@ export function authorizeMigrationTarget(env: string): TargetAuthorization {
   if (!resolvedSsl.ca) {
     return refuse('the connection carries no CA certificate for the pooler, whose chain is '
       + "self-signed. Set PGSSLROOTCERT to Supabase's CA file (dashboard - Settings - Database - "
-      + 'SSL configuration). If DATABASE_URL names sslmode or any other ssl parameter, it REPLACES '
-      + 'that CA, so the path has to go there too: ?sslmode=verify-full&sslrootcert=<path>.');
+      + 'SSL configuration). If DATABASE_URL names sslmode or any other ssl parameter it REPLACES '
+      + 'that CA, and the answer is to remove the parameter - NOT to add sslrootcert to the URL, '
+      + 'which is refused above because pg would then re-read the file after this authorization.');
   }
 
   return { refusal: null, target: { clientConfig, env: actualEnv, effective, ref } };
