@@ -1,0 +1,6 @@
+{
+  "elements": [
+    { "type": "node", "id": 1001, "lat": 40.7145, "lon": -73.9569, "tags": { "name": "Mock Alehouse", "amenity": "bar" } },
+    { "type": "node", "id": 1002, "lat": 40.6941, "lon": -73.9215, "tags": { "name": "Overpass Tap", "amenity": "pub" } }
+  ]
+}

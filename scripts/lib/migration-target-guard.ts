@@ -209,8 +209,8 @@ export function checkDatabaseName(
  * (`postgres:///db?host=elsewhere`) parses cleanly and would otherwise skip the comparison.
  */
 export function checkConnectionEndpoint(
-  effective: { host: string; port: string; options: string },
-  authority: { host: string; port: string },
+  effective: { host: string; port: string; options: string; database?: string },
+  authority: { host: string; port: string; database?: string },
 ): string | null {
   const effectiveHost = effective.host.trim();
   const authorityHost = authority.host.trim();
@@ -253,6 +253,40 @@ export function checkConnectionEndpoint(
   if (effectivePort !== authorityPort) {
     return "the effective connection port does not match DATABASE_URL's authority, "
       + 'so the target was overridden by a query parameter';
+  }
+
+  // WHICH PROJECT, WHICH SERVER, and now WHICH DATABASE. The ref and the
+  // endpoint together still leave one selector unchecked: a Postgres cluster
+  // serves many databases, Supabase supports more than one per project, and
+  // `?dbname=` / PGDATABASE override the URL path exactly as `?host=` overrides
+  // the authority. Everything above would pass for `.../another_database` on the
+  // allowlisted project — and an in-SQL precondition cannot close it either,
+  // because a second database holding the same migration row answers every
+  // question the SQL can ask (round-1 panel, Codex, HIGH, on the revert runner).
+  //
+  // An omitted path is UNRESOLVED, not a default worth guessing: libpq falls
+  // back to the USERNAME, which on the Supabase pooler is `postgres.<ref>` and
+  // is not a database name at all. Refuse rather than infer.
+  //
+  // PORTED 2026-08-29 alongside checkDatabaseName. The two are different questions and both are
+  // needed: this one asks whether pg reaches the database the URL's PATH names (self-consistency),
+  // checkDatabaseName asks whether that database is the one the OPERATOR named (configuration).
+  // A URL whose path says `/shadow` is perfectly self-consistent.
+  //
+  // Both sides are optional in the signature ONLY so a caller with no database concept at all —
+  // the REST path has no database selector — can still use the endpoint half. When either side is
+  // supplied, both must be.
+  if (effective.database !== undefined || authority.database !== undefined) {
+    const effectiveDatabase = (effective.database ?? '').trim();
+    const authorityDatabase = (authority.database ?? '').trim();
+    if (!authorityDatabase) {
+      return 'DATABASE_URL names no database, so which database it reaches cannot be verified';
+    }
+    if (!effectiveDatabase) return 'the effective database could not be resolved from DATABASE_URL';
+    if (effectiveDatabase !== authorityDatabase) {
+      return "the effective database does not match DATABASE_URL's path, "
+        + 'so the target was overridden by a query parameter or PGDATABASE';
+    }
   }
   return null;
 }
@@ -337,17 +371,27 @@ export function resolveIdentity(connectionString: string | undefined): Certified
   // THE ENDPOINT IS CERTIFIED BEFORE THE PROJECT IS. A ref verified for a server nobody inspected
   // is the round-4 fail-open: `?options=reference=<other-ref>` and `?host=` both move the
   // connection while leaving the username — and therefore the ref — reading exactly as intended.
-  let authority: { host: string; port: string };
+  let authority: { host: string; port: string; database: string };
   try {
     const url = new URL(connectionString);
-    authority = { host: url.hostname, port: url.port };
+    authority = {
+      host: url.hostname,
+      port: url.port,
+      // The path, decoded — this is the database a human reading the URL sees.
+      database: decodeURIComponent(url.pathname.replace(/^\//, '')),
+    };
   } catch {
     throw new TargetRefusal(
       'DATABASE_URL is not a parseable URL, so the connection endpoint cannot be verified',
     );
   }
   const endpointRefusal = checkConnectionEndpoint(
-    { host: resolvedHost ?? '', port: resolvedPort, options: resolved.options ?? '' },
+    {
+      host: resolvedHost ?? '',
+      port: resolvedPort,
+      options: resolved.options ?? '',
+      database: resolved.database ?? '',
+    },
     authority,
   );
   if (endpointRefusal) throw new TargetRefusal(endpointRefusal);

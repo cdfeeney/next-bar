@@ -16,6 +16,8 @@
 import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
 
+import { checkDatabaseName, DEFAULT_DATABASE } from './lib/migration-target-guard';
+
 import { readClassification } from './lib/classification';
 import type { Classification } from './lib/migration-target-guard';
 
@@ -46,6 +48,14 @@ export interface MigrationTarget {
   productionRef: string;
   /** NEXT_BAR_STAGING_PROJECT_REFS, split and trimmed; empty when unset. */
   stagingRefs: string[];
+  /**
+   * WHICH DATABASE pg resolved, and which one the operator expects. Optional because not every
+   * caller HAS a database to check — the REST path has no database selector at all — but when
+   * either is supplied the pair is verified through the shared `checkDatabaseName`, so a caller
+   * that knows its database cannot have that knowledge silently dropped.
+   */
+  database?: string;
+  expectedDatabase?: string;
 }
 
 /** Returns the refusal reason, or null when the target is verified. */
@@ -100,6 +110,12 @@ export function checkMigrationTarget(target: MigrationTarget): string | null {
   }
   if (!stagingRefs.includes(ref)) {
     return `--env ${env}, but DATABASE_URL's project ref is not in NEXT_BAR_STAGING_PROJECT_REFS`;
+  }
+
+  // WHICH DATABASE, when the caller knows one. Delegated to the shared check rather than restated,
+  // so the release branch has exactly one definition of it (ported 2026-08-29 — see 6c23780).
+  if (target.database !== undefined || target.expectedDatabase !== undefined) {
+    return checkDatabaseName(target.database ?? '', target.expectedDatabase ?? DEFAULT_DATABASE, env);
   }
   return null;
 }
