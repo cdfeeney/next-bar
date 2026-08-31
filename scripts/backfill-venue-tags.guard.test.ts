@@ -65,10 +65,31 @@ describe('backfill-venue-tags — target guard', () => {
     expect(result.output).toContain('could not determine the Supabase project ref');
   }, 120_000);
 
-  it('refuses the production project ref outright', () => {
+  // PRODUCTION IS NOW OPT-IN RATHER THAN FORBIDDEN, so this asserts BOTH halves of the new
+  // contract. The old single assertion - that production is refused outright - would still
+  // pass against a build that refused production unconditionally AND against one that had
+  // lost the flag entirely, which is the case the second half pins down.
+  it('refuses the production project ref unless --production is given', () => {
     const result = run(restUrl(`https://${PRODUCTION_REF}.supabase.co`));
     expect(result.status).toBe(1);
-    expect(result.output).toContain('PRODUCTION project ref');
+    expect(result.output).toContain('--production was not given');
+  }, 120_000);
+
+  it('stops refusing on that ground once --production IS given', () => {
+    // It still fails - there is no service-role key in this environment - but it must fail
+    // LATER, for a different reason. Asserting only "exit 1" would pass even if the flag did
+    // nothing at all.
+    const result = run(restUrl(`https://${PRODUCTION_REF}.supabase.co`), ['--production']);
+    expect(result.output).not.toContain('--production was not given');
+  }, 120_000);
+
+  it('refuses --production when the target is NOT the production ref', () => {
+    // The flag is an assertion about the target, not a permission, so a mismatch is refused
+    // in the other direction too - otherwise it could be pasted into a staging runbook and
+    // quietly keep working.
+    const result = run(restUrl(`https://${OTHER_REF}.supabase.co`), ['--production']);
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('--production was given but the target');
   }, 120_000);
 
   it('refuses a ref that is not on the staging allowlist', () => {
@@ -103,7 +124,7 @@ describe('backfill-venue-tags — --limit fails closed', () => {
   it('accepts the equals spelling instead of silently ignoring it', () => {
     // Reaching the target refusal means the limit parsed; the old
     // indexOf('--limit') never saw this token and ran unlimited.
-    expect(run(bad, ['--limit=25']).output).toContain('PRODUCTION project ref');
+    expect(run(bad, ['--limit=25']).output).toContain('--production was not given');
   }, 120_000);
 
   it('rejects a non-numeric limit in either spelling', () => {

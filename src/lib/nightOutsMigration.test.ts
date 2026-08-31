@@ -670,9 +670,16 @@ describe('0048_night_outs_cap_single_source.sql — one definition of a seat', (
    * Codex, medium). The describe block's title still names 0048 because the
    * exactly-once assertions above genuinely are about that file's text.
    */
-  // 15s: effectiveView re-reads and re-parses the whole migration chain for
-  // each caller, so this grows with the ledger and passed the 5s default when
-  // 0060 landed.
+  // 60s, RAISED FROM 15s 2026-08-31. effectiveView re-reads and re-parses the whole
+  // migration chain for EACH of the four callers below, so this grows with the ledger: it
+  // passed the 5s default until 0060, needed 15s after, and crossed that when phase C
+  // restored 0020-0032 and the V8 lanes added 0065-0075 (0066-0069 alone are ~470KB).
+  //
+  // THIRD RAISE OF THE SAME NUMBER, so name the pattern rather than the increment: this is
+  // a per-call O(whole corpus) re-parse, and the corpus only grows. The fix is memoising
+  // the parsed migration text, NOT another timeout - but a cache would serve stale SQL to
+  // the mutation probes, which rewrite a migration file mid-run and require the guard to
+  // notice. That trade needs its own review.
   it('every caller asks the helpers rather than restating the rule', () => {
     for (const fn of ['join_night_out_by_token', 'respond_night_out', 'night_out_is_full_by_token'] as const) {
       const body = functionBody(effectiveView(fn), fn);
@@ -683,7 +690,7 @@ describe('0048_night_outs_cap_single_source.sql — one definition of a seat', (
     // Declining is never rationed by capacity, so it must ask neither.
     const decline = functionBody(effectiveView('decline_night_out_by_token'), 'decline_night_out_by_token');
     expect(decline).not.toMatch(/night_out_member_cap/);
-  }, 15_000);
+  }, 60_000);
 
   it('0049 finishes the job — invite_to_night_out asks the helpers too', () => {
     // 0048 re-stated three callers and the fullness read and left invite in
