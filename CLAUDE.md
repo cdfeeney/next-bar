@@ -183,12 +183,23 @@ a `0020` and a `0021`; ours were renumbered to `0043`/`0044` to clear it.
   main branch of EVERY project "production", including the staging project — the branch label
   is not the project):
   - **`next-bar`** = production, ref `nuhqlvneokucxomguxhi`. Live v7 users. Repo-root
-    `.env.local` points here. Ledger head **0032**, no night-out schema (2026-08-18). The
+    `.env.local` points here. **Ledger head `0074_waitlist_reconcile.sql`, 66 rows, measured
+    2026-08-31** — phase C applied 33 migrations as ONE transaction that day and the V8 schema
+    (night outs, stories, groups, feed, media) is now live here. The pre-phase-C reading of
+    "head 0032, no night-out schema (2026-08-18)" is superseded. Data was unchanged across the
+    apply: users 8, profiles 8, bars 1256. The
     2026-08-18 Supabase advisory (RLS off on `schema_migrations`) was about THIS project and
-    was fixed same day: RLS enabled + anon/authenticated grants revoked, ledger intact (33 rows).
+    was fixed same day: RLS enabled + anon/authenticated grants revoked, ledger intact.
   - **`next-bar-staging`** = staging, ref `wqxovhiovgcijmfzxgby`. Serving database for
-    pre-release streams, ~16 migrations ahead. Read its ledger head before migration decisions
-    (still pending 2026-08-18); apply the same `schema_migrations` RLS fix there.
+    pre-release streams. **Ledger head `0074_waitlist_reconcile.sql`, 65 rows, bars 2107,
+    measured 2026-08-31.** The "~16 migrations ahead" claim is superseded: after the staging
+    rebuild and phase C the two projects sit at the SAME head, and production carries one row
+    staging does not (`0033_a_reconcile_profiles_shares_flag.sql`, a repair of production-only
+    drift that is a no-op wherever 0015 actually ran). Still read the live ledger before any
+    migration decision — a head recorded in a doc is a reading, not a source of truth.
+  The `schema_migrations` RLS fix is no longer a manual TODO on either project: it is carried by
+  `0036_protect_schema_migrations.sql`, now applied to both. Verified 2026-08-31 —
+  `relrowsecurity = true` and zero anon/authenticated grants on production AND staging.
   Guard env vars: `NEXT_BAR_PRODUCTION_PROJECT_REF=nuhqlvneokucxomguxhi`,
   `NEXT_BAR_STAGING_PROJECT_REFS=wqxovhiovgcijmfzxgby` (set in gitignored `.env.local`).
 - **The canonical local env lives in the repo-root `.env.local`** (main checkout only — it is
