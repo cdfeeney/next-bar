@@ -17,11 +17,27 @@
  * updated, so the ~1,400 already-correct rows are never touched (and their
  * `updated_at` never churns — the 0019 trigger bumps it on any update).
  *
- * STAGING ONLY. The target check reuses the audited fail-closed guard from
- * scripts/apply-migration-target-guard.ts.
+ * THE TARGET IS EXPLICIT, NEVER AMBIENT. This was STAGING ONLY, and phase D2 needs it
+ * against production, so it now takes the same three properties db-load-bars.mts takes:
+ *   --production      an opt-in, and an ASSERTION about the target - passing it while
+ *                     pointed anywhere else is refused too, so it cannot become a habit.
+ *   --secrets-file    which env file names the target. WITHOUT THIS the script read
+ *                     whatever .env.local the CURRENT DIRECTORY offered, and in the main
+ *                     checkout that file names PRODUCTION.
+ *   HARNESS_DB_WRITE_OK   must name the resolved ref before --apply writes anything,
+ *                     snapshotted from the SHELL at module load so a secrets file cannot
+ *                     grant its own consent.
+ * The target check still reuses the audited fail-closed guard from
+ * scripts/apply-migration-target-guard.ts; what changed is that the expected environment is
+ * now the one the caller declared rather than the hardcoded 'staging'.
+ *
+ * A DRY RUN NEEDS NONE OF THE CONSENT, because it only reads.
  *
  * usage: npx tsx scripts/backfill-venue-tags.mts [--apply] [--limit N]
+ *          [--secrets-file <path>] [--production]
  */
+import { existsSync } from 'node:fs';
+
 import { createClient } from '@supabase/supabase-js';
 import * as dotenv from 'dotenv';
 import { refuseIfUnattended } from './loop-guard.mjs';
@@ -29,6 +45,32 @@ import { checkMigrationTarget } from './apply-migration-target-guard';
 import { venueTags, MAX_VENUE_TAGS } from '../src/lib/venueTags';
 
 refuseIfUnattended('bars tag backfill');
+
+/**
+ * Snapshotted BEFORE any dotenv load, so a secrets file cannot grant its own consent. Same
+ * rule and same reason as scripts/db-load-bars.mts.
+ */
+const SHELL_WRITE_CONSENT = (process.env.HARNESS_DB_WRITE_OK ?? '').trim().toLowerCase();
+
+/** Phase D2's explicit intent flag. Production is opt-in, never the default. */
+const PRODUCTION_INTENT = process.argv.includes('--production');
+
+// WHICH env file names the target, rather than whichever one the working directory happens to
+// offer. Loaded with override:true so it beats a stale exported value; .env.local then fills in
+// what it did not set, which in a worktree is the project classification and nothing secret.
+const secretsFileIndex = process.argv.indexOf('--secrets-file');
+const SECRETS_FILE = secretsFileIndex !== -1 ? process.argv[secretsFileIndex + 1] ?? '' : null;
+if (SECRETS_FILE !== null) {
+  if (SECRETS_FILE === '') {
+    console.error('--secrets-file needs a path');
+    process.exit(1);
+  }
+  if (!existsSync(SECRETS_FILE)) {
+    console.error(`--secrets-file ${SECRETS_FILE} does not exist`);
+    process.exit(1);
+  }
+  dotenv.config({ path: SECRETS_FILE, override: true });
+}
 dotenv.config({ path: '.env.local' });
 
 const APPLY = process.argv.includes('--apply');
@@ -44,8 +86,8 @@ const limitEquals = args.find((arg) => arg.startsWith('--limit='));
 const rawLimit = limitIndex !== -1
   ? args[limitIndex + 1]
   : limitEquals?.slice('--limit='.length);
-const unknown = flags.filter((flag) => flag !== '--apply' && flag !== '--limit'
-  && !flag.startsWith('--limit='));
+const KNOWN_FLAGS = new Set(['--apply', '--limit', '--production', '--secrets-file']);
+const unknown = flags.filter((flag) => !KNOWN_FLAGS.has(flag) && !flag.startsWith('--limit='));
 if (unknown.length > 0) {
   console.error(`unknown option(s): ${unknown.join(' ')}`);
   process.exit(1);
@@ -121,9 +163,31 @@ function refFromRestUrl(rest: string): string {
 // check by omission - the fail-open shape this guard exists to close. A caller
 // with no database must say so explicitly, in one visible place.
 const REST_HAS_NO_DATABASE_SELECTOR = 'postgres';
+
+const resolvedRef = refFromRestUrl(url);
+const productionRef = (process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '').trim().toLowerCase();
+
+// PRODUCTION IS OPT-IN, NOT FORBIDDEN, and the flag is an ASSERTION ABOUT THE TARGET rather
+// than a permission: given while pointed anywhere else it is also refused, so it cannot be
+// pasted from a production runbook into a staging one and quietly keep working.
+if (resolvedRef !== '' && resolvedRef === productionRef && !PRODUCTION_INTENT) {
+  console.error(`[target] refused: ${resolvedRef} is the PRODUCTION project and --production `
+    + 'was not given. A dry run against production needs no consent because it only reads; '
+    + 'say --production if you mean it.');
+  process.exit(1);
+}
+if (PRODUCTION_INTENT && resolvedRef !== productionRef) {
+  console.error(`[target] refused: --production was given but the target resolves to `
+    + `"${resolvedRef || '(unresolvable)'}", not the declared production ref `
+    + `"${productionRef || '(unset)'}".`);
+  process.exit(1);
+}
+
+// The expected environment is now the one the CALLER DECLARED. It was hardcoded to 'staging',
+// which is what made this script staging-only; the guard itself never needed changing.
 const refusal = checkMigrationTarget({
-  env: 'staging',
-  ref: refFromRestUrl(url),
+  env: PRODUCTION_INTENT ? 'production' : 'staging',
+  ref: resolvedRef,
   productionRef: process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '',
   stagingRefs: (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
     .split(',').map((value) => value.trim()).filter(Boolean),
@@ -134,6 +198,19 @@ if (refusal) {
   console.error(`[target] refused (ref resolved from NEXT_PUBLIC_SUPABASE_URL): ${refusal}`);
   process.exit(1);
 }
+
+// CONSENT, checked before a single row is read and not just before the write, so a run that
+// cannot finish does not spend a paginated read pretending it might.
+if (APPLY && SHELL_WRITE_CONSENT !== resolvedRef) {
+  console.error(SHELL_WRITE_CONSENT
+    ? `[target] refused: HARNESS_DB_WRITE_OK is "${SHELL_WRITE_CONSENT}" but the target is `
+      + `"${resolvedRef}".`
+    : `[target] refused: --apply requires HARNESS_DB_WRITE_OK=${resolvedRef} in the shell. `
+      + 'The operator types it, per act.');
+  process.exit(1);
+}
+
+console.log(`[target] ${resolvedRef} (${PRODUCTION_INTENT ? 'production' : 'staging'})`);
 
 type BarRow = {
   id: string;
