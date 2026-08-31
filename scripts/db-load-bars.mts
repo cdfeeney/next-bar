@@ -13,7 +13,7 @@
  * the payload's own `id` would insert every row because those ids were minted for the payload.
  *
  * IT WILL NOT RUN AGAINST PRODUCTION BY ACCIDENT. The target is certified before a socket opens,
- * the production ref is refused outright, and `--execute` additionally requires
+ * the production ref requires an explicit `--production` flag, and `--execute` additionally requires
  * `HARNESS_DB_WRITE_OK` to name the resolved ref — snapshotted from the SHELL at module load, so a
  * `--secrets-file` cannot grant its own consent.
  *
@@ -21,6 +21,11 @@
  *   npx tsx scripts/db-load-bars.mts --payload <json> [--secrets-file <p>]        # DRY RUN
  *   HARNESS_DB_WRITE_OK=<ref> npx tsx scripts/db-load-bars.mts \
  *     --payload <json> --secrets-file <p> --execute
+ *
+ * Against PRODUCTION (phase D) the --production flag is required as well, on the dry run and
+ * on the load:
+ *   HARNESS_DB_WRITE_OK=<prod-ref> npx tsx scripts/db-load-bars.mts \
+ *     --payload <json> --secrets-file <p> --production --execute
  *
  * Exit codes: 0 planned or loaded · 1 a step failed · 2 refused (identity, consent, or payload)
  */
@@ -39,6 +44,9 @@ import { certify, readCounts, WhoamiConnectionError } from './lib/whoami';
 const SHELL_WRITE_CONSENT = (process.env.HARNESS_DB_WRITE_OK ?? '').trim().toLowerCase();
 
 const EXECUTE = process.argv.includes('--execute');
+
+/** Phase D's explicit intent flag. Production is opt-in; see the refusal in main(). */
+const PRODUCTION_INTENT = process.argv.includes('--production');
 
 function fail(message: string, code: number): never {
   process.stderr.write(`[db:load-bars] ${message}\n`);
@@ -85,10 +93,30 @@ async function main(): Promise<void> {
   }
   const { certified, ref, label } = identity;
 
-  if (ref === productionRef) {
+  // PRODUCTION IS OPT-IN, NOT FORBIDDEN. This file was written for the staging rehearsal and
+  // refused the production ref outright, on the note that "the phase D run against production is a
+  // separate, attended act". That act is phase D itself, so a blanket refusal would mean either
+  // editing this guard under time pressure on the day or growing a second, less-reviewed copy of
+  // the loader. Neither is better than a flag that has to be typed.
+  //
+  // What the flag does NOT relax: --execute still requires HARNESS_DB_WRITE_OK to name this exact
+  // ref, snapshotted from the shell before dotenv runs. Production therefore needs TWO deliberate
+  // acts (this flag and the operator's consent variable) where staging needs one, and a dry run
+  // against production needs neither because it only reads.
+  if (ref === productionRef && !PRODUCTION_INTENT) {
     fail(
-      `REFUSED: ${ref} is the PRODUCTION project. This rehearsal writes rows and will not run `
-      + 'against production. The phase D run against production is a separate, attended act.',
+      `REFUSED: ${ref} is the PRODUCTION project and --production was not given. This loader `
+      + 'writes rows. If you mean phase D, say so explicitly with --production, and note that '
+      + '--execute will still require HARNESS_DB_WRITE_OK to name this ref.',
+      2,
+    );
+  }
+  if (PRODUCTION_INTENT && ref !== productionRef) {
+    // The flag is an assertion about the target, so a mismatch is a mistake worth stopping for and
+    // not a harmless extra argument.
+    fail(
+      `REFUSED: --production was given but the target is ${ref} (${label}), not the declared `
+      + `production ref ${productionRef}.`,
       2,
     );
   }
@@ -147,10 +175,19 @@ async function main(): Promise<void> {
     }
 
     if (!EXECUTE) {
+      // Echo back a command that RUNS. Reconstructed from the flags actually resolved, so it
+      // carries --production and --out when they apply; a hint that gets refused when pasted is
+      // worse than none, because it reads as the tool disagreeing with itself.
+      const flags = [
+        `--payload ${payloadPath}`,
+        secretsFile ? `--secrets-file ${secretsFile}` : '',
+        PRODUCTION_INTENT ? '--production' : '',
+        `--out ${outDir}`,
+        '--execute',
+      ].filter(Boolean).join(' ');
       process.stdout.write(
         `\nDRY RUN — nothing was written.\n`
-        + `To load:  HARNESS_DB_WRITE_OK=${ref} npx tsx scripts/db-load-bars.mts --payload ${payloadPath}`
-        + `${secretsFile ? ` --secrets-file ${secretsFile}` : ''} --execute\n`,
+        + `To load:  HARNESS_DB_WRITE_OK=${ref} npx tsx scripts/db-load-bars.mts ${flags}\n`,
       );
       return;
     }
