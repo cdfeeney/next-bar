@@ -42,6 +42,7 @@ import { Client } from 'pg';
 
 import { authorizeMigrationTarget, redactUrl } from './apply-migration-target-guard';
 import { resolveTarget } from './lib/migration-target-guard';
+import { readClassification } from './lib/classification';
 import { checksumOfSql } from '../src/lib/effectiveMigration';
 
 function fail(message: string): never {
@@ -167,6 +168,10 @@ async function main(): Promise<void> {
   // DATABASE_URL exported in the shell survives dotenv's override:false and is
   // then indistinguishable from one a file supplied.
   const shellDatabaseUrl = process.env.DATABASE_URL;
+  // Snapshotted for the opposite reason: a --secrets-file loads with override:true, so a label in
+  // that file would REPLACE one exported in the shell and silently correct a human who typed the
+  // wrong one instead of refusing.
+  const shellDeclaredEnv = process.env.NEXT_BAR_DATABASE_ENVIRONMENT;
 
   let secretsParsed: Record<string, string> | undefined;
   if (secretsFile !== null) {
@@ -180,13 +185,18 @@ async function main(): Promise<void> {
   // Same two questions the applier asks, in the same order, through the same
   // modules. A second implementation of this is a second thing to keep correct.
   try {
+    // THE SECRETS-FILE PAIRING RULES ARE GONE, so this no longer passes secretsFile or
+    // secretsParsed. The label is DERIVED from the project ref, and the classification is read
+    // from the repo-root .env.local FILE — never from the secrets file, which must not be able to
+    // declare what project it is allowed to be.
     resolveTarget({
       env,
-      secretsFile,
-      secretsParsed,
       shellDatabaseUrl,
+      shellDeclaredEnv,
       databaseUrl: process.env.DATABASE_URL,
+      apiUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
       actualEnv: process.env.NEXT_BAR_DATABASE_ENVIRONMENT,
+      classification: readClassification(),
     });
   } catch (error) {
     fail((error as Error).message);

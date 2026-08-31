@@ -1,8 +1,8 @@
-import { readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { MIGRATIONS_DIR, definingMigration, sqlView } from './effectiveMigration';
+import { definingMigration, migrationView } from './effectiveMigration';
 
 /**
  * 0064's security SHAPE, read from the committed SQL.
@@ -20,12 +20,12 @@ import { MIGRATIONS_DIR, definingMigration, sqlView } from './effectiveMigration
 const FRIEND_FN = 'get_friend_ratings';
 
 function migrationCode(file: string): string {
-  return sqlView(readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8')).code;
+  return migrationView(file).code;
 }
 
 /** Comments AND string literals blanked — for "this word appears nowhere executable". */
 function migrationSkeleton(file: string): string {
-  return sqlView(readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8')).skeleton;
+  return migrationView(file).skeleton;
 }
 
 describe('0064 — the numeric score across the friend boundary', () => {
@@ -101,27 +101,50 @@ describe('0064 — the numeric score across the friend boundary', () => {
 });
 
 describe('the anonymous surfaces stay tier-only (criterion 5)', () => {
-  it('0015 get_public_ratings does not return a score', () => {
-    const code = migrationCode('0015_public_shared_list.sql');
-    expect(code).toMatch(/create\s+or\s+replace\s+function\s+public\.get_public_ratings/);
-    expect(code).toMatch(/returns\s+table\s*\(\s*bar_id\s+text\s*,\s*tier\s+text\s*,\s*rated_at\s+timestamptz\s*\)/);
-    expect(code, 'the anon-readable list now selects a score').not.toMatch(/\br\.score\b/);
+  // RETIRED BY 0066 (EC-04), so these guard its ABSENCE rather than its shape.
+  //
+  // get_public_ratings returned the legacy Loved/Liked/Pass tier over a
+  // shares_list_publicly opt-in. V8 uses numeric scores; V8-R-RNK-001 excludes tiers
+  // as "legacy implementation concepts, not the V8 model", and the founder-approved
+  // 3.1.0 ledger mentions neither the RPC, the flag, nor a public list. No
+  // replacement is approved. Guarding the SHAPE of a dead surface is part of what
+  // made it look maintained; the invariant that matters is that nothing brings it back.
+  it('get_public_ratings is retired by a forward migration', () => {
+    expect(
+      migrationCode('0066_media_boundary.sql'),
+      '0066 must retire get_public_ratings',
+    ).toMatch(/drop\s+function\s+if\s+exists\s+public\.get_public_ratings/);
   });
 
-  it('no migration re-states get_public_ratings above 0015', () => {
-    // Same self-maintaining rule as above: if the public read moves to a newer
-    // file, the assertion above is guarding dead text and this says so.
-    expect(definingMigration('get_public_ratings')).toBe('0015_public_shared_list.sql');
-  });
+  // THE BUDGET, NOT THE ASSERTION (WP7 round 8). `definingMigration` reads every
+  // committed migration to decide which ones can even mention the name, and that
+  // directory keeps growing — 0066 and 0068 are each larger than the whole chain
+  // that preceded the media spine. Alone this test takes ~2.4s; inside the full
+  // parallel suite it crossed vitest's 5s default and failed twice in a row on a
+  // green tree. The claim below is untouched: what changed is how long a
+  // file-system scan of the whole migration chain is allowed to take.
+  it('no migration re-states get_public_ratings after its retirement', () => {
+    // 0015 is history and is never rewritten, so it may still define it. Anything
+    // NEWER defining it would be a reintroduction of a superseded surface.
+    const defining = definingMigration('get_public_ratings');
+    expect(
+      defining === null || defining === '0015_public_shared_list.sql',
+      `get_public_ratings is redefined by ${defining}, after 0066 retired it`,
+    ).toBe(true);
+  }, 30_000);
 
   it('0016 shared nights carries no score', () => {
     expect(migrationSkeleton('0016_shared_nights.sql')).not.toMatch(/\bscore\b/);
   });
 
-  it('the public list server path never reads a score field', () => {
-    const source = readFileSync(path.join(__dirname, 'publicList.server.ts'), 'utf8');
-    // `.score` / `score:` — the file's own header says the word in prose, which
-    // is the rule being kept, not a violation of it.
-    expect(source, 'publicList.server.ts now handles a score').not.toMatch(/\.score\b|\bscore\s*:/);
+  // The caller is GONE, not merely score-free. publicList.server.ts wrapped the
+  // retired get_public_ratings, had no importers anywhere in the tree, and was
+  // deleted by EC-04. Asserting a deleted file "handles no score" would pass
+  // vacuously forever; asserting its absence is what stops it coming back.
+  it('the public list server path no longer exists', () => {
+    expect(
+      existsSync(path.join(__dirname, 'publicList.server.ts')),
+      'publicList.server.ts is back — it wraps a retired tier-bearing surface',
+    ).toBe(false);
   });
 });

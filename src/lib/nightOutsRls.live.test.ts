@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from 'pg';
 import { stagingDatabaseTarget } from './liveDbTarget';
+// The client half of the ONE night definition. Imported so the rollover test
+// below can assert the SQL function and the TypeScript helper agree instant
+// for instant, rather than each being right about a different boundary.
+import { nycNightKey } from './nightKey';
 
 import {
   GUARDED_FUNCTIONS,
@@ -147,14 +151,15 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     }
   });
 
-  it('anon cannot execute any night_out WRITE rpc (criterion 6)', async () => {
+  it('anon is denied the night_out write RPCs, and holds exactly the seven deliberate grants (criterion 6)', async () => {
     // The ten write RPCs, plus 0047's authenticated-only definer READ
     // (night_out_is_full_by_token) which anon must also not execute. An
     // earlier round caught this list claiming "all" while omitting
     // decide/invite/respond — the same overstated-claim species as the
-    // criterion-3 grant test. The completeness assertion at the end is what
-    // stops the list silently falling behind the migration again, and it is
-    // what caught 0047's new function on the round it was added.
+    // criterion-3 grant test. This loop is BEHAVIOR: it calls each one as anon
+    // and reads the refusal. Completeness is a separate claim and is asked of
+    // the database's own privileges at the end, because a hand-maintained
+    // "and that is all of them" list is the thing that went stale.
     const writes: Array<[string, string]> = [
       ['create_night_out', "select public.create_night_out(current_date, 'x')"],
       ['cancel_night_out', `select public.cancel_night_out('${randomUUID()}'::uuid)`],
@@ -192,21 +197,82 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       expect(denied, `anon could execute ${name}`).toMatch(/permission denied/i);
     }
 
-    // The list above claims to be exhaustive, so PROVE it against the database
-    // rather than trusting it. Every night_out function that is not the one
-    // anon-granted read (preview) or a member-scoped definer READ must appear.
-    // Without this, adding an 11th write RPC would leave it silently unchecked
-    // and the test would still say "any write rpc".
-    const READS = new Set(['preview_night_out', 'resolve_night_out_by_token',
-      'get_night_out', 'get_night_out_members', 'get_night_out_board', 'night_out_role']);
+    // COMPLETENESS IS ASKED OF THE DATABASE, NOT OF A SECOND HAND-LIST.
+    //
+    // This assertion used to require that every `%night_out%` routine appear in
+    // either `writes` above or a hardcoded READS set, and it went stale exactly
+    // as designed-to: by round 10 it named 29 routines that post-date it, all
+    // of them correctly NOT anon-executable, so the suite failed while the
+    // grants were right. A list that must be edited whenever a migration adds
+    // an RPC will go stale again, so the claim now rests on the privileges the
+    // database actually holds. That is also STRONGER than the loop above: it
+    // covers every routine, including ones whose argument list this file has no
+    // fixture for, and it fails in BOTH directions — a new anon grant appears,
+    // and a deliberate one silently disappearing appears too.
+    //
+    // KEYED ON THE SIGNATURE, NOT THE NAME (round-10 panel, both lanes).
+    // `has_function_privilege` answers per-oid, but collapsing those answers to
+    // `proname` hid a whole class of grant: 0068 grants anon the `(date)`
+    // overload of `night_out_scheduled_start` (line 779) and deliberately keeps
+    // the `(uuid)` one authenticated-only (line 831, because it reveals the same
+    // fact through a side door to a declined or revoked invitee). Under a name
+    // set, granting anon that second overload changes nothing — the name is
+    // already present — so the assertion stayed green while a new anon-reachable
+    // surface keyed by plan id opened. `night_out_media_expires_at` and
+    // `night_out_media_window` carry the same uuid/date pair.
+    //
+    // The seven below are each deliberate, and six of them are reads. The
+    // seventh, `rsvp_night_out_by_token`, is a genuine anon WRITE — 0068 grants
+    // it for token-gated anonymous RSVP, served by
+    // `public.night_out_anon_rsvps` — so this test's title is about the writes
+    // it enumerates, never a claim that no anon write exists. Verified against
+    // every `to anon` line in 0068: 779, 2221, 2252, 2379, 2433, 2469, 2506.
+    //
+    // THE UNIVERSE IS THE FEATURE, NOT ONE SUBSTRING (round-10 round 2,
+    // Claude). `like '%night_out%'` alone could not see 0068's own
+    // `get_anon_rsvp_by_token(uuid, uuid)` grant at line 2252 — a seventh
+    // deliberate anon grant on this same bearer-invite surface whose name
+    // simply lacks the substring. The assertion claimed "exactly the six" over
+    // a universe that had already dropped a seventh, so any future anon grant
+    // on a function of this feature named without `night_out` would have been
+    // invisible to it. Both name shapes are in scope now.
+    //
+    // The signature comes from `format_type` over `proargtypes` rather than
+    // `pg_get_function_identity_arguments`, whose exact rendering — whether it
+    // carries argument names — is not something this lane can settle without a
+    // database, and a guard that might not match is not a guard. `format_type`
+    // is unambiguous: canonical type names, nothing else.
+    const ANON_EXECUTABLE = [
+      'get_anon_rsvp_by_token(uuid, uuid)',
+      'night_out_scheduled_start(date)',
+      'preview_night_out(uuid)',
+      'preview_night_out_attendees(uuid)',
+      'preview_night_out_detail(uuid)',
+      'preview_night_out_shortlist(uuid)',
+      'rsvp_night_out_by_token(uuid, uuid, text)',
+    ];
     const { rows } = await db.query(`
-      select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public' and p.proname like '%night_out%'`);
-    const covered = new Set(writes.map(([name]) => name));
-    const uncovered = rows
-      .map((r) => r.proname as string)
-      .filter((name) => !READS.has(name) && !covered.has(name));
-    expect(uncovered, 'night_out write RPCs not covered by this denial test').toEqual([]);
+      select p.proname || '('
+               || coalesce(
+                    (select string_agg(format_type(t, null), ', ' order by o)
+                       from unnest(p.proargtypes) with ordinality as u(t, o)),
+                    '')
+               || ')' as signature,
+             has_function_privilege('anon', p.oid, 'EXECUTE') as anon_execute
+        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public'
+         and (p.proname like '%night_out%' or p.proname like '%anon_rsvp%')`);
+    // A read that returned nothing would make every assertion below vacuous.
+    expect(rows.length, 'no %night_out% routines found; the read itself failed').toBeGreaterThan(
+      ANON_EXECUTABLE.length,
+    );
+    const anonGranted = rows
+      .filter((r) => r.anon_execute === true)
+      .map((r) => r.signature as string)
+      .sort();
+    expect(anonGranted, 'the set of anon-executable night_out routines').toEqual(
+      [...ANON_EXECUTABLE].sort(),
+    );
   });
 
   it('anon CAN execute exactly the bearer preview, and it leaks no identifiers (criterion 5)', async () => {
@@ -778,18 +844,31 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     });
   });
 
-  it('the night rollover is NYC with a 6am boundary, not UTC (cold panel HIGH)', async () => {
+  it('the night rollover is NYC with a 4:00 AM boundary, not UTC (V8-R-PRE-005)', async () => {
     // Pinned instants, because the defect lives in a three-to-four hour window
     // each evening and a test that reads the wall clock passes by accident.
+    //
+    // The boundary is 4:00 AM America/New_York (contract 3.1.0, D-C-39),
+    // served by migration 0068's replacement of public.nyc_night_key(). The
+    // four contract instants — 3:59 vs 4:00 in EDT and in EST — are asserted
+    // to the minute, then the SQL function is checked against the CLIENT
+    // helper at each one. A boundary that is right on one side and wrong on
+    // the other is the exact defect this test exists to catch.
     const cases: Array<[string, string, string]> = [
       ['2026-08-17T02:00:00Z', '2026-08-16', '22:00 EDT — the hours the bug lived in'],
-      ['2026-08-17T09:00:00Z', '2026-08-16', '05:00 EDT — before the 6am rollover'],
-      ['2026-08-17T11:00:00Z', '2026-08-17', '07:00 EDT — after it'],
+      ['2026-07-25T07:59:00Z', '2026-07-24', '03:59 EDT — the last minute of the night'],
+      ['2026-07-25T08:00:00Z', '2026-07-25', '04:00 EDT — the rollover instant'],
+      ['2026-01-24T08:59:00Z', '2026-01-23', '03:59 EST — winter, one minute before'],
+      ['2026-01-24T09:00:00Z', '2026-01-24', '04:00 EST — winter, the rollover'],
+      ['2026-08-17T09:00:00Z', '2026-08-17', '05:00 EDT — already the new night at 4am'],
+      ['2026-08-17T11:00:00Z', '2026-08-17', '07:00 EDT — well after it'],
       ['2026-01-15T02:00:00Z', '2026-01-14', '21:00 EST — winter, UTC-5'],
     ];
     for (const [instant, expected, why] of cases) {
       const { rows } = await db.query('select public.nyc_night_key($1::timestamptz) as night', [instant]);
       expect(rows[0].night.toISOString().slice(0, 10), why).toBe(expected);
+      // …and the client helper must agree at the very same instant.
+      expect(nycNightKey(new Date(instant)), `client/SQL disagree at ${why}`).toBe(expected);
     }
     // And the thing that actually broke: UTC disagrees at those instants.
     const { rows: utc } = await db.query(
@@ -1498,7 +1577,16 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
   itCommitting('a concurrent duplicate invite at the cap boundary is idempotent, not a failure (criterion 3)', async () => {
     const db2 = new Client({
       connectionString: URL as string,
-      ssl: { rejectUnauthorized: false },
+      // THE SAME TLS THE GATE AUTHORISED, exactly as the primary connection
+      // above — and for a stronger reason (round-10 round 8, Claude). This
+      // hardcoded `rejectUnauthorized: false`, which accepts ANY certificate,
+      // on the one session in the suite that COMMITS. With PGSSLROOTCERT set
+      // the target is verified TLS with a pinned CA, so this connection was
+      // silently downgrading it: on an untrusted network an active MITM could
+      // take the staging role's password and the committed DML from it. It is
+      // also precisely what the comment eight lines above forbids — rebuilding
+      // the config here lets the suite connect with one nobody verified.
+      ssl: (TARGET as { ssl: object }).ssl,
       statement_timeout: 30000,
       application_name: 'v8-3-invite-race-b',
     });

@@ -28,7 +28,7 @@ const NIGHT_NAMES = [
   'Saturday',
 ] as const;
 
-/** True on going-out nights: Thursday, Friday, Saturday (NYC 6am rollover). */
+/** True on going-out nights: Thursday, Friday, Saturday (NYC 4:00 AM rollover). */
 export function isWeekendNight(now: Date): boolean {
   const day = nycNightDay(now);
   return day === THURSDAY || day === FRIDAY || day === SATURDAY;

@@ -114,9 +114,17 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
   await page.route('**/rest/v1/**', fulfillJson(200, []));
   await page.route('**/auth/v1/**', fulfillJson(200, {}));
 
-  await page.route(
-    '**/rest/v1/rpc/get_following**',
-    fulfillJson(200, opts.following ?? []),
+  // A settled write re-hydrates the circle (useFollows keys its hydrate on
+  // `circleState.generation`), so `get_following` is read AGAIN after an
+  // unfollow resolves. A stub that answers with the same row forever is
+  // therefore telling the app the unfollow did not happen, and the app
+  // correctly puts the row back — the assertion then wins or loses a race
+  // with the re-hydrate, which is what made this test ~50% red on Pixel 7.
+  // Model what the server would actually say instead. Only unfollow is
+  // modelled: it is the one write whose re-read a test asserts on.
+  let unfollowed = false;
+  await page.route('**/rest/v1/rpc/get_following**', (route) =>
+    fulfillJson(200, unfollowed ? [] : (opts.following ?? []))(route),
   );
   await page.route(
     '**/rest/v1/rpc/search_handles**',
@@ -130,10 +138,11 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
     '**/rest/v1/rpc/follow_user**',
     fulfillJson(200, opts.followResult ?? true),
   );
-  await page.route(
-    '**/rest/v1/rpc/unfollow_user**',
-    fulfillJson(200, opts.unfollowResult ?? true),
-  );
+  await page.route('**/rest/v1/rpc/unfollow_user**', (route) => {
+    const removed = opts.unfollowResult ?? true;
+    if (removed) unfollowed = true;
+    return fulfillJson(200, removed)(route);
+  });
   await page.route(
     '**/rest/v1/rpc/get_friend_ratings**',
     fulfillJson(200, opts.friendRatings ?? []),
@@ -206,12 +215,28 @@ test.describe('/friends — signed in (real graph)', () => {
     await expect(page).toHaveURL(/\/friends$/);
   });
 
-  test('the Tonight strip shows circle SUGGESTIONS — who ▲ which bar; hidden without any (QA3)', async ({
+  /*
+   * PRESENCE, not suggestions — and the strip is `social-tonight`.
+   *
+   * Both of these stubbed `get_circle_suggestions` and read a `friends-tonight`
+   * strip, because that is what the Tonight component read when they were
+   * written. The WP1 merge (7c6b085) settled otherwise: Social → Tonight is
+   * WP7's TonightPresence over `get_circle_presence`, which is night-scoped by
+   * `public.nyc_night_key()` on the SERVER and audience-gated so that a `close`
+   * pin needs a mutual follow. Suggestions kept its own source for its own
+   * feature. A spec still stubbing the retired source proves nothing about the
+   * surface that ships — it passed only because nothing was asserting.
+   *
+   * The row shape is `get_circle_presence`'s, and it is validated defensively
+   * by fetchCirclePresence: user_id, handle, status and updated_at are all
+   * required, and a row missing any of them is DROPPED rather than coerced.
+   */
+  test('the Tonight strip shows circle PRESENCE — the bar, then who is there (QA3)', async ({
     page,
   }) => {
     await stubSupabase(page, { following: [SAM] });
     // Later-registered routes take precedence over stubSupabase's.
-    await page.route('**/rest/v1/rpc/get_circle_suggestions', (route) =>
+    await page.route('**/rest/v1/rpc/get_circle_presence', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -220,32 +245,45 @@ test.describe('/friends — signed in (real graph)', () => {
             user_id: FRIEND_ID,
             handle: 'sam_j',
             display_name: 'Sam J.',
+            status: 'going',
             bar_id: 'attaboy',
+            updated_at: '2026-08-24T02:00:00Z',
           },
         ]),
       }),
     );
     await page.goto('/friends');
 
-    const strip = page.getByTestId('friends-tonight');
-    await expect(strip.getByText('Sam J.')).toBeVisible();
-    await expect(strip.getByText(/▲ Attaboy/)).toBeVisible();
+    const strip = page.getByTestId('social-tonight');
+    await expect(strip.getByTestId('presence-list')).toBeVisible();
+    // Presence LEADS WITH THE BAR and spells the state out in words on the line
+    // beneath — never by colour alone (V8-R-SOC-001).
+    await expect(strip.getByText('Attaboy')).toBeVisible();
+    await expect(strip.getByText(/Sam J\./)).toBeVisible();
   });
 
-  test('the Tonight strip renders no suggestion rows when the circle has none (QA3)', async ({
+  test('the Tonight strip says nobody is out when the circle has none, and offers a way forward (QA3)', async ({
     page,
   }) => {
     await stubSupabase(page, { following: [SAM] });
-    await page.route('**/rest/v1/rpc/get_circle_suggestions', (route) =>
+    await page.route('**/rest/v1/rpc/get_circle_presence', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
     );
     await page.goto('/friends');
 
-    const strip = page.getByTestId('friends-tonight');
+    const strip = page.getByTestId('social-tonight');
     // The status pills still render (they live in the same block)…
     await expect(strip.getByRole('button', { name: /^Going out$/ })).toBeVisible();
-    // …but no backed-bar rows.
-    await expect(strip.getByText(/▲ /)).toHaveCount(0);
+    // …and an EMPTY circle read with a real session is the empty state, with
+    // the forward path V8-R-OPS-005 asks for. This is the assertion that used
+    // to live signed-out in night-out.spec.ts, where it was not a read at all.
+    await expect(strip.getByTestId('presence-empty')).toBeVisible();
+    await expect(
+      strip.getByRole('link', { name: /invite friends/i }),
+    ).toBeVisible();
+    // Never confused with a failed read.
+    await expect(strip.getByTestId('presence-error')).toHaveCount(0);
+    await expect(strip.getByTestId('presence-list')).toHaveCount(0);
   });
 
   test('unfollow on the Following list removes the row (UX-A)', async ({

@@ -257,26 +257,24 @@ test('every V7 key survives a force-close and reopen; the session-scoped flag do
   await reopened.close();
 });
 
-test('the shared-night surface never writes to V7 local storage', async ({ page }) => {
-  // `shared_nights` is server-owned and bearer-token addressed. The
-  // continuity property that IS provable offline is the negative one: the
-  // public night route must be read-only with respect to the device's V7
-  // keys — it may not import, mirror, or clear any of them. What the page
-  // RENDERS from a real row is covered by `e2e/night-page.spec.ts`, which
-  // needs a configured Supabase client (see this file's header).
+test('the retired shared-night route never touches V7 local storage', async ({ page }) => {
+  // RETIRED BY EC-04, and this test is inverted rather than deleted.
+  //
+  // It used to require a 200 and the shared-night component's terminal "gone"
+  // state, precisely so that "writes no local key" could not pass on a route
+  // that never ran (Codex, V8-2 rounds 1 and 2). That guard did its job: WP7
+  // retired the surface — migration 0068 drops get_shared_night, share_night
+  // and unshare_night, and the route answers 404 — and this assertion went red
+  // on the next run instead of silently vouching for nothing.
+  //
+  // The V7-continuity property still worth pinning is that a V7 device survives
+  // the visit UNCHANGED. A 404 is now the correct, asserted outcome; what the
+  // retirement itself must prove is in e2e/night-page.spec.ts.
   const token = '123e4567-e89b-42d3-a456-426614174000';
   await seedV7Install(page);
 
   const response = await page.goto(`/u/conor_f/night/${token}`);
-  // The route must actually SERVE, and its own code must actually RUN.
-  // Without both, the storage assertion below passes just as happily on a 500
-  // — or on a deleted route's 404 — having never executed a line of
-  // shared-night code, so "writes no local key" would prove nothing
-  // (Codex, V8-2 rounds 1 and 2). With no Supabase configured the page
-  // resolves to its terminal "gone" state, which is the shared-night
-  // component rendering.
-  expect(response?.status()).toBe(200);
-  await expect(page.getByRole('heading', { name: /this night isn't here/i })).toBeVisible();
+  expect(response?.status()).toBe(404);
   await expect(readLocal(page)).resolves.toEqual(V7_LOCAL);
 
   // And back into the app: local history is still the LOCAL night, not the
@@ -529,17 +527,27 @@ test('signing back in to the SAME V7 account keeps every V7 key and everything i
   ).resolves.toEqual(mustSurvive);
 });
 
-test('a V7 shared night still renders after the upgrade, and viewing it changes no V7 key', async ({
+test("a V7 shared link is retired, and retiring it publishes nothing and changes no V7 key", async ({
   page,
 }) => {
-  // The negative property (the route writes no local key) is asserted above.
-  // This is the POSITIVE half the PRD asks for: shared-night state is a server
-  // row addressed by a bearer token, so the row is stubbed — what is under test
-  // is that a V7 user's shared night is still reachable and still renders its
-  // own night, Bar 54 included.
+  // The POSITIVE half of this pair is GONE, by decision, not by neglect.
+  //
+  // This asserted that a V7 user's shared night still rendered — identity,
+  // stop count, the loved bar. EC-04 retired that surface: the founder-approved
+  // contract 3.1.0 contains no `shared_night`, `share_night`, `loved_bar_id` or
+  // share token, and `public.get_shared_night(uuid)` was a SECURITY DEFINER
+  // read with a live **anon** EXECUTE grant returning another account's handle
+  // and display name. "Still renders" is therefore no longer a continuity
+  // requirement; it is the exposure that was closed.
+  //
+  // Inverted, not deleted, and the STUB IS KEPT ON PURPOSE — answering a full
+  // row — so "none of it reaches the page" is a real assertion rather than an
+  // absence nobody checked. This test now fails if the surface comes back.
   const token = '123e4567-e89b-42d3-a456-426614174000';
-  await page.route('**/rest/v1/rpc/get_shared_night', (route) =>
-    route.fulfill({
+  let rpcCalled = false;
+  await page.route('**/rest/v1/rpc/get_shared_night', (route) => {
+    rpcCalled = true;
+    return route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify([
@@ -552,18 +560,19 @@ test('a V7 shared night still renders after the upgrade, and viewing it changes 
           shared_at: '2026-08-13T03:00:00Z',
         },
       ]),
-    }),
-  );
+    });
+  });
   await seedV7InstallWithCatalog(page);
 
-  await page.goto(`/u/conor_f/night/${token}`);
-  await expect(
-    page.getByRole('heading', { name: /Conor F's night out/i }),
-  ).toBeVisible();
-  await expect(page.getByText(/@conor_f · 3 stops · loved Bar 54/)).toBeVisible();
-  const stops = page.locator('ol li');
-  await expect(stops).toHaveCount(3);
-  await expect(stops.nth(2)).toContainText('Bar 54');
+  const response = await page.goto(`/u/conor_f/night/${token}`);
+  expect(response?.status()).toBe(404);
 
+  // Not one field of the payload the route used to publish about this account.
+  await expect(page.getByText(/Conor F/)).toHaveCount(0);
+  await expect(page.getByText(/@conor_f/)).toHaveCount(0);
+  await expect(page.getByText(/Bar 54/)).toHaveCount(0);
+  expect(rpcCalled).toBe(false);
+
+  // And the V7 device is untouched by the visit, which is this file's subject.
   await expect(readLocal(page)).resolves.toEqual(V7_LOCAL);
 });

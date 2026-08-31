@@ -1,0 +1,15 @@
+{
+  "tool": "scripts/db-load-bars.mts",
+  "ran_at": "2026-08-29T15:53:00.456Z",
+  "target_ref": "wqxovhiovgcijmfzxgby",
+  "target_label": "staging",
+  "payload_path": "C:/Users/cdfee/AppData/Local/Temp/claude/D--/27df1ac4-0893-490f-acb5-6e4135fe1d8a/scratchpad/payload.json",
+  "payload_sha256": "d47819f8a2e2d2d10cf4ddfbbc97014d14b1398fd3148f2b71ae0a9473a1e076",
+  "payload_rows": 1255,
+  "planned": 851,
+  "skipped_already_present": 404,
+  "inserted": 851,
+  "bars_before": 1256,
+  "bars_after": 2107,
+  "ledger_head": "0071_story_media_legacy_policy_removal.sql"
+}

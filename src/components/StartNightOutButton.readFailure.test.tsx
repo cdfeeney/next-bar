@@ -35,6 +35,8 @@ let heldRead: Promise<unknown> | null = null;
 /** When set, createNightOut hands back this promise instead of resolving. */
 let heldCreate: Promise<unknown> | null = null;
 let nightKey = '2026-08-17';
+/** When set, every idempotency key createNightOut receives is appended here. */
+let createKeys: Array<string | undefined> | null = null;
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: (href: string) => pushed.push(href) }),
@@ -62,9 +64,33 @@ vi.mock('@/lib/supabase/client', () => ({
   getBrowserSupabase: () => ({}),
 }));
 
+/** The bar this account has pinned tonight, or null. Seeds the Area row. */
+let presence: { barId: string | null } | null = null;
+/** Whether that read has RETURNED. Default true: every case here has. */
+let presenceSettled = true;
+vi.mock('@/app/friends/_components/usePinnedHandles', () => ({
+  useMyPresence: () => presence,
+  useMyPresenceRead: () => ({ presence, settled: presenceSettled }),
+}));
+// Spread the real module: the plan rows only need getBarById, and replacing the
+// whole of `catalog` would leave every other consumer in this tree undefined.
+vi.mock('@/lib/catalog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/catalog')>()),
+  getBarById: (id: string) =>
+    id === 'attaboy'
+      ? { id, name: 'Attaboy', neighborhood: 'Lower East Side' }
+      : undefined,
+}));
+
 vi.mock('@/lib/nightOuts.server', () => ({
-  createNightOut: async () => {
+  createNightOut: async (
+    _s: unknown,
+    _night: string,
+    _title: unknown,
+    key?: string,
+  ) => {
     createCalls += 1;
+    if (createKeys !== null) createKeys.push(key);
     if (heldCreate !== null) return heldCreate;
     return createResult;
   },
@@ -92,6 +118,8 @@ beforeEach(() => {
   currentUser = USER_A;
   authStatus = 'signed-in';
   nightKey = '2026-08-17';
+  createKeys = null;
+  presence = null;
   window.localStorage.clear();
   window.sessionStorage.clear();
 });
@@ -590,6 +618,147 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     );
   });
 
+  /**
+   * Round-10 panel, both lanes. `planFields.apply` used to paint its own
+   * refusal and `handleStart` pushed the route one round trip later, so the one
+   * message the owner needed lived for a sub-second window — and its advice,
+   * "open the plan and try again", named a screen with no When/Area/deadline
+   * editors, because this form is the only caller of those three RPCs in `src`.
+   *
+   * No mock of `@/lib/nightOutPlan` here on purpose: the real wrappers run
+   * against this suite's `{}` supabase stub, so `supabase.rpc` is undefined,
+   * `setOne` catches the throw, and the edit is refused for real.
+   */
+  test('a refused planning edit holds the screen instead of navigating away from its own report', async () => {
+    const user = userEvent.setup();
+    render(<StartNightOutButton />);
+    await user.type(screen.getByLabelText(/^Area/), 'East Village');
+    await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
+    await waitFor(() => expect(createCalls).toBe(1));
+
+    const notice = await screen.findByTestId('plan-fields-refused');
+    expect(notice.textContent).toMatch(/couldn.t save the area/i);
+    // THE POINT: no route change destroyed it.
+    expect(pushed, 'navigated away from the refusal report').toEqual([]);
+    // And it promises nothing it cannot keep — the plan is one tap away.
+    await user.click(screen.getByRole('button', { name: /open it/i }));
+    expect(pushed).toEqual(['/night-out/tok-1']);
+  });
+
+  /**
+   * Round-10 round 2, Claude. `attemptKey` was minted once and never expired,
+   * and 0054's idempotency lookup matches on (owner_id, idempotency_key) with
+   * NO night column — so a key held across the rollover made tonight's Start
+   * return LAST night's plan, send tonight's invitees to it, and navigate the
+   * owner there.
+   */
+  test('the idempotency key expires with the night, so tomorrow is not yesterday’s plan', async () => {
+    const user = userEvent.setup();
+    const keys: Array<string | undefined> = [];
+    createKeys = keys;
+
+    // Night 1: the create commits server-side but the response is lost.
+    createResult = null;
+    const view = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
+    await waitFor(() => expect(createCalls).toBe(1));
+    expect(await screen.findByText(/Couldn't start it/i)).toBeTruthy();
+
+    // The tab stays open past 4:00 AM.
+    nightKey = '2026-08-18';
+    createResult = PLAN_ID;
+    view.rerender(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
+    await waitFor(() => expect(createCalls).toBe(2));
+
+    expect(keys.length).toBe(2);
+    expect(
+      keys[1],
+      'the second night reused the first night’s idempotency key, so 0054 would return yesterday’s plan',
+    ).not.toBe(keys[0]);
+  });
+
+  test('a retry on the SAME night still reuses the key, which is what stops a duplicate plan', async () => {
+    const user = userEvent.setup();
+    const keys: Array<string | undefined> = [];
+    createKeys = keys;
+
+    createResult = null;
+    render(<StartNightOutButton />);
+    const start = screen.getByRole('button', { name: /Start the official Night Out/i });
+    await user.click(start);
+    await waitFor(() => expect(createCalls).toBe(1));
+    await user.click(start);
+    await waitFor(() => expect(createCalls).toBe(2));
+
+    expect(keys.length).toBe(2);
+    expect(keys[1], 'a same-night retry minted a new key and could double-create').toBe(keys[0]);
+  });
+
+  /**
+   * Round-10 round 4, Codex. `handleStart` runs across several awaits and used
+   * to call the `apply` its closure captured at the tap. If `fetchMyPresence`
+   * resolved mid-create, the rows re-rendered showing the Area inherited from
+   * the bar pinned tonight, while the captured callback still held the empty
+   * one — so the plan was created with no area and nothing said, under a form
+   * that was displaying one.
+   *
+   * `@/lib/nightOutPlan` is deliberately NOT mocked in this file, so the real
+   * wrappers run against the `{}` supabase stub and refuse. That is what makes
+   * this observable: an area that reaches `apply` is REFUSED and named, and an
+   * area that never reaches it is simply absent from the report.
+   */
+  test('an Area that arrives mid-create is applied, not the empty one captured at the tap', async () => {
+    const user = userEvent.setup();
+    let releaseCreate: (value: string) => void = () => undefined;
+    heldCreate = new Promise<string>((resolve) => {
+      releaseCreate = resolve;
+    });
+
+    const view = render(<StartNightOutButton />);
+    await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
+    await waitFor(() => expect(createCalls).toBe(1));
+    // Tapped with the Area row empty.
+    expect((screen.getByLabelText(/^Area/) as HTMLInputElement).value).toBe('');
+
+    // Presence resolves while the create is still in flight, and the row now
+    // shows the neighbourhood of the bar pinned tonight.
+    presence = { barId: 'attaboy' };
+    view.rerender(<StartNightOutButton />);
+    expect((screen.getByLabelText(/^Area/) as HTMLInputElement).value).toBe(
+      'Lower East Side',
+    );
+
+    releaseCreate(PLAN_ID);
+
+    const notice = await screen.findByTestId('plan-fields-refused');
+    expect(
+      notice.textContent,
+      'the create used the Area captured at the tap, not the one on screen',
+    ).toMatch(/couldn.t save the area/i);
+  });
+
+  test("a refused edit for A is not shown as B's after an in-place account switch", async () => {
+    // The other half of the same finding (Claude): while the rows hook owned
+    // this message, the reset effect could not reach it, so B kept a claim
+    // about A's night out with nothing able to clear it.
+    const user = userEvent.setup();
+    const view = render(<StartNightOutButton />);
+    await user.type(screen.getByLabelText(/^Area/), 'East Village');
+    await user.click(screen.getByRole('button', { name: /Start the official Night Out/i }));
+    expect(await screen.findByTestId('plan-fields-refused')).toBeTruthy();
+
+    currentUser = USER_B;
+    view.rerender(<StartNightOutButton />);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('plan-fields-refused'),
+        "B was shown a refusal about A's night out",
+      ).toBeNull(),
+    );
+  });
+
   test('a parked plan survives the tab closing, so tomorrow-morning Start is not a second plan', async () => {
     // Cold-panel round 2 (Codex). The record lived in sessionStorage, which the
     // browser discards when the TAB closes — so a create whose follow-up read
@@ -960,15 +1129,74 @@ describe('StartNightOutButton — account invitations (criterion 2, invited-acco
     ]);
   });
 
-  test('a failed invite is reported and does NOT block reaching the plan', async () => {
+  /**
+   * REWRITTEN, and the old assertion is worth explaining because it was passing
+   * for a reason that does not exist outside this file.
+   *
+   * It used to assert that navigation still happened AND that the owner was
+   * told, in that order. The second half only held because `useRouter` is
+   * mocked here to push a string onto an array — nothing unmounts, so the
+   * notice stayed on screen for the assertion to find. In a browser
+   * `router.push` replaces the creation form, and the round-10 panel filed
+   * exactly that: the warning is destroyed by the navigation that follows it.
+   * A test that cannot observe the defect it claims to cover is not coverage.
+   *
+   * The intent behind it survives and is what this asserts instead: a failed
+   * invite must never leave the owner unable to reach the plan. It does not —
+   * the plan exists, it is named, and Open it goes there in one tap. What
+   * changed is that the report is READ first rather than flashed past.
+   */
+  test('a failed invite is reported on a screen that survives, and the plan is one tap away', async () => {
     inviteFails = true;
     const user = userEvent.setup();
     render(<StartNightOutButton inviteeIds={[FRIEND_A, FRIEND_B]} />);
     await user.click(screen.getByRole('button'));
-    // The plan is real either way, so navigation still happens...
-    await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
-    // ...but the owner is told, rather than believing two people were invited.
+
+    // The owner is told, on a screen no route change has taken away.
     expect(await screen.findByText(/2 invites didn't send/)).toBeTruthy();
+    expect(pushed, 'navigated away from the invite-failure report').toEqual([]);
+
+    // And the plan is real and reachable — never a dead end.
+    await user.click(screen.getByRole('button', { name: /open it/i }));
+    expect(pushed).toEqual(['/night-out/tok-1']);
+  });
+
+  /**
+   * ROUND-10 ROUND 8, Claude gate. A held screen leaves the parked record in
+   * place on purpose — only the plan page spends it — so any `STARTED_KEY`
+   * write in ANY tab of the origin routed through `markCreatingChanged`, re-ran
+   * the create-settled effect, found the record still parked tonight and
+   * announced "this page couldn't open it": two Open-it controls and two
+   * contradictory sentences, one of them false, because the read had succeeded
+   * and the hold was deliberate. A held screen already IS the report.
+   */
+  test('a cross-tab create does not repaint the recovery panel over a held report', async () => {
+    inviteFails = true;
+    const user = userEvent.setup();
+    render(<StartNightOutButton inviteeIds={[FRIEND_A, FRIEND_B]} />);
+    await user.click(screen.getByRole('button'));
+    expect(await screen.findByText(/2 invites didn't send/)).toBeTruthy();
+
+    // Another tab of the same origin creates or opens a night out. The store is
+    // ONE map for the origin and the other tab merges rather than replaces, so
+    // our own parked record is still there — which is exactly the state that
+    // made the tick effect announce a read failure.
+    const other = JSON.stringify({
+      ...JSON.parse(window.localStorage.getItem(STARTED_KEY) ?? '{}'),
+      [USER_B]: { planId: PLAN_ID, nightKey },
+    });
+    window.localStorage.setItem(STARTED_KEY, other);
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: STARTED_KEY, oldValue: null, newValue: other }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(
+      screen.queryByText(/couldn't open it/i),
+      'a cross-tab write repainted a read failure that never happened',
+    ).toBeNull();
+    expect(screen.getAllByRole('button', { name: /open it/i })).toHaveLength(1);
+    expect(screen.getByText(/2 invites didn't send/)).toBeTruthy();
   });
 
   test('creating with nobody selected invites nobody and still works', async () => {
