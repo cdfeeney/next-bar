@@ -14,7 +14,12 @@ import { nycNightKey, nycNightDay } from '@/lib/nightKey';
  * The two windows below are the ones that actually broke things in review:
  *   - 9pm NYC, where UTC has ALREADY rolled to tomorrow (migration 0053: a
  *     `current_date` comparison marked tonight's invite expired from 8pm on).
- *   - midnight–6am NYC, where the night key must still name YESTERDAY.
+ *   - midnight–4:00 AM NYC, where the night key must still name YESTERDAY.
+ *
+ * The boundary is 4:00 AM America/New_York — V8 contract 3.1.0, V8-R-PRE-005
+ * (D-C-39). It is asserted here at the minute, in BOTH zones, because the two
+ * hours this file has previously carried (a device-local 5am, then a 6am NYC)
+ * were each wrong in a way that only a minute-level assertion catches.
  *
  * Summer is EDT (UTC-4), winter EST (UTC-5); each case notes its NYC clock.
  */
@@ -27,26 +32,36 @@ describe('nycNightKey', () => {
     expect(nycNightKey(new Date('2026-07-25T01:00:00Z'))).toBe('2026-07-24');
   });
 
-  it('still names yesterday through the midnight-6am window', () => {
+  it('still names yesterday through the midnight-4am window', () => {
     // Sat 12:01am EDT — one minute past midnight, still Friday night.
     expect(nycNightKey(new Date('2026-07-25T04:01:00Z'))).toBe('2026-07-24');
     // Sat 3am EDT — the middle of the small hours.
     expect(nycNightKey(new Date('2026-07-25T07:00:00Z'))).toBe('2026-07-24');
-    // Sat 5:59am EDT — the last minute of Friday night.
-    expect(nycNightKey(new Date('2026-07-25T09:59:00Z'))).toBe('2026-07-24');
   });
 
-  it('rolls to the new night exactly at 6am NYC', () => {
-    expect(nycNightKey(new Date('2026-07-25T10:00:00Z'))).toBe('2026-07-25');
+  // The four contract instants: 3:59 vs 4:00, in EDT and in EST.
+  it('rolls to the new night exactly at 4:00 AM NYC in EDT', () => {
+    // Sat 3:59am EDT — the last minute of Friday night.
+    expect(nycNightKey(new Date('2026-07-25T07:59:00Z'))).toBe('2026-07-24');
+    // Sat 4:00am EDT — Saturday.
+    expect(nycNightKey(new Date('2026-07-25T08:00:00Z'))).toBe('2026-07-25');
   });
 
   it('holds the boundary across DST, where a fixed UTC offset would drift', () => {
-    // Winter is EST (UTC-5), so the 6am boundary sits at 11:00Z, not 10:00Z.
-    // A rule hardcoded to the summer offset would roll an hour early here.
-    // Sat 2026-01-24 5:59am EST — still Friday night.
-    expect(nycNightKey(new Date('2026-01-24T10:59:00Z'))).toBe('2026-01-23');
-    // Sat 2026-01-24 6:00am EST — Saturday.
-    expect(nycNightKey(new Date('2026-01-24T11:00:00Z'))).toBe('2026-01-24');
+    // Winter is EST (UTC-5), so the 4:00 AM boundary sits at 09:00Z, not
+    // 08:00Z. A rule hardcoded to the summer offset rolls an hour early here.
+    // Sat 2026-01-24 3:59am EST — still Friday night.
+    expect(nycNightKey(new Date('2026-01-24T08:59:00Z'))).toBe('2026-01-23');
+    // Sat 2026-01-24 4:00am EST — Saturday.
+    expect(nycNightKey(new Date('2026-01-24T09:00:00Z'))).toBe('2026-01-24');
+  });
+
+  it('does NOT roll at the two hours this module used to carry', () => {
+    // Regression pin: 5:00 and 6:00 NYC were each authoritative at some
+    // point. Under the contract boundary both are already the NEW night, so
+    // a silent revert to either would flip these back to '2026-07-24'.
+    expect(nycNightKey(new Date('2026-07-25T09:00:00Z'))).toBe('2026-07-25'); // 5am EDT
+    expect(nycNightKey(new Date('2026-07-25T10:00:00Z'))).toBe('2026-07-25'); // 6am EDT
   });
 });
 

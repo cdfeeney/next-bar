@@ -1,13 +1,14 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import TonightPresence from './_components/TonightPresence';
 import PlansSection from './_components/PlansSection';
 import FeedSection from './_components/FeedSection';
 import GroupsAndPeople, {
   GROUPS_AND_PEOPLE_ID,
 } from './_components/GroupsAndPeople';
-import { usePinnedHandles } from './_components/usePinnedHandles';
+import { usePinnedHandles, useMyPresence } from './_components/usePinnedHandles';
 import AddStoryFlow from '@/components/story/AddStoryFlow';
 import StoriesRail from '@/components/story/StoriesRail';
 import StoryViewer from '@/components/story/StoryViewer';
@@ -16,7 +17,22 @@ import { useStories } from '@/components/story/storyStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollowRequests } from '@/hooks/useFollowRequests';
 import { useNightRefresh } from '@/hooks/useIntent';
+import { useSuggestions } from '@/hooks/useSuggestions';
 import { nycNightKey } from '@/lib/nightKey';
+import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
+import { getBarById } from '@/lib/catalog';
+import { displayHood } from '@/lib/hoodDisplay';
+import { displayTag } from '@/lib/tagDisplay';
+import { haversineMiles } from '@/lib/distance';
+import { leadCopy } from '@/lib/travelTime';
+import { loadProfile } from '@/lib/storedProfile';
+import type { Bar, Coords, VibeProfile } from '@/types';
+
+// The lightbox is a full-screen panel with its own photo fetches; it has no
+// business in the Tonight bundle until somebody opens it.
+const BarLightbox = dynamic(() => import('@/components/BarLightbox'), {
+  ssr: false,
+});
 
 /**
  * /friends — SOCIAL, per `docs/design-reference/approved/next-bar-social-v2-core.png`.
@@ -46,8 +62,8 @@ const TABS: ReadonlyArray<{ id: Tab; label: string }> = [
 export default function SocialPage(): JSX.Element {
   const { requests } = useFollowRequests();
   const auth = useAuth();
-  // Night-scoped header line, on the shared clock signal so it re-labels at
-  // the 6am rollover without a reload.
+  // Night-scoped header line, on the shared clock signal so it re-labels at the
+  // 4:00 AM America/New_York rollover without a reload (V8-R-PRE-005 / D-C-39).
   const [night, setNight] = useState(() => nycNightKey());
   useNightRefresh(() => setNight(nycNightKey()));
 
@@ -59,7 +75,29 @@ export default function SocialPage(): JSX.Element {
 
   const stories = useStories();
   const youId = auth.status === 'signed-in' ? auth.user.id : null;
-  const pinnedIds = usePinnedHandles();
+  // FOUNDER DECISION 2026-08-24: the rail's pin badge reads PRESENCE, not suggestions.
+  // `usePinnedHandles` now returns presence state rather than a bare id list, and a "pin"
+  // is a presence row that names a bar — a status without a place is not a pin.
+  const { rows: presenceRows } = usePinnedHandles();
+  const myPresence = useMyPresence();
+  // YOUR OWN PIN IS UNIONED IN HERE, and it has to be. `get_circle_presence` answers
+  // "who ELSE is out" — its SQL carries `np.user_id <> auth.uid()` on purpose, because
+  // Social - Tonight lists other people. Deriving the rail's badges from it alone made the
+  // viewer's own pin structurally unreachable: StoriesRail asks `pinnedIds.includes(you.id)`
+  // and that id could never appear. WP1's version called own-pin visibility non-optional and
+  // it was right.
+  //
+  // The union happens HERE rather than by widening the RPC. Adding self to
+  // get_circle_presence would change what Social - Tonight means for the sake of a badge,
+  // and the caller's own row already has its own scoped accessor.
+  const pinnedIds = useMemo(() => {
+    const ids = (presenceRows ?? [])
+      .filter((row) => row.barId !== null)
+      .map((row) => row.userId);
+    // A status without a place is not a pin — the same rule applied to everyone else.
+    if (youId !== null && myPresence?.barId != null) ids.push(youId);
+    return ids;
+  }, [presenceRows, myPresence, youId]);
   // The queue only ever contains people who have something to show. Memoised
   // so the viewer's navigation callbacks are not rebuilt on every render.
   const queue = useMemo(
@@ -150,6 +188,7 @@ export default function SocialPage(): JSX.Element {
         {tab === 'tonight' ? (
           <Panel id="tonight">
             {rail}
+            <NextBarCard />
             <TonightPresence />
             <GroupsAndPeople />
           </Panel>
@@ -169,7 +208,27 @@ export default function SocialPage(): JSX.Element {
                 surface that had not finished loading — the exact collapse
                 StoriesEmptyState exists to prevent, reintroduced one level
                 down. The rail above already distinguishes signed-out and
-                unreachable; this is the fourth case. */}
+                unreachable; this is the fourth case.
+
+                ROUND-10 DIRECTIVE (c), NOT DONE HERE AND DELIBERATELY SO. The
+                directive asked that FeedSection mount unconditionally, because
+                on wp5's branch it is the home of PERSISTENT Feed posts and
+                gating its mount on a 24-hour story count makes them unreachable
+                the moment the last story expires. That is a real defect there.
+                It is not one here: this FeedSection renders only its `entries`
+                prop, which IS `stories.feed`, and its own docblock records that
+                there is no separate Feed-memory backend and that permanent Feed
+                history is V9. So the gate below is equivalent to the component's
+                own emptiness and hides nothing.
+                The only shape that both mounts unconditionally and keeps this
+                state honest moves the empty branch INTO FeedSection.tsx, which
+                belongs to goal g-f1e128da and is on neither this lane's write
+                scope nor the five paths the directive opened; the round-10
+                Codex panel ruled that write out of scope. Landing it in
+                page.tsx alone instead would delete this branch and turn
+                e2e/story-rail.spec.ts:435 red, and that spec is not this lane's
+                either. The fix therefore belongs to whoever owns g-f1e128da,
+                where the persistent posts actually live. */}
             {stories.status === 'ready' ? (
               stories.feed.length > 0 ? (
                 <FeedSection entries={stories.feed} onOpenStory={openStories} />
@@ -252,13 +311,135 @@ function Panel({
   );
 }
 
-/** "CF" from an email local part; a stable placeholder when signed out. */
-function initialsFor(email: string | null | undefined): string {
-  const local = email?.split('@')[0] ?? '';
-  const parts = local.split(/[._-]+/).filter(Boolean);
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return 'YO';
+/**
+ * V8-R-SOC-003 — the Next Bar? card on Social · Tonight.
+ *
+ * "A compact card naming the suggested bar, walk time and quiet state, with one
+ * Open action into the shared lightbox." Two states: suggestion present, and
+ * none.
+ *
+ * IT RUNS THE SAME RANKER AS EVERYWHERE ELSE. `useSuggestions` is the shared
+ * entry point to the matching pipeline the home flow and the map both use, so
+ * Tonight cannot recommend a different bar from the rest of the app for the same
+ * person on the same night. Taking the top of that ranking is the whole of the
+ * "suggestion" here — this card owns no ranking logic of its own.
+ *
+ * THE LIGHTBOX IS THE SHARED ONE, unmodified. `BarLightbox`'s entire contract is
+ * two props, deliberately, "so a map marker, a ranking row and a search result
+ * can each pass the object they already hold" — and now a Tonight card too.
+ *
+ * NO LOCATION PROMPT. Social · Tonight is not a surface that should raise a
+ * permission dialog on arrival, so distance comes from the saved profile's
+ * preferred neighborhood, the way `ResultsView` resolves it without coords. With
+ * no neighborhood either, `leadCopy` renders the honest "In …" line instead of a
+ * walk time — a made-up number would be worse than none.
+ */
+function NextBarCard(): JSX.Element | null {
+  const [profile, setProfile] = useState<VibeProfile | null>(null);
+  const [profileChecked, setProfileChecked] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  // Client-side after mount, the same pattern WhereNextFlow and useSuggestions
+  // use: a localStorage read during render is an SSR hydration mismatch.
+  useEffect(() => {
+    const saved = loadProfile();
+    if (saved) {
+      setProfile({
+        tags: saved.tags,
+        archetype: saved.archetype,
+        preferredNeighborhoods: saved.preferredNeighborhoods,
+      });
+    }
+    setProfileChecked(true);
+  }, []);
+
+  const from: Coords | null = useMemo(() => {
+    const hood = profile?.preferredNeighborhoods?.[0];
+    return hood ? NEIGHBORHOOD_CENTROIDS[hood] : null;
+  }, [profile]);
+
+  // One suggestion is all this card shows, so ask for one.
+  const { suggestedIds } = useSuggestions(from, 1);
+  const bar = suggestedIds[0] ? getBarById(suggestedIds[0]) : undefined;
+
+  // NOTHING IS NOT AN EMPTY BOX. "none" is a real state in the contract, and the
+  // honest rendering of it on a panel that already carries a rail, a pin row and
+  // a circle list is to take up no room at all.
+  if (!profileChecked || bar === undefined) return null;
+
+  const miles =
+    from !== null && bar.lat !== undefined && bar.lng !== undefined
+      ? haversineMiles(from, { lat: bar.lat, lng: bar.lng })
+      : null;
+  const lead = leadCopy(miles, displayHood(bar.neighborhood));
+
+  /**
+   * THE MISSING WALK TIME SAYS IT IS MISSING (round-7 panel, Codex, MEDIUM).
+   *
+   * V8-R-SOC-003 names three things the card carries, and with no saved
+   * neighborhood `leadCopy` falls back to "In <hood>" — an honest line, but one
+   * that silently drops the walk time rather than accounting for it, so the
+   * card looked complete while one of its three elements was simply gone.
+   *
+   * The fix is NOT to invent a distance, for exactly the reason `energyOf`
+   * gives one line down: the app would be describing a trip it never measured.
+   * This is the same third state that finding got in round 5 — say we do not
+   * know, and name the one thing that would fill it in.
+   */
+  const walkNote = lead.kind === 'neighborhood' ? 'walk time needs your area' : null;
+
+  return (
+    <section data-testid="next-bar-card">
+      <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+        Next Bar?
+      </h2>
+      <div className="flex items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <p className="font-display text-base truncate">{bar.name}</p>
+          {/* Walk time and quiet state, both in WORDS, on one quiet line. */}
+          <p className="text-muted text-xs truncate" data-testid="next-bar-line">
+            {[lead.text, walkNote, energyOf(bar)].filter(Boolean).join(' · ')}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          data-testid="next-bar-open"
+          className="shrink-0 min-h-[44px] px-5 rounded-full border border-border font-display text-sm touch-manipulation hover:border-accent hover:text-accent transition-colors"
+        >
+          Open
+        </button>
+      </div>
+
+      {open ? <BarLightbox bar={bar} onClose={() => setOpen(false)} /> : null}
+    </section>
+  );
+}
+
+/** The loud/quiet axis, ascending. `chill` is the quiet end. */
+const ENERGY_TAGS = ['chill', 'buzzy', 'loud', 'dance'] as const;
+
+/**
+ * The "quiet state", in this catalog's own vocabulary.
+ *
+ * The Energy axis IS the loud/quiet axis, and `displayTag` is the one lookup a
+ * component may render a tag through. Nothing here invents a live-crowd signal:
+ * the app has no such measurement, and a card implying one would be describing a
+ * room nobody reported on.
+ *
+ * AN UNTAGGED BAR SAYS SO (round-5 panel, Codex). This returned an empty string
+ * and the caller's join dropped it, so a perfectly valid suggestion — any
+ * catalog bar without one of the four tags — rendered a card with no quiet
+ * state at all, which V8-R-SOC-003 requires the card to carry.
+ *
+ * The fix is NOT to guess one. The reasoning above stands: the app measures no
+ * room, and a card implying otherwise would be describing a night nobody
+ * reported on. Saying we do not know is the third state, and it is the one this
+ * codebase uses everywhere else it cannot answer.
+ */
+function energyOf(bar: Bar): string {
+  const tag = ENERGY_TAGS.find((candidate) => bar.tags?.includes(candidate));
+  return tag ? displayTag(tag) : 'no quiet read yet';
 }
 
 /**

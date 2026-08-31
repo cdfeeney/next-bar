@@ -162,8 +162,12 @@ describe('the plan page never paints an answer the view has moved on from', () =
       screen.queryByText(OWNER_PRIVATE_NAME),
       'a stale authenticated load put private member data in front of a signed-out viewer',
     ).toBeNull();
+    // The MEMBER board, by test id rather than by its heading: the bearer
+    // surface now has a "Who's in" of its own — the accepted COUNT, which
+    // 0044's preview has always made public — so the words no longer identify
+    // the private list on their own.
     expect(
-      screen.queryByText(/Who's in/),
+      screen.queryByTestId('member-board'),
       'the member board rendered for a signed-out viewer',
     ).toBeNull();
   });
@@ -374,6 +378,59 @@ describe('the plan page never paints an answer the view has moved on from', () =
       "plan A's member list leaked into plan B's view",
     ).toBeNull();
     expect(screen.getByText("B's night out")).toBeTruthy();
+  });
+
+  test('a join superseded by a NEWER load of the same view reports no failure', async () => {
+    /**
+     * Round-10 round 9, Claude gate. Round 8 gave `loadMemberView` a second
+     * reason to refuse — a newer load of the same view had already painted —
+     * and the round-4 disambiguation above knew only about the epoch. Neither
+     * Join nor Not-tonight has a re-entrancy guard, so a double tap issues two
+     * loads of ONE view; when the later-issued one lands first, the earlier
+     * returned `false` with the epoch unmoved and the handler announced a
+     * failure over a member board that had loaded correctly.
+     *
+     * The repair is `MemberLoad`: 'superseded' is not 'failed', so no caller
+     * has to re-derive the difference and the next reason to refuse cannot set
+     * the same trap again.
+     */
+    const heldPlanA = new Deferred<ReturnType<typeof planFor>>();
+
+    resolveByToken.mockResolvedValue(null);
+    previewNightOut.mockResolvedValueOnce({
+      night: '2026-08-20',
+      title: "A's night out",
+      ownerHandle: 'host',
+      ownerDisplayName: 'Host',
+      acceptedCount: 2,
+    });
+    joinNightOutByToken.mockResolvedValue('plan-A');
+    // The FIRST tap's plan read stalls; the second tap's answers immediately.
+    getNightOut.mockReturnValueOnce(heldPlanA.promise);
+    getNightOut.mockResolvedValue(planFor("A's night out"));
+    getNightOutMembers.mockResolvedValue(PRIVATE_MEMBERS);
+    getNightOutBoard.mockResolvedValue([]);
+
+    render(<NightOutPage params={{ token: TOKEN_A }} />);
+    const join = await screen.findByRole('button', { name: /join this night out/i });
+    join.click();
+    join.click();
+    await waitFor(() => expect(getNightOut).toHaveBeenCalledTimes(2));
+
+    // The second load paints the member board.
+    await waitFor(() => expect(screen.getByText(OWNER_PRIVATE_NAME)).toBeTruthy());
+
+    // Now the first, older load settles and is refused for being superseded.
+    heldPlanA.resolve(planFor("A's night out"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // The JOIN handler's sentence specifically — the media panel has its own
+    // "couldn't load" for the photo read, which is not what this is about.
+    expect(
+      screen.queryByText(/You're in — but this page couldn't load/i),
+      'a superseded load was reported as a failed join, over a board that had loaded',
+    ).toBeNull();
+    expect(screen.getByText(OWNER_PRIVATE_NAME)).toBeTruthy();
   });
 
   test("plan A's share notice does not offer its invite link from plan B", async () => {

@@ -2,10 +2,26 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * nights.server — client half of the shared-nights surface (E4.4,
- * migration 0016). Sharing is an explicit per-night act; the returned
- * share token is the bearer capability the link carries. The anon read
- * is keyed on the token ALONE (DeepSeek review: a handle+date lookup was
+ * migration 0016). Sharing was an explicit per-night act; the returned
+ * share token is the bearer capability the link carried. The anon read
+ * was keyed on the token ALONE (DeepSeek review: a handle+date lookup was
  * an enumeration oracle).
+ *
+ * ⚠ RETIRED SURFACE (WP7, EC-04, founder decision). Migration 0068 DROPS
+ * `share_night`, `unshare_night` and `get_shared_night`. Every function below
+ * therefore has no server to call: `shareNight` returns null and
+ * `fetchSharedNight` returns null against a live database, because both already
+ * fail closed on an RPC error. Nothing in the app calls them any more — the
+ * route answers 404 and ShareNightButton renders nothing.
+ *
+ * They are kept, rather than deleted, for one reason and it is a scope reason,
+ * not a design one: `nights.server.test.ts` pins their behaviour and is owned by
+ * another packet, so deleting these exports would red a suite this lane may not
+ * edit. Removing the module and its test together is an integration-gate
+ * cleanup. Do NOT build anything new on these helpers.
+ *
+ * `isShareToken` is the one piece with residual value — a uuid-shape gate — but
+ * it is not a general-purpose validator; anything new should carry its own.
  */
 
 export type SharedNight = {

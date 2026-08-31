@@ -301,16 +301,70 @@ export function looksLikeUnreadableDefinition(sql: string, name: string): boolea
  * that is the live catalog probe in nightOutsRls.live.test.ts, which pins the
  * exact overload set of every name resolved here against pg_proc.
  */
+const viewCache = new Map<string, { code: string; skeleton: string }>();
+
+/**
+ * `sqlView` of a migration FILE, memoised for the life of the process.
+ *
+ * sqlView is a character-at-a-time scanner and definingMigration runs it over
+ * the WHOLE migration directory on every call, so the cost was
+ * files x callers. That was tolerable until 0065/0066 landed and roughly
+ * tripled the bytes in the directory, at which point every suite that resolves
+ * more than one function blew the 5s default timeout — seven of them at once.
+ * Bumping those timeouts would have hidden the growth rather than removed it,
+ * and the next migration would re-open it.
+ *
+ * Safe to cache because migrations are immutable committed files and this
+ * module is test-support only (nothing in the app imports it). A test that
+ * REWRITES a migration mid-run would read a stale view; none does, and one that
+ * needs to should clear this map rather than re-read behind it.
+ */
+export function migrationView(file: string): { code: string; skeleton: string } {
+  const full = path.join(MIGRATIONS_DIR, file);
+  const cached = viewCache.get(full);
+  if (cached) return cached;
+  const view = sqlView(readFileSync(full, 'utf8'));
+  viewCache.set(full, view);
+  return view;
+}
+
+/**
+ * Raw file text, memoised. Cheap next to a view, and the prefilter below needs
+ * it for every file whether or not that file is ever scanned.
+ */
+const rawCache = new Map<string, string>();
+function migrationRaw(file: string): string {
+  const full = path.join(MIGRATIONS_DIR, file);
+  const cached = rawCache.get(full);
+  if (cached !== undefined) return cached;
+  const raw = readFileSync(full, 'utf8');
+  rawCache.set(full, raw);
+  return raw;
+}
+
 export function definingMigration(name: string): string | null {
   // Files only: `revert/` is a subdirectory and its rollback text must never be
   // mistaken for the effective definition. Names are zero-padded, so lexical
   // order is numeric order.
   const defining: string[] = [];
   for (const file of readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()) {
+    // A file that never spells the name cannot state it, and cannot near-miss on
+    // it either: sqlView only ever BLANKS text (comments, literal contents), so
+    // every identifier in the skeleton is also in the raw file. Skipping the
+    // scan for those files is what keeps this loop off the timeout — most of the
+    // directory has nothing to do with any one function, and 0066 alone is
+    // larger than the entire chain that preceded the media spine.
+    //
+    // Case-insensitive because the skeleton is lowercased and the file is not.
+    // This is not a security boundary and is not asked to be one: a name spelled
+    // through Unicode identifier escapes would evade it, exactly as it already
+    // evades definitionIndex. See this module's header — what it defends is the
+    // accident, and the live catalog probe is the authoritative control.
+    if (!migrationRaw(file).toLowerCase().includes(name.toLowerCase())) continue;
     // The SKELETON: comments gone, literal contents blanked. Prose in a header
     // and a function name inside a string are not definitions, and reading the
     // raw text treated both as one (round-5 review, both lanes).
-    const sql = sqlView(readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8')).skeleton;
+    const sql = migrationView(file).skeleton;
     if (definitionIndex(sql, name) > -1) defining.push(file);
     else if (looksLikeUnreadableDefinition(sql, name)) {
       throw new Error(

@@ -1,96 +1,97 @@
 /**
- * night-page.spec.ts — E4.4 public shared-night page.
+ * night-page.spec.ts — the legacy shared-night route is RETIRED (WP7, EC-04).
  *
- * The shareId in the URL is a bearer token; the RPC is stubbed so these
- * run anywhere. Covers: anonymous render (identity, date, route order,
- * loved heart, get-the-app CTA, share-onward), the handle-spoof
- * negative (a rewritten handle must never re-attribute a night), the
- * gone/unshared state (friendly forward path, R5), and the garbage-token
- * fast path (no RPC call at all).
+ * This file used to prove that /u/[handle]/night/[shareId] rendered someone's
+ * night to an anonymous visitor: identity, date, route order, the loved heart,
+ * and a share-onward control. That surface is not part of the V8 product model
+ * — the founder-approved contract 3.1.0 contains no `shared_night`,
+ * `share_night`, `loved_bar_id` or "share token", and V8-R-RNK-001 excludes
+ * tiers from the model. Its read RPC, `public.get_shared_night(uuid)`, was a
+ * SECURITY DEFINER function with a live **anon** EXECUTE grant returning
+ * another account's handle, display name and legacy tier.
+ *
+ * The tests are inverted rather than deleted. A deleted spec proves nothing; an
+ * inverted one FAILS if the surface comes back, which is the property worth
+ * keeping. The RPC stub is retained deliberately: it makes "the page does not
+ * call it" a real assertion rather than an absence nobody checked.
+ *
+ * Retirement has two halves and this file covers the client one:
+ *   * server — migration 0068 drops share_night, unshare_night and
+ *     get_shared_night;
+ *   * client — the route answers 404 and ShareNightButton renders nothing.
+ *
+ * NOT retired, and deliberately still covered elsewhere: /night-out/[token]
+ * (V8-R-INV-001..007), the approved bearer-token Night Out invitation preview,
+ * and Saved Nights Out (V8-R-NO-009, V8-R-ACC-002), a private in-app archive.
  */
 
 import { test, expect } from '@playwright/test';
 
 const TOKEN = '123e4567-e89b-42d3-a456-426614174000';
 
-const NIGHT_ROW = {
-  handle: 'conor_f',
-  display_name: 'Conor F',
-  night: '2026-07-25',
-  bar_ids: ['attaboy', 'death-and-co'],
-  loved_bar_id: 'attaboy',
-  shared_at: '2026-07-26T15:00:00Z',
-};
-
-function stubNight(page: import('@playwright/test').Page, rows: unknown[]) {
-  return page.route('**/rest/v1/rpc/get_shared_night', (route) =>
-    route.fulfill({
+/**
+ * The retired RPC, stubbed with a full row. If any code path still reaches it
+ * the call is recorded — and every test below asserts it was never made.
+ */
+function watchRetiredRpc(page: import('@playwright/test').Page): {
+  wasCalled: () => boolean;
+} {
+  let called = false;
+  void page.route('**/rest/v1/rpc/get_shared_night', (route) => {
+    called = true;
+    return route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(rows),
-    }),
-  );
+      body: JSON.stringify([
+        {
+          handle: 'conor_f',
+          display_name: 'Conor F',
+          night: '2026-07-25',
+          bar_ids: ['attaboy', 'death-and-co'],
+          loved_bar_id: 'attaboy',
+          shared_at: '2026-07-26T15:00:00Z',
+        },
+      ]),
+    });
+  });
+  return { wasCalled: () => called };
 }
 
-test.describe('E4.4 shared-night page', () => {
-  test('anonymous visitor sees the night: identity, date, route in order, loved heart, join + share CTAs', async ({
+test.describe('the legacy shared-night route is retired (EC-04)', () => {
+  test('a share link answers not-found and never names the account', async ({
     page,
   }) => {
-    await stubNight(page, [NIGHT_ROW]);
-    await page.goto(`/u/conor_f/night/${TOKEN}`);
+    const rpc = watchRetiredRpc(page);
+    const response = await page.goto(`/u/conor_f/night/${TOKEN}`);
 
-    await expect(
-      page.getByRole('heading', { name: /Conor F's night out/i }),
-    ).toBeVisible();
-    await expect(page.getByText('Saturday, July 25')).toBeVisible();
-    await expect(page.getByText(/@conor_f · 2 stops · loved Attaboy/)).toBeVisible();
+    // 404 is the retirement: not a redirect, not an empty render.
+    expect(response?.status()).toBe(404);
 
-    const rows = page.locator('ol li');
-    await expect(rows).toHaveCount(2);
-    await expect(rows.nth(0)).toContainText('Attaboy');
-    await expect(rows.nth(1)).toContainText('Death & Co');
-
-    // Signed-out recipient: the join CTA leads, and the link can travel
-    // onward.
-    await expect(page.getByRole('link', { name: /Get Next Bar/i })).toHaveAttribute(
-      'href',
-      '/install',
-    );
-    await expect(
-      page.getByRole('button', { name: /Share Conor F's night/i }),
-    ).toBeVisible();
-  });
-
-  test("handle-spoof: someone else's handle in the URL reads as gone, never as theirs", async ({
-    page,
-  }) => {
-    await stubNight(page, [NIGHT_ROW]);
-    await page.goto(`/u/impostor/night/${TOKEN}`);
-    await expect(page.getByText(/This night isn't here/i)).toBeVisible();
+    // The negative that matters. Even with the RPC answering a full row, none
+    // of the private payload it used to publish reaches the page.
     await expect(page.getByText(/Conor F/)).toHaveCount(0);
+    await expect(page.getByText(/@conor_f/)).toHaveCount(0);
+    await expect(page.getByText(/Attaboy/i)).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: /night out/i })).toHaveCount(0);
+
+    // …and the retired read was not called at all.
+    expect(rpc.wasCalled()).toBe(false);
   });
 
-  test('unknown or unshared token: friendly gone state with a forward path (R5)', async ({
+  test('no share-onward control survives on the retired route', async ({
     page,
   }) => {
-    await stubNight(page, []);
+    watchRetiredRpc(page);
     await page.goto(`/u/conor_f/night/${TOKEN}`);
-    await expect(page.getByText(/This night isn't here/i)).toBeVisible();
-    await expect(
-      page.getByRole('link', { name: /Find your next bar/i }),
-    ).toHaveAttribute('href', '/');
+    await expect(page.getByRole('button', { name: /share/i })).toHaveCount(0);
   });
 
-  test('garbage token short-circuits to gone without calling the RPC', async ({
+  test('a garbage token is retired identically — no special-casing left', async ({
     page,
   }) => {
-    let rpcCalled = false;
-    await page.route('**/rest/v1/rpc/get_shared_night', (route) => {
-      rpcCalled = true;
-      return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
-    });
-    await page.goto('/u/conor_f/night/not-a-token');
-    await expect(page.getByText(/This night isn't here/i)).toBeVisible();
-    expect(rpcCalled).toBe(false);
+    const rpc = watchRetiredRpc(page);
+    const response = await page.goto('/u/conor_f/night/not-a-token');
+    expect(response?.status()).toBe(404);
+    expect(rpc.wasCalled()).toBe(false);
   });
 });

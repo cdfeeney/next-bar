@@ -15,7 +15,7 @@ const KEY = 'next-bar:intent:v1';
 // every runner. July is EDT (UTC-4) — NYC wall clock + 4h = the Z value.
 const FRI_10PM = '2026-07-25T02:00:00Z'; // Fri 10pm NYC
 const SAT_1AM = '2026-07-25T05:00:00Z'; // Sat 1am NYC — still Friday night
-const SAT_6AM = '2026-07-25T10:00:00Z'; // Sat 6am NYC — the rollover instant
+const SAT_4AM = '2026-07-25T08:00:00Z'; // Sat 4:00am NYC — the rollover instant
 const SAT_9PM = '2026-07-26T01:00:00Z'; // Sat 9pm NYC
 
 describe('nightOf', () => {
@@ -27,8 +27,10 @@ describe('nightOf', () => {
     expect(nightOf(SAT_1AM)).toBe('2026-07-24');
   });
 
-  it('starts a fresh night at 6am NYC', () => {
-    expect(nightOf(SAT_6AM)).toBe('2026-07-25');
+  it('starts a fresh night at 4:00 AM NYC (V8-R-PRE-005)', () => {
+    expect(nightOf(SAT_4AM)).toBe('2026-07-25');
+    // One minute earlier is still Friday night — the boundary is exact.
+    expect(nightOf('2026-07-25T07:59:00Z')).toBe('2026-07-24');
   });
 });
 
@@ -75,18 +77,22 @@ describe('intent storage', () => {
     expect(loadIntent(new Date(SAT_9PM))).toBeNull();
   });
 
-  it('expires exactly at the 6am NYC boundary mid-session (F5 rollover)', () => {
-    // Set in the small hours, 4:30am NYC (still Friday night)…
+  it('expires exactly at the 4:00 AM NYC boundary mid-session (V8-R-PRE-005)', () => {
+    // Set in the small hours, 2:30am NYC (still Friday night)…
     window.localStorage.setItem(
       KEY,
-      JSON.stringify({ status: 'going', setAt: '2026-07-25T08:30:00Z' }),
+      JSON.stringify({ status: 'going', setAt: '2026-07-25T06:30:00Z' }),
     );
-    // …still visible one second before the rollover (5:59:59am NYC)…
+    // …still visible one second before the rollover (3:59:59am NYC)…
     expect(
-      loadIntent(new Date('2026-07-25T09:59:59Z'))?.status,
+      loadIntent(new Date('2026-07-25T07:59:59Z'))?.status,
     ).toBe('going');
-    // …and gone the moment the clock hits 6am NYC, without any write.
-    expect(loadIntent(new Date('2026-07-25T10:00:00Z'))).toBeNull();
+    // …and gone the moment the clock hits 4:00am NYC, without any write.
+    expect(loadIntent(new Date(SAT_4AM))).toBeNull();
+    // 4:30am and 5:59am are the NEW night too — under the retired 6am rule
+    // both of these still read as Friday's intent.
+    expect(loadIntent(new Date('2026-07-25T08:30:00Z'))).toBeNull();
+    expect(loadIntent(new Date('2026-07-25T09:59:00Z'))).toBeNull();
   });
 
   it('returns null on corrupted or unknown-status storage', () => {
