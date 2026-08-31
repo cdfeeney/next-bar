@@ -149,6 +149,8 @@ test.describe('/friends — Social → Plans invitation cards', () => {
     });
 
     await page.goto('/friends');
+    // V8-1f: invitations live under the Plans sub-tab.
+    await page.getByRole('tab', { name: /^Plans$/i }).click();
     await expect(page.getByTestId('plan-invites')).toBeVisible();
     await expect(page.getByTestId('invite-pending')).toBeVisible();
     await expect(page.getByText(/conor invited you/i)).toBeVisible();
@@ -196,6 +198,8 @@ test.describe('/friends — Social → Plans invitation cards', () => {
     });
 
     await page.goto('/friends');
+    // V8-1f: invitations live under the Plans sub-tab.
+    await page.getByRole('tab', { name: /^Plans$/i }).click();
     const urlBefore = page.url();
     await expect(page.getByTestId('invite-pending')).toBeVisible();
     await page.getByRole('button', { name: 'Accept' }).click();
@@ -208,8 +212,13 @@ test.describe('/friends — Social → Plans invitation cards', () => {
   test('no invitations means no section at all — the Requests idiom', async ({ page }) => {
     await stubFriendsPage(page, []);
     await page.goto('/friends');
-    // The page itself still renders; only the Plans section is absent.
+    // The page itself still renders — Tonight lands first and its people
+    // search is live…
     await expect(page.getByPlaceholder(/search @username/i)).toBeVisible();
+    // …and Plans still renders its own surface. Only the invitations
+    // section is absent. (V8-1f: invitations live under the Plans sub-tab.)
+    await page.getByRole('tab', { name: /^Plans$/i }).click();
+    await expect(page.getByRole('link', { name: /Start a Night Out/i })).toBeVisible();
     await expect(page.getByTestId('plan-invites')).toHaveCount(0);
   });
 });

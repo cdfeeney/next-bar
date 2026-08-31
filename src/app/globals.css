@@ -2,6 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+   LOCKED V8 TOKENS — published for every lane.
+
+   The ONE source of these values is `tailwind.config.ts` (`theme.extend.colors`),
+   which src/lib/paletteContrast.test.ts validates for WCAG AA. Nothing below
+   restates a hex: `theme()` reads the config at build time, so a token edit lands
+   in one place and propagates here.
+
+   Two ways to consume them, both single-sourced — sibling lanes need no new hex:
+     - Tailwind classes:  bg-bg, bg-surface, border-border, text-accent,
+                          text-text, text-muted, hover:bg-accentDim
+                          (opacity modifiers work: bg-bg/95, bg-accent/10)
+     - Raw CSS:           var(--nb-bg), var(--nb-surface), var(--nb-border),
+                          var(--nb-accent), var(--nb-accent-dim), var(--nb-text),
+                          var(--nb-muted)
+   For a translucent value in raw CSS use theme('colors.<name> / <n>%') rather
+   than an rgba() literal — that is what keeps the hex in exactly one file.
+   --------------------------------------------------------------------------- */
+:root {
+  --nb-bg: theme('colors.bg');
+  --nb-surface: theme('colors.surface');
+  --nb-border: theme('colors.border');
+  --nb-accent: theme('colors.accent');
+  --nb-accent-dim: theme('colors.accentDim');
+  --nb-text: theme('colors.text');
+  --nb-muted: theme('colors.muted');
+}
+
 html, body {
   height: 100%;
   max-width: 100%;
@@ -42,11 +70,11 @@ body::before {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(60rem 40rem at 50% -10%, rgba(255, 91, 58, 0.10), transparent 70%),
+    radial-gradient(60rem 40rem at 50% -10%, theme('colors.accent / 10%'), transparent 70%),
     radial-gradient(40rem 30rem at 100% 100%, rgba(122, 92, 255, 0.06), transparent 70%);
 }
 
-.leaflet-container { background: #0a0a0a; }
+.leaflet-container { background: var(--nb-bg); }
 
 /* Leaflet renders the zoom buttons at 30x30 on touch (`.leaflet-touch
    .leaflet-bar a` in leaflet.css) — the eighth member of the control family
@@ -84,14 +112,14 @@ body::before {
 
 /* Visible, on-brand keyboard focus ring (accessibility + polish). */
 :where(a, button, input, [tabindex]):focus-visible {
-  outline: 2px solid #ff5b3a;
+  outline: 2px solid var(--nb-accent);
   outline-offset: 2px;
   border-radius: 4px;
 }
 
 ::selection {
-  background: rgba(255, 91, 58, 0.30);
-  color: #f5f5f0;
+  background: theme('colors.accent / 30%');
+  color: var(--nb-text);
 }
 
 /* Entrance animation — elements rise + fade in on mount. Stagger via an
@@ -108,8 +136,8 @@ body::before {
 
 /* Soft accent glow used to spotlight the top consensus pick. */
 .glow-accent {
-  box-shadow: 0 0 0 1px rgba(255, 91, 58, 0.45),
-    0 8px 40px -8px rgba(255, 91, 58, 0.35);
+  box-shadow: 0 0 0 1px theme('colors.accent / 45%'),
+    0 8px 40px -8px theme('colors.accent / 35%');
 }
 
 @media (prefers-reduced-motion: reduce) {

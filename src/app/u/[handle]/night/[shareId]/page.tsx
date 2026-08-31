@@ -9,6 +9,7 @@ import { getBarById } from '@/lib/catalog';
 import { useBars } from '@/lib/useBars';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { fetchSharedNight, type SharedNight } from '@/lib/nights.server';
+import { demoSharedNight } from '@/lib/demo';
 import { buildNightPath, shareNightText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
@@ -71,6 +72,18 @@ export default function SharedNightPage({
   const urlHandle = decodeURIComponent(params.handle);
 
   useEffect(() => {
+    // Seeded curators have no server row by construction — the same reason
+    // /u/[handle] falls back to the demo catalogue. Their share ids are
+    // prefixed, so this branch can never shadow a real bearer token.
+    const seeded = demoSharedNight(shareId);
+    if (seeded !== null) {
+      setState(
+        seeded.handle.toLowerCase() === urlHandle.toLowerCase()
+          ? { kind: 'ready', night: seeded }
+          : { kind: 'gone' },
+      );
+      return;
+    }
     const supabase = getBrowserSupabase();
     if (!supabase) {
       setState({ kind: 'gone' });

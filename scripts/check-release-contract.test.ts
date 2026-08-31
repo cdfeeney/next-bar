@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
-// A plain .mjs guard, deliberately not TypeScript — its JSDoc now carries the types, so the
-// suppression this line used to hold is no longer needed and TypeScript flags it as unused.
+// The guard is a plain .mjs on purpose. It carries JSDoc types, so this import needs no
+// suppression — an `@ts-expect-error` here is now itself an error (TS2578, unused directive).
 import { checkContract, digestOf } from './check-release-contract.mjs';
 
 // Why this exists: the release-contract guard is the ONLY mechanical enforcement of the
@@ -68,6 +68,11 @@ const listDir = (rel: string) =>
 const cleanLedger = (rows = [goodRow(), goodRow({ requirement_id: 'V8-R-STO-002', title: 'second', sources: ['design:canvas-b'] })]) => ({
   ledger_version: '2.0.0',
   ledger_status: 'draft',
+  // Modelled because the real ledger carries it: `product_bindings` arrived with PB-01..03
+  // alongside the validator support, and only this fixture was left without it. The validator
+  // reads `ledger.product_bindings ?? []`, so [] and absent are the same run — this exists so
+  // the inferred fixture type matches the ledger the guard actually runs against.
+  product_bindings: [] as Array<Record<string, unknown>>,
   release_id: 'V8',
   contract: {
     prd: { path: 'docs/PRD.md', version: 'v1', sha256: shaOf('prd') },
@@ -257,22 +262,6 @@ describe('checkContract', () => {
           },
         },
         ...overrides,
-        // THE CAST CARRIES ONLY A TYPE, NEVER A VALUE. Six cases below assign
-        // product_bindings onto this fixture to break exactly one binding rule each, but the
-        // literal does not declare the field, so TypeScript refused the assignment. The checker
-        // reads it as `ledger.product_bindings ?? []`, so an absent field and an undefined one
-        // are the same to it — declaring the shape here changes nothing at runtime and lets the
-        // cases say what they mean.
-      } as ReturnType<typeof cleanLedger> & {
-        ledger_status: string;
-        last_owner_approval: {
-          approver: string;
-          approved_on: string;
-          contract_version: string;
-          decisions_approved: string[];
-          approved_contract_identity: Record<string, string>;
-        };
-        product_bindings?: Array<Record<string, unknown>>;
       };
     };
 

@@ -51,68 +51,9 @@ export default function TonightSuggestions(): JSX.Element | null {
   const [yourRsvpBarId, setYourRsvpBarId] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const closeRef = useRef<HTMLButtonElement | null>(null);
-  const dialogRef = useRef<HTMLDivElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const night = nycNightKey();
-  // Focus restoration that survives a disabled opener. handlePick batches
-  // setPickerOpen(false) with setBusy(true), so by the time the pickerOpen
-  // cleanup runs, `+ Find a bar` is already disabled={busy} — and focus() on a
-  // disabled button is a silent no-op that drops focus to <body>, breaking the
-  // close-restores-focus contract exactly on the path a user is most likely to
-  // take. Park the element here and finish the restore when busy clears.
-  const pendingFocusRef = useRef<HTMLElement | null>(null);
-
-  // The suggest picker is a full-screen role="dialog": it owes the same
-  // contract as the other overlays — lock the page behind it, and hand focus
-  // back to whatever opened it. preventScroll so focus() cannot override the
-  // scroll position the unlock just restored.
-  useEffect(() => {
-    if (!pickerOpen) return;
-    const opener = document.activeElement as HTMLElement | null;
-    const unlockScroll = lockBodyScroll();
-
-    // Escape must dismiss, and focus must ENTER the dialog. Without both, a
-    // keyboard user is parked on the opener behind an aria-modal overlay with
-    // no way out but hunting for Close — the same contract the other two
-    // overlays already keep. BarPicker has no autoFocus, so move focus here.
-    closeRef.current?.focus({ preventScroll: true });
-
-    function handleKeyDown(event: KeyboardEvent): void {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setPickerOpen(false);
-        return;
-      }
-      // Same Tab cycle the lightbox uses: without it, Tab walks out of an
-      // aria-modal dialog into content it declares nonexistent.
-      cycleFocusWithin(dialogRef.current, event);
-    }
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      unlockScroll();
-      if (!opener) return;
-      if (opener.hasAttribute('disabled')) {
-        pendingFocusRef.current = opener;
-        return;
-      }
-      opener.focus?.({ preventScroll: true });
-    };
-  }, [pickerOpen]);
-
-  // The deferred half of the restore above: once the write settles and the
-  // opener is interactive again, focus finally lands where it was taken from.
-  useEffect(() => {
-    if (busy) return;
-    const pending = pendingFocusRef.current;
-    if (!pending) return;
-    pendingFocusRef.current = null;
-    if (!pending.isConnected || pending.hasAttribute('disabled')) return;
-    pending.focus?.({ preventScroll: true });
-  }, [busy]);
 
   const refresh = useCallback(async () => {
     if (auth.status !== 'signed-in') return;
@@ -326,34 +267,132 @@ export default function TonightSuggestions(): JSX.Element | null {
         </p>
       ) : null}
 
-      {pickerOpen ? (
-        <div
-          ref={dialogRef}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Suggest a bar"
-          className="fixed inset-0 z-[1100] flex flex-col bg-bg/95 backdrop-blur-sm overscroll-contain"
-        >
-          <div className="relative flex flex-1 flex-col max-w-2xl w-full mx-auto px-6 pt-8 pb-8 min-h-0">
-            <header className="flex items-center justify-between gap-3 mb-4">
-              <h2 className="font-display text-2xl leading-tight">
-                Suggest a bar
-              </h2>
-              <button
-                type="button"
-                ref={closeRef}
-                onClick={() => setPickerOpen(false)}
-                className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0"
-              >
-                Close
-              </button>
-            </header>
-            <div className="flex-1 overflow-y-auto min-h-0 scrollbar-none">
-              <BarPicker onPick={(bar) => void handlePick(bar)} />
-            </div>
-          </div>
+      <SuggestBarDialog
+        open={pickerOpen}
+        busy={busy}
+        onClose={() => setPickerOpen(false)}
+        onPick={(bar) => void handlePick(bar)}
+      />
+    </div>
+  );
+}
+
+/**
+ * The full-screen "pick a bar" overlay, shared by the People's Choice board
+ * above and by Social → Tonight's "Pin my spot" (`src/app/friends`). One
+ * implementation, because the overlay contract is the hard part, not the
+ * markup: lock the page behind it, move focus IN, Escape dismisses, Tab
+ * cycles inside, and focus returns to whatever opened it.
+ *
+ * Stays MOUNTED while closed (renders null) on purpose — the deferred focus
+ * restore below has to survive the close, and an unmounted component runs no
+ * effects.
+ */
+export function SuggestBarDialog({
+  open,
+  busy,
+  onClose,
+  onPick,
+}: {
+  open: boolean;
+  /**
+   * The caller's write is in flight, so its opener may be `disabled` right
+   * now. Focus restoration waits for this to clear.
+   */
+  busy: boolean;
+  onClose: () => void;
+  onPick: (bar: Bar) => void;
+}): JSX.Element | null {
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  // Focus restoration that survives a disabled opener. A caller batches the
+  // close with `setBusy(true)`, so by the time the cleanup runs the opener is
+  // already `disabled={busy}` — and focus() on a disabled button is a silent
+  // no-op that drops focus to <body>, breaking the close-restores-focus
+  // contract on the path a user is most likely to take. Park the element here
+  // and finish the restore when busy clears.
+  const pendingFocusRef = useRef<HTMLElement | null>(null);
+  // Latest-callback ref: callers pass an inline arrow, so keeping `onClose` in
+  // the effect deps would re-run the whole open effect on every parent render
+  // — re-capturing the opener as the Close button inside the dialog and
+  // re-locking the page.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    const opener = document.activeElement as HTMLElement | null;
+    const unlockScroll = lockBodyScroll();
+
+    // Escape must dismiss, and focus must ENTER the dialog. Without both, a
+    // keyboard user is parked on the opener behind an aria-modal overlay with
+    // no way out but hunting for Close — the same contract the other two
+    // overlays already keep. BarPicker has no autoFocus, so move focus here.
+    closeRef.current?.focus({ preventScroll: true });
+
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      // Same Tab cycle the lightbox uses: without it, Tab walks out of an
+      // aria-modal dialog into content it declares nonexistent.
+      cycleFocusWithin(dialogRef.current, event);
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      unlockScroll();
+      if (!opener) return;
+      if (opener.hasAttribute('disabled')) {
+        pendingFocusRef.current = opener;
+        return;
+      }
+      opener.focus?.({ preventScroll: true });
+    };
+  }, [open]);
+
+  // The deferred half of the restore above: once the write settles and the
+  // opener is interactive again, focus finally lands where it was taken from.
+  useEffect(() => {
+    if (busy) return;
+    const pending = pendingFocusRef.current;
+    if (!pending) return;
+    pendingFocusRef.current = null;
+    if (!pending.isConnected || pending.hasAttribute('disabled')) return;
+    pending.focus?.({ preventScroll: true });
+  }, [busy]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Suggest a bar"
+      className="fixed inset-0 z-[1100] flex flex-col bg-bg/95 backdrop-blur-sm overscroll-contain"
+    >
+      <div className="relative flex flex-1 flex-col max-w-2xl w-full mx-auto px-6 pt-8 pb-8 min-h-0">
+        <header className="flex items-center justify-between gap-3 mb-4">
+          <h2 className="font-display text-2xl leading-tight">Suggest a bar</h2>
+          <button
+            type="button"
+            ref={closeRef}
+            onClick={onClose}
+            className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0"
+          >
+            Close
+          </button>
+        </header>
+        <div className="flex-1 overflow-y-auto min-h-0 scrollbar-none">
+          <BarPicker onPick={onPick} />
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }
