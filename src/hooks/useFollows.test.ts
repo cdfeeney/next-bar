@@ -113,6 +113,59 @@ describe('useFollows — local (signed-out) mode', () => {
     expect(unfollowByHandleMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * V8-1f regression. A local-mode toggle wrote from `localFollows`, which is
+   * `[]` until the auth effect hydrates it — so a Follow tap that landed while
+   * auth was still resolving persisted a ONE-ENTRY list and silently destroyed
+   * the seeded circle. Caught on iPhone 13 once /friends grew the Stories rail
+   * and Feed: the surface got heavier, the window got wider, and
+   * friends-flow.spec.ts read "1 Following" where it expects 3.
+   */
+  it('a follow tapped before auth resolves keeps the seeded circle instead of replacing it', () => {
+    useAuthMock.mockReturnValue({
+      status: 'loading',
+      user: null,
+      session: null,
+      signOut: vi.fn(),
+    } as never);
+
+    const { result } = renderHook(() => useFollows());
+    // Deliberately NOT waiting for `loading` — this is the unhydrated window.
+    expect(result.current.mode).toBe('pending');
+
+    act(() => result.current.toggleFollow('sasha'));
+
+    const stored = JSON.parse(
+      window.localStorage.getItem(KEY) ?? '[]',
+    ) as string[];
+    expect(stored).toEqual([...DEFAULT_FOLLOWS, 'sasha']);
+  });
+
+  /**
+   * V8-1f. /friends mounts this hook twice — Groups & people writes the
+   * circle, the Stories rail reads it — and a same-tab write fires no
+   * `storage` event, so the rail kept rendering the circle from before the
+   * tap until a reload.
+   */
+  it('a follow in one instance reaches every other instance in the same tab', async () => {
+    const writer = renderHook(() => useFollows());
+    const reader = renderHook(() => useFollows());
+    await waitFor(() => expect(writer.result.current.loading).toBe(false));
+    await waitFor(() => expect(reader.result.current.loading).toBe(false));
+    expect(reader.result.current.isFollowing('sasha')).toBe(false);
+
+    await act(async () => {
+      writer.result.current.toggleFollow('sasha');
+      // The broadcast is a microtask, so the write is settled before it runs.
+      await Promise.resolve();
+    });
+
+    expect(writer.result.current.isFollowing('sasha')).toBe(true);
+    await waitFor(() =>
+      expect(reader.result.current.isFollowing('sasha')).toBe(true),
+    );
+  });
+
   it('recovers the seeded default circle from corrupt storage', async () => {
     window.localStorage.setItem(KEY, '{"not":"an array"}');
     const { result } = renderHook(() => useFollows());

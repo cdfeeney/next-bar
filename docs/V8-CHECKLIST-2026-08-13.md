@@ -10,7 +10,11 @@ Design lock status: the native interaction contract and visual system are locked
 by `docs/design-reference/README.md` and
 `docs/CLAUDE-DESIGN-RECOVERY-2026-08-12.md`. Use exactly
 `Map / Rankings / Next Bar? / Social / Account`; do not create a sixth tab or a
-new visual-direction bakeoff. Exploratory screenshots remain unapproved.
+new visual-direction bakeoff. **Superseded 2026-08-21:** this line previously
+read "Exploratory screenshots remain unapproved." The founder approved the three
+exploratory canvases on 2026-08-21; their captures moved into `approved/`, which
+now holds 16 images, and `exploratory/` is empty. All 16 are implementation
+input. Apple/Google/phone auth is still NOT approved — V8 stays email/password.
 
 ## 1. Image-led interface refresh
 

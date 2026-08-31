@@ -45,10 +45,13 @@ describe('tonightPrompt', () => {
     expect(tonightPrompt(WED_9PM)).toBeNull();
   });
 
-  it('flips the named night exactly at the 6am NYC boundary (F5 rollover)', () => {
-    // 2026-07-24 is a Friday: 5:59am NYC is still Thursday night…
-    expect(tonightPrompt(new Date('2026-07-24T09:59:00Z'))).toMatch(/Thursday/);
-    // …and 6:00am NYC starts Friday.
-    expect(tonightPrompt(new Date('2026-07-24T10:00:00Z'))).toMatch(/Friday/);
+  it('flips the named night exactly at the 4:00 AM NYC boundary (V8-R-PRE-005)', () => {
+    // 2026-07-24 is a Friday: 3:59am NYC is still Thursday night…
+    expect(tonightPrompt(new Date('2026-07-24T07:59:00Z'))).toMatch(/Thursday/);
+    // …and 4:00am NYC starts Friday.
+    expect(tonightPrompt(new Date('2026-07-24T08:00:00Z'))).toMatch(/Friday/);
+    // 5:59am NYC is Friday too — the old 6am rule called it Thursday, which
+    // is exactly the assertion this file used to make.
+    expect(tonightPrompt(new Date('2026-07-24T09:59:00Z'))).toMatch(/Friday/);
   });
 });

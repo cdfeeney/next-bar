@@ -130,3 +130,9 @@ nothing new).
 nb-qa1..5* from the fleet round are now mergeable-cleanup candidates
 (attended). @sam_tests follow-back still pending. Operator errands
 unchanged: Apple enrollment, next-bar.app + DNS + hi@, Brevo rotation.
+
+
+> NOTE 2026-08-28: `apply-one-migration.mts` referenced above no longer exists. It was deleted as a third
+> database write path that trusted a self-classifying secrets file; use `apply-migration-set.ts`, which takes
+> a file list — one file is a list of one. This entry is left as written because it records what
+> was done at the time.

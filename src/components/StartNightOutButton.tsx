@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { nycNightKey } from '@/lib/nightKey';
 import { createNightOut, getNightOut, inviteToNightOut } from '@/lib/nightOuts.server';
+import { useNightOutPlanFields, type PlanEditOutcome } from './NightOutPlanFields';
 
 /**
  * A plan that was CREATED but never opened, parked where a route change cannot
@@ -50,6 +51,66 @@ const STARTED_KEY = 'next-bar:started-night-out:v1';
  */
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * How long the three OPTIONAL planning edits get before the create path stops
+ * waiting on them. They are not the plan — it exists and is complete without
+ * them — so they must never hold the invitations or the owner's route to it.
+ */
+const PLAN_EDIT_BUDGET_MS = 10_000;
+/**
+ * What the owner is told when that budget expires — flagged as UNCERTAIN, not
+ * refused (round-10 round 5, both lanes).
+ *
+ * A write dispatched before the abort can still reach the server and commit, so
+ * "we couldn't save it" is a stronger claim than we are entitled to make: the
+ * plan may well carry the time the owner typed while the screen says it does
+ * not. Both files' comments already promised uncertainty language; the rendered
+ * sentence did not deliver it. This is the separate state that does.
+ */
+const PLAN_EDIT_TIMED_OUT: PlanEditOutcome = { refused: [], nightMoved: null };
+
+/**
+ * Run `start(signal)` with a deadline. On expiry the signal is ABORTED and
+ * `fallback` is returned. Never rejects.
+ *
+ * Aborting is the point (round-10 round 4, Codex). The previous version raced a
+ * promise and walked away, so the work carried on: the owner was told the
+ * planning edits had not saved and the remaining writes then landed anyway,
+ * changing the plan after they had moved on. Stopping the waiting without
+ * stopping the work turns a timeout into a false report.
+ */
+function withBudget<T>(
+  start: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  fallback: T,
+  onExpiry: () => void,
+): Promise<T> {
+  const controller = new AbortController();
+  // THE TIMER IS CANCELLED WHEN THE WORK WINS (round-10 round 6, both lanes).
+  // A race alone leaves the loser running: the edits settled in a second, the
+  // caller then spent longer on the sequential invites and the follow-up read,
+  // and the abandoned timeout fired anyway — reporting a timeout for work that
+  // had already answered, rendering the uncertainty sentence beside a genuine
+  // refusal, and withholding navigation on a create where everything landed.
+  // A budget must stop measuring when the thing it is measuring is done.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    start(controller.signal)
+      .catch(() => fallback)
+      .then((value) => {
+        clearTimeout(timer);
+        return value;
+      }),
+    new Promise<T>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        onExpiry();
+        resolve(fallback);
+      }, ms);
+    }),
+  ]);
+}
 
 /**
  * WHOSE plan, and for WHICH night. Round 2 filed the unscoped version twice.
@@ -411,11 +472,29 @@ export default function StartNightOutButton({
   const [createdPlanId, setCreatedPlanId] = useState<string | null>(null);
   const [inviteFailures, setInviteFailures] = useState(0);
   /**
+   * The planning edits the server declined, and the token of the plan they are
+   * about. Held HERE rather than in the rows hook so that the epoch guard in
+   * `handleStart` gates them like every other async result, and so that they
+   * outlive the navigation that used to destroy them.
+   */
+  const [refusedEdits, setRefusedEdits] = useState<readonly string[]>([]);
+  const [openToken, setOpenToken] = useState<string | null>(null);
+  /** The plan's night, when the rollover moved it out from under the form. */
+  const [nightMoved, setNightMoved] = useState<string | null>(null);
+  /**
+   * The planning edits ran out of time. NOT the same as refused: a write
+   * dispatched before the abort may still have landed, so this gets its own
+   * sentence rather than borrowing the refusal's.
+   */
+  const [editsUncertain, setEditsUncertain] = useState(false);
+  /**
    * Minted once per attempt and REUSED across retries. That is the whole point:
    * a create whose response never arrived may already have made the plan, and
    * without a stable key the retry makes a second one (cold panel, Codex).
    */
   const attemptKey = useRef<string | null>(null);
+  /** The night `attemptKey` was minted for. See the re-mint in `handleStart`. */
+  const attemptNight = useRef<string | null>(null);
   /**
    * Navigation must not fire from an unmounted component (fix round 1, Codex):
    * `handleStart`'s read can settle long after a route change, and pushing then
@@ -455,6 +534,18 @@ export default function StartNightOutButton({
    * is about to succeed and navigate.
    */
   const opening = useRef(false);
+  /**
+   * THIS instance is deliberately HOLDING the plan rather than opening it.
+   *
+   * Set when the create and its read both succeeded and the screen is
+   * explaining why it did not navigate — a failed invite, a night that rolled
+   * over, refused or uncertain plan edits. A ref, not the `openToken` state,
+   * because the tick effect must be able to read it without taking it as a
+   * dependency: re-running that effect on every hold is exactly what this is
+   * preventing. Cleared wherever the held screen is (an account change, and a
+   * retry that navigates).
+   */
+  const holdingOpen = useRef(false);
 
   // Re-arm the recovery affordance instead of the Start button. A plan created
   // in this session but never opened is the one state where offering "Start" is
@@ -488,6 +579,30 @@ export default function StartNightOutButton({
    * of whether the component still exists at all.
    */
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
+  /**
+   * V8-R-NO-002 / NO-003 / NO-005 — the form's When, Area and Voting closes
+   * rows. They own their own state and their own in-row validation; this
+   * component owns the plan they are applied to and the report of what the
+   * server refused. Declared AFTER `userId` because the drafts are scoped to
+   * the account.
+   */
+  const planFields = useNightOutPlanFields({
+    disabled: busy || createdPlanId !== null,
+    hasInvitees: inviteeIds.some((id) => UUID_RE.test(id)),
+    identity: userId,
+  });
+  /**
+   * The LATEST `apply`, readable from inside a long-running `handleStart`.
+   *
+   * Written in a layout effect for the same reason `liveUserId` is: it must be
+   * current against a COMMITTED screen before any external task can observe it,
+   * and a render React throws away must not change what a committed handler
+   * calls.
+   */
+  const applyRef = useRef(planFields.apply);
+  useLayoutEffect(() => {
+    applyRef.current = planFields.apply;
+  }, [planFields.apply]);
   /**
    * The account on screen RIGHT NOW, readable from inside a stale closure.
    *
@@ -548,6 +663,25 @@ export default function StartNightOutButton({
     // attributed to the wrong account, and a direct contradiction of this
     // effect's own stated invariant.
     setError(false);
+    // The planning-edit refusal and the plan it offers to open, for the same
+    // reason and by the same rule (round-10, Claude). While the rows hook owned
+    // this message, this effect could not reach it at all, so account B kept a
+    // claim about account A's night out with nothing able to clear it. Owning
+    // the state here is what makes it clearable, and this is where it is
+    // cleared.
+    setRefusedEdits([]);
+    setOpenToken(null);
+    setNightMoved(null);
+    setEditsUncertain(false);
+    // The hold belonged to the account that is leaving. Clearing the screen
+    // without clearing this would leave the tick effect permanently muted for
+    // whoever signs in next.
+    holdingOpen.current = false;
+    // And the invite-failure count, for exactly the same reason (round-10
+    // round 2, Codex). It was survivable before only because navigation always
+    // followed it; now that a failure HOLDS the screen, an in-place account
+    // switch would leave B looking at A's "one invite didn't send".
+    setInviteFailures(0);
     // `busy` is NOT blindly cleared: an in-flight create belonging to the
     // account still on screen must keep Start disabled, or a sign-out/sign-in
     // round trip re-arms it mid-create and the next tap makes a second plan for
@@ -587,6 +721,22 @@ export default function StartNightOutButton({
     // parked and will report the outcome itself. Re-deriving here would announce
     // a read failure that has not happened.
     if (opening.current) return;
+    /**
+     * ...AND SO IS A HOLD (round-10 round 8, Claude gate).
+     *
+     * `opening` covers the moment BEFORE the outcome is known. A hold is the
+     * moment after: the create succeeded, the follow-up read succeeded, and
+     * this instance deliberately did not navigate because an invite failed, the
+     * night rolled over, or the plan edits were refused or uncertain. The
+     * parked record is left in place on purpose — only the plan page spends it
+     * — so `recallStarted` below still answers, and any cross-tab `STARTED_KEY`
+     * write in ANY tab of the origin routes through `markCreatingChanged` and
+     * re-runs this effect. It then announced "this page couldn't open it" over
+     * a screen that had just explained precisely why it had not: two Open-it
+     * controls and two contradictory sentences, one of them false, because the
+     * read did not fail. A held screen already IS the report.
+     */
+    if (holdingOpen.current) return;
     setBusy(creatingOwners.has(userId));
     const parked = recallStarted(userId);
     if (parked === null || parked.nightKey !== nycNightKey()) return;
@@ -670,6 +820,26 @@ export default function StartNightOutButton({
     };
     setBusy(true);
     setError(false);
+    /**
+     * THE GUEST LIST IS THE ONE FROM THE TAP, deliberately (round-10 round 5,
+     * Codex HIGH; the Claude lane read the same code and ruled tap-time intent
+     * defensible). Start acts on what was on screen when it was pressed, which
+     * is both what a button means and the only deterministic choice —
+     * re-reading the selection as the loop walks it would make the guest list
+     * depend on when each RPC happened to return.
+     *
+     * Captured HERE, once, at the top, because two things downstream need the
+     * same answer: the invitations, and whether the plan has anyone to vote,
+     * which decides the voting deadline. Reading them from different places is
+     * what let a deselect mid-create invite a friend and drop their deadline.
+     *
+     * The remaining mismatch is real and lives elsewhere: the people picker is
+     * rendered by `/friends/consensus`, which this lane does not own, and it
+     * stays enabled while the create is in flight, so the screen can show a
+     * selection the plan does not have. Disabling it while `busy` is the fix
+     * and belongs to that page's owner.
+     */
+    const invitedAtTap = inviteeIds;
     try {
       // ONE reading of the clock for this whole attempt (cycle 1, Codex). The
       // night key was read again when parking, so a 6am NYC rollover landing
@@ -680,7 +850,20 @@ export default function StartNightOutButton({
       // Minted once per attempt and REUSED across retries: a create whose
       // response never arrived may already have made the plan, and without a
       // stable key the retry makes a second one (cold panel, Codex).
-      if (attemptKey.current === null) attemptKey.current = crypto.randomUUID();
+      //
+      // BUT IT EXPIRES WITH THE NIGHT (round-10 panel round 2, Claude). 0054's
+      // lookup matches on (owner_id, idempotency_key) with NO night column, so
+      // a key held across the 4:00 AM rollover makes tonight's Start return
+      // LAST night's plan: a create whose response was lost leaves the key
+      // behind with nothing parked, and the next night the same tab replays it,
+      // sends tonight's invitees to yesterday's plan and navigates the owner
+      // there. Re-minting on a night change is the client half of that fix and
+      // costs nothing — the key only ever needs to be stable within one attempt
+      // and its retries, and those never span a rollover.
+      if (attemptKey.current === null || attemptNight.current !== nightKey) {
+        attemptKey.current = crypto.randomUUID();
+        attemptNight.current = nightKey;
+      }
       const planId = await createNightOut(supabase, nightKey, undefined, attemptKey.current);
       if (owner !== liveUserId.current) {
         // A different account is on screen. The plan (if any) still belongs to
@@ -712,12 +895,80 @@ export default function StartNightOutButton({
       opening.current = true;
       settleCreate();
 
+      // The three owner edits, applied to the plan that now exists — the rows
+      // are on the CREATION form (the ledger's own entry point for all three)
+      // but the RPCs take a plan id, so they can only run here. They never
+      // block CREATING the plan: every one of them has a server-side default,
+      // so the plan is real and complete whatever they answer.
+      //
+      // The refusals are RETURNED and held here, not painted by the hook. That
+      // is the epoch guard: `apply` is an await like every other one in this
+      // function, and the account can change under it, so the check below is
+      // what stops account A's refusal from being rendered into account B's
+      // view (round-10 panel, Claude). Whether they also stop the navigation is
+      // decided after the invites, once there is a plan to offer instead.
+      //
+      // AND IT IS TIME-BOUNDED (round-10 round 2, Codex). These edits are
+      // OPTIONAL — the plan is complete without them — so an RPC that never
+      // settles must not be able to hold the invitations and the owner's route
+      // to a plan that already exists. A create or a read that hangs is a
+      // different case: those are the plan itself. On expiry the edits are
+      // reported as not landed, which is true: we do not know that they did,
+      // and a late settle can no longer paint anything because `apply` returns
+      // its answer instead of rendering it.
+      let editsTimedOut = false;
+      const planEdits = await withBudget(
+        // `applyRef`, not the `apply` this closure captured (round-10 round 4,
+        // Codex). `handleStart` runs across several awaits, and the rows can
+        // re-render underneath it — most concretely when `fetchMyPresence`
+        // resolves mid-create and seeds the Area from the bar you pinned
+        // tonight. The captured callback would then write the values the form
+        // had when Start was TAPPED while the screen shows the ones it has now,
+        // creating a plan with no area and saying nothing. Reading the ref at
+        // invocation takes the rows as they actually stand.
+        //
+        // `nightKey` is the ONE reading of the clock this attempt used, and the
+        // rows compare their displayed night against it — see `nightMoved`.
+        // `invitedAtTap` is the SAME list the invite loop below walks, so the
+        // deadline row and the invitations can no longer disagree about whether
+        // this plan has anyone to vote (round-10 round 6, Codex).
+        (signal) =>
+          applyRef.current(
+            supabase,
+            planId,
+            nightKey,
+            invitedAtTap.some((id) => UUID_RE.test(id)),
+            signal,
+          ),
+        PLAN_EDIT_BUDGET_MS,
+        PLAN_EDIT_TIMED_OUT,
+        () => {
+          editsTimedOut = true;
+        },
+      );
+      const refusedEdits = planEdits.refused;
+      if (owner !== liveUserId.current) return;
+
       // Invitations are sent AFTER the plan exists and BEFORE navigating, so the
       // owner learns here if some did not land. A failed invite never blocks
       // reaching the plan — the plan is real either way — but it is never silent
       // either: an invitation nobody sent and nobody mentioned is the whole
       // defect this wiring exists to fix.
-      const accounts = inviteeIds.filter((id) => UUID_RE.test(id));
+      //
+      // THE GUEST LIST IS THE ONE FROM THE TAP, deliberately (round-10 round 5,
+      // Codex HIGH; the Claude lane read the same code and ruled tap-time
+      // intent defensible). Start acts on what was on screen when it was
+      // pressed, which is both what a button means and the only deterministic
+      // choice — re-reading the selection as the loop walks it would make the
+      // guest list depend on when each RPC happened to return.
+      //
+      // The mismatch Codex names is real but lives elsewhere: the people picker
+      // is rendered by `/friends/consensus`, which this lane does not own, and
+      // it stays enabled while the create is in flight, so the screen can show
+      // a selection the plan does not have. Disabling it while `busy` is the
+      // fix, and it belongs to that page's owner. Snapshotting here at least
+      // makes the semantic explicit rather than an accident of closure capture.
+      const accounts = invitedAtTap.filter((id) => UUID_RE.test(id));
       let failed = 0;
       for (const id of accounts) {
         // Sequential on purpose: invite_to_night_out serialises on a per-plan
@@ -734,9 +985,49 @@ export default function StartNightOutButton({
         // it fired at park time, and this instance was skipping it.
         setBusy(false);
         setReadFailed(true);
+        // THE REFUSALS COME WITH US DOWN THIS BRANCH TOO (round-10 round 2,
+        // Claude). They used to be dropped here: the read failed, `readFailed`
+        // was set, and the edits that did not land were discarded, so a later
+        // successful `retryOpen` navigated with nothing ever having said so.
+        // The recovery panel below renders both.
+        setRefusedEdits(refusedEdits);
+        setNightMoved(planEdits.nightMoved);
+        setEditsUncertain(editsTimedOut);
         return;
       }
       if (!mounted.current) return;
+      // ANYTHING THAT DID NOT LAND STOPS THE NAVIGATION, because navigating IS
+      // how these reports were lost (round-10 panel, all three lanes). The old
+      // shape painted "we couldn't save the time" — and, separately, "one invite
+      // didn't send" — and then pushed a route one tick later, so each message
+      // existed for a sub-second window. The refusal's advice, "open the plan
+      // and try again", also named a screen with no When/Area/deadline editors,
+      // because this form is the only caller of those three RPCs in `src`.
+      //
+      // Both kinds are held together rather than separately: they are the same
+      // sentence to the owner — the night out exists, this part of it did not
+      // land — and holding one while letting the other navigate would just move
+      // the defect. Start is already disabled by `createdPlanId`, so this
+      // cannot become a second plan, and Open it goes to the real plan.
+      // A rollover that landed between the form's last render and this tap is
+      // held for the same reason: the owner was shown one night and the plan is
+      // for another, and that is not something to discover on the plan page.
+      if (
+        refusedEdits.length > 0
+        || failed > 0
+        || planEdits.nightMoved !== null
+        || editsTimedOut
+      ) {
+        setBusy(false);
+        setRefusedEdits(refusedEdits);
+        setNightMoved(planEdits.nightMoved);
+        setEditsUncertain(editsTimedOut);
+        setOpenToken(plan.shareToken);
+        // See `holdingOpen`: from here the parked record is left deliberately,
+        // and the create-settled tick must not read it as a failed open.
+        holdingOpen.current = true;
+        return;
+      }
       // NOT cleared here — see `forgetStartedNightOut`.
       router.push(`/night-out/${plan.shareToken}`);
     } finally {
@@ -751,6 +1042,7 @@ export default function StartNightOutButton({
 
   return (
     <div className="mt-4 text-center">
+      {planFields.fields}
       <button
         type="button"
         onClick={() => void handleStart()}
@@ -773,6 +1065,52 @@ export default function StartNightOutButton({
             ? "One invite didn't send — you can share the link instead."
             : `${inviteFailures} invites didn't send — you can share the link instead.`}
         </p>
+      ) : null}
+      {/* Rendered whenever there are refusals, WITH or WITHOUT a token. The
+          read-failure branch has no token — the recovery panel below owns
+          "Open it" there — but the edits that did not land still have to be
+          said, and dropping them was its own finding. */}
+      {refusedEdits.length > 0 ? (
+        <div className="mt-2" data-testid="plan-fields-refused">
+          <p className="text-sm text-red-400" role="status">
+            Your night out was created, but we couldn&apos;t save{' '}
+            {refusedEdits.join(' or ')}.
+          </p>
+          {openToken !== null ? (
+            <button
+              type="button"
+              onClick={() => router.push(`/night-out/${openToken}`)}
+              className="mt-2 rounded-full border px-5 py-2 text-sm"
+            >
+              Open it
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {editsUncertain ? (
+        <p className="mt-2 text-sm text-red-400" role="status" data-testid="plan-edits-uncertain">
+          Your night out was created, but the details you set took too long to
+          answer — open it to see whether they saved.
+        </p>
+      ) : null}
+      {nightMoved !== null ? (
+        <p className="mt-2 text-sm text-red-400" role="status" data-testid="night-moved">
+          It just turned into a new night — your night out is for {nightMoved} at
+          9:00 PM, not the night the form was showing.
+        </p>
+      ) : null}
+      {/* An invite failure or a rollover with no refusal alongside it also holds
+          the screen now, so each needs the same way onward. */}
+      {refusedEdits.length === 0
+      && (inviteFailures > 0 || nightMoved !== null || editsUncertain)
+      && openToken !== null ? (
+        <button
+          type="button"
+          onClick={() => router.push(`/night-out/${openToken}`)}
+          className="mt-2 rounded-full border px-5 py-2 text-sm"
+        >
+          Open it
+        </button>
       ) : null}
       {readFailed ? (
         <div className="mt-2">

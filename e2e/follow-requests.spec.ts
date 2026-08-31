@@ -504,3 +504,165 @@ test.describe('/friends — friends list (B3c)', () => {
     await expect(page.getByText(/12 followers/)).toBeVisible();
   });
 });
+
+/**
+ * V8-1 criteria 11 + 19 — the signed-in half of the approved Social surface
+ * (`docs/design-reference/approved/next-bar-social-v2-core.png`), against the
+ * same stubbed graph as the blocks above. Two round-1 findings are pinned
+ * here so they cannot drift back: the sub-44px search rows, and the suggest
+ * dialog's overlay contract.
+ */
+test.describe('/friends — the approved Social surface, signed in', () => {
+  test.beforeEach(async ({ page }) => {
+    test.skip(
+      SUPABASE_URL === null,
+      'NEXT_PUBLIC_SUPABASE_URL not found in .env.local',
+    );
+    await signIn(page);
+  });
+
+  const SAM: ProfileRow = {
+    id: REQUESTER_ID,
+    handle: 'sam_j',
+    display_name: 'Sam J.',
+  };
+
+  async function stubRpc(
+    page: Page,
+    fn: string,
+    rows: ReadonlyArray<Record<string, unknown>>,
+  ): Promise<void> {
+    // Registered AFTER stubSupabase so it wins the catch-all.
+    await page.route(`**/rest/v1/rpc/${fn}`, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(rows),
+      }),
+    );
+  }
+
+  test('Out tonight leads with the bar, names who, and spells the state out', async ({
+    page,
+  }) => {
+    await stubSupabase(page, { following: [SAM] });
+    // `get_circle_presence`, not `get_circle_suggestions`: the WP1 merge
+    // (7c6b085) settled that Social → Tonight reads presence. Suggestions kept
+    // its own source, and the test below still uses it on the board that reads
+    // it.
+    await stubRpc(page, 'get_circle_presence', [
+      {
+        user_id: REQUESTER_ID,
+        handle: 'sam_j',
+        display_name: 'Sam J.',
+        status: 'going',
+        bar_id: 'attaboy',
+        updated_at: '2026-08-24T02:00:00Z',
+      },
+    ]);
+    await page.goto('/friends');
+
+    const tonight = page.getByTestId('social-tonight');
+    const row = tonight.getByRole('listitem').filter({ hasText: 'Sam J.' });
+    await expect(row).toHaveCount(1);
+    // Bar first, then the person — presence describes a place someone backed,
+    // never a person tagged with a venue they did not claim.
+    await expect(row.getByText('Attaboy')).toBeVisible();
+    // Never state by color alone — the pinned state is also a word.
+    await expect(row.getByText(/Pinned/i)).toBeVisible();
+  });
+
+  test('the bar picker opens, Escape closes it, focus comes back', async ({
+    page,
+  }) => {
+    await stubSupabase(page, { following: [SAM] });
+    await stubRpc(page, 'get_circle_suggestions', []);
+    // The dialog's opener moved with its owner. `Pin my spot` was the accent
+    // CTA on the suggestions-backed Tonight strip the WP1 merge retired;
+    // SuggestBarDialog itself survived, and its one remaining opener is
+    // `+ Find a bar` on the People's Choice board. Kept rather than deleted
+    // because this is the only test that covers the overlay focus contract —
+    // focus enters the dialog and comes back on close.
+    await page.goto('/friends/consensus');
+
+    const pin = page.getByRole('button', { name: /^\+ Find a bar$/ });
+    // KEYBOARD, not a tap. WebKit does not focus a button on touch, so a
+    // tap-opened dialog has nothing to restore focus TO — measured here on
+    // iPhone 13, and already the settled position for the sibling overlays
+    // (see native-shell-contract.spec.ts's lightbox focus-restore test).
+    // Focus restoration is a keyboard contract.
+    await pin.press('Enter');
+
+    const dialog = page.getByRole('dialog', { name: /Suggest a bar/i });
+    await expect(dialog).toBeVisible();
+
+    /**
+     * `document.activeElement`, not `toBeFocused`. The matcher additionally
+     * requires the DOCUMENT to be the active one, and under a headless
+     * three-worker gate it reports `inactive` for an element that genuinely
+     * IS `activeElement` — the artifact CLAUDE.md records against
+     * native-shell-contract.spec.ts's lightbox focus-restore assertion.
+     * Reading activeElement directly asserts the contract this test is about
+     * (focus enters the dialog, and comes back on close) without depending on
+     * which window the OS decided to activate.
+     */
+    const activeLabel = (): Promise<string | null> =>
+      page.evaluate(() => {
+        const el = document.activeElement as HTMLElement | null;
+        if (!el) return null;
+        return el.getAttribute('aria-label') ?? el.textContent?.trim() ?? null;
+      });
+
+    // Focus must ENTER the dialog, or a keyboard user is parked behind an
+    // aria-modal overlay with no way out.
+    await expect.poll(activeLabel).toBe('Close');
+
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(activeLabel).toBe('+ Find a bar');
+  });
+
+  test('signed-in search rows clear the 44px target floor', async ({ page }) => {
+    await stubSupabase(page, {
+      following: [],
+      searchResults: [{ handle: 'sam_j', display_name: 'Sam J.' }],
+      profileByHandle: [SAM],
+    });
+    await page.goto('/friends');
+
+    const search = page.getByPlaceholder(/search @username/i);
+    await search.click();
+    await search.pressSequentially('sam');
+
+    const profileLink = page.getByRole('link', { name: /Sam J\./ });
+    await expect(profileLink).toBeVisible();
+    const box = await profileLink.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+  });
+
+  test('a pending request is counted on the Groups & people control', async ({
+    page,
+  }) => {
+    await stubSupabase(page, {
+      following: [],
+      incomingRequests: [
+        {
+          id: REQUESTER_ID,
+          handle: 'sam_j',
+          display_name: 'Sam J.',
+          requested_at: '2026-07-25T01:00:00.000Z',
+        },
+      ],
+    });
+    await page.goto('/friends');
+
+    // V8-1f: the control became a button — the section it targets lives on
+    // the Tonight sub-tab and has to be selected before it can be scrolled to.
+    const control = page.getByRole('button', { name: /Groups & people/i });
+    await expect(control).toBeVisible();
+    await expect(control).toContainText('1');
+    // Consent is never hidden behind the jump: the inbox itself is on-page.
+    await expect(page.getByText(/Requests · 1/)).toBeVisible();
+  });
+});

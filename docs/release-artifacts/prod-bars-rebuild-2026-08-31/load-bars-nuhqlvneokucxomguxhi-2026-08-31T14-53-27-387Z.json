@@ -1,0 +1,15 @@
+{
+  "tool": "scripts/db-load-bars.mts",
+  "ran_at": "2026-08-31T14:53:27.387Z",
+  "target_ref": "nuhqlvneokucxomguxhi",
+  "target_label": "production",
+  "payload_path": "C:\\Users\\cdfee\\AppData\\Local\\Temp\\phase-d-curated-payload.json",
+  "payload_sha256": "d47819f8a2e2d2d10cf4ddfbbc97014d14b1398fd3148f2b71ae0a9473a1e076",
+  "payload_rows": 1255,
+  "planned": 851,
+  "skipped_already_present": 404,
+  "inserted": 851,
+  "bars_before": 1256,
+  "bars_after": 2107,
+  "ledger_head": "0074_waitlist_reconcile.sql"
+}

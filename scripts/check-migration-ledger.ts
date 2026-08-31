@@ -29,6 +29,7 @@ import { config as loadEnv } from 'dotenv';
 import { readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Client } from 'pg';
+import { readClassification } from './lib/classification';
 import {
   describeUnappliable, findMisnamed, findUnappliable, findUnconventionalRows, ledgerHead,
 } from './migration-ledger-guard';
@@ -110,12 +111,23 @@ async function main(): Promise<void> {
   // default (.env.example leaves it blank) and on a CI repo whose variable has
   // not been created yet — leaving criterion 6 as label-only, which is exactly
   // the "a word someone typed" it exists to distrust.
-  const productionRef = process.env.NEXT_BAR_PRODUCTION_PROJECT_REF ?? '';
-  if (!productionRef) {
-    cannotVerify(
-      'NEXT_BAR_PRODUCTION_PROJECT_REF is not set, so the target cannot be proven not to be '
-      + 'production and this guard will not connect on the strength of a label alone.',
-    );
+  // ...and from the .env.local FILE through the shared reader, never process.env: same rule as
+  // every other entry point. It additionally refuses a malformed or double-listed declaration —
+  // a ref that cannot be a ref proves nothing about the target it was written to exclude.
+  let productionRef: string;
+  let stagingRefs: string[];
+  let developmentRefs: string[];
+  try {
+    // ALL THREE LISTS, one read, from the FILE. Round 4 (MEDIUM): only the production ref came
+    // from here, while the staging list was still taken from process.env a few lines down — so an
+    // exported NEXT_BAR_STAGING_PROJECT_REFS could classify a project the operator's file never
+    // mentions, and this guard would connect to it. Half a fix reads exactly like a whole one.
+    const classification = readClassification();
+    productionRef = classification.productionRef as string;
+    stagingRefs = classification.stagingRefs;
+    developmentRefs = classification.developmentRefs ?? [];
+  } catch (error) {
+    cannotVerify(error instanceof Error ? error.message : String(error));
   }
 
   // pg's own resolution, not the URL authority — query parameters override the
@@ -153,9 +165,11 @@ async function main(): Promise<void> {
   // the check: "not production" only rules out the one ref we can name, while an
   // allowlist also excludes any third project nobody meant to touch. Optional,
   // exactly as it is there: unset means there is no allowlist to check against.
-  const stagingRefs = (process.env.NEXT_BAR_STAGING_PROJECT_REFS ?? '')
-    .split(',').map((value) => value.trim()).filter(Boolean);
-  if (stagingRefs.length > 0 && !refs.some((value) => stagingRefs.includes(value))) {
+  //
+  // FROM THE FILE, read once above with the production ref. It used to come from process.env
+  // here, so an exported staging list could admit a project the operator never classified.
+  const allowed = [...stagingRefs, ...developmentRefs];
+  if (allowed.length > 0 && !refs.some((value) => allowed.includes(value))) {
     cannotVerify(
       `DATABASE_URL's project ref is not in NEXT_BAR_STAGING_PROJECT_REFS (env `
       + `${JSON.stringify(environment)}).`,
