@@ -32,6 +32,20 @@ export const AGE_ACK_KEY = 'next-bar:age-ack:v1';
 export const AGE_STEP_PATH = '/onboarding/age';
 
 /**
+ * Where an under-21 visitor is sent when they close the exit: the marketing
+ * landing, not the app.
+ *
+ * THE OVERLAY HAS TO STAND DOWN HERE TOO, and that is why the constant lives
+ * beside `AGE_STEP_PATH` rather than privately in the exit screen. The exit
+ * WITHDRAWS the device ack (`clearAgeAck`) and then leaves, so the device
+ * arrives at this route unacknowledged — and an overlay that covers every
+ * unacknowledged route covered the destination with the same 21+ dialog,
+ * whose "I'm under 21" pushed straight back to the exit. The terminal screen
+ * was a loop. One under-21 answer, one exit, one place it lands.
+ */
+export const AGE_EXIT_PATH = '/install';
+
+/**
  * Has this device already confirmed 21+?
  *
  * Storage being unavailable (private mode) reads as NOT acknowledged: fail

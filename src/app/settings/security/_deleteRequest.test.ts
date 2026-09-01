@@ -84,3 +84,31 @@ describe('requestAccountDeletionOutcome', () => {
     expect(await requestAccountDeletionOutcome('t')).toBe('unknown');
   });
 });
+
+describe('retrying after an attempt that ended unknown', () => {
+  test('stops calling unauthorized a refusal — the token may name a deleted user', async () => {
+    // The route emits `unauthorized` when getUser(token) fails, which is
+    // exactly what a token belonging to an ALREADY-DELETED user does. On a
+    // retry the code no longer distinguishes "refused before deleting" from
+    // "the first attempt worked", so the screen must not print "nothing was
+    // removed" about an account that is gone.
+    respond(401, { ok: false, error: 'unauthorized' });
+
+    expect(await requestAccountDeletionOutcome('t', true)).toBe('unknown');
+  });
+
+  test.each(['rate_limited', 'unavailable'])(
+    'still reports %s as a certain refusal — a deleted account cannot cause it',
+    async (error) => {
+      respond(429, { ok: false, error });
+
+      expect(await requestAccountDeletionOutcome('t', true)).toBe('refused');
+    },
+  );
+
+  test('a confirmed deletion on the retry is still a deletion', async () => {
+    respond(200, { ok: true });
+
+    expect(await requestAccountDeletionOutcome('t', true)).toBe('deleted');
+  });
+});

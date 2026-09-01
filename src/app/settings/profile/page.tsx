@@ -49,11 +49,25 @@ const HANDLE_NUDGE_DISMISSED_KEY = 'next-bar:handle-nudge-dismissed:v1';
  * and own their own Save buttons, but neither reports it upward and both live
  * in `src/components/`, outside this lane's write scope. Adding an
  * `onDirtyChange` prop is the right shape and is the first thing to do when
- * those files are assignable. Until then the wrapper below listens for the
+ * those files are assignable. Until then the wrappers below listen for the
  * `input` events they bubble, which is a strict over-approximation: typing and
  * then retyping the original value still counts as dirty. That errs toward
  * asking, and "Keep editing" is the default answer, so the cost of the
  * over-approximation is one extra tap and never a lost edit.
+ *
+ * ONE FLAG PER EDITOR, NOT ONE FOR THE PAGE. A single page-level flag was
+ * observed by both review lanes to be a lost edit: it was set by input from
+ * EITHER editor and cleared by a save from either, so typing a display name
+ * and a username, then saving only the name, disarmed the guard while the
+ * username draft was still on screen. Back then left silently. Each editor now
+ * has its own wrapper and its own flag; the page is dirty while ANY of them
+ * is, and a save clears only the one that saved.
+ *
+ * AND EVERY EXIT IS GUARDED, not just the back arrow. The Vibe profile row
+ * navigates to `/quiz` from inside the form, and as a plain link it walked off
+ * the screen with unsaved text and no prompt — the guard was not weak there,
+ * it was absent. `guardExit` is one function and every way off this screen
+ * calls it, so a new row cannot quietly reintroduce an unguarded exit.
  *
  * THE "FIXED SAVE CHANGES" HALF OF ACC-006 IS NOT BUILT, and this is the note
  * saying so rather than a comment implying it is. The requirement also asks
@@ -63,28 +77,36 @@ const HANDLE_NUDGE_DISMISSED_KEY = 'next-bar:handle-nudge-dismissed:v1';
  * saves only one of the two fields is a control that lies. It arrives with the
  * change that can touch those components.
  */
+const SETTINGS_HOME = '/settings/preferences';
+
 export default function EditProfilePage(): JSX.Element {
   const auth = useAuth();
   const profile = useOwnProfile();
-  const [dirty, setDirty] = useState(false);
-  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const [nameDirty, setNameDirty] = useState(false);
+  const [handleDirty, setHandleDirty] = useState(false);
+  /** Where the intercepted tap was heading, so Discard finishes that trip
+   *  rather than always falling back to the settings list. */
+  const [pendingExit, setPendingExit] = useState<string | null>(null);
+
+  const dirty = nameDirty || handleDirty;
+
+  /** The one gate every exit from this screen passes through. Returns whether
+   *  the navigation may proceed. */
+  const guardExit = (href: string): boolean => {
+    if (!dirty) return true;
+    setPendingExit(href);
+    return false;
+  };
 
   return (
     <main className="min-h-screen">
       <StackHeader
         title="Edit profile"
-        backHref="/settings/preferences"
-        onBack={() => {
-          if (!dirty) return true;
-          setConfirmingDiscard(true);
-          return false;
-        }}
+        backHref={SETTINGS_HOME}
+        onBack={() => guardExit(SETTINGS_HOME)}
       />
 
-      <div
-        onInput={() => setDirty(true)}
-        className="max-w-md mx-auto px-4 py-5 space-y-6 pb-[max(2rem,env(safe-area-inset-bottom))]"
-      >
+      <div className="max-w-md mx-auto px-4 py-5 space-y-6 pb-[max(2rem,env(safe-area-inset-bottom))]">
         {auth.status === 'signed-in' ? (
           <>
             <Group label="Photo">
@@ -95,43 +117,47 @@ export default function EditProfilePage(): JSX.Element {
               />
             </Group>
 
-            <Group label="Display name">
-              <SlotRow>
-                {profile.known ? (
-                  <DisplayNameEditor
-                    userId={auth.user.id}
-                    initialName={profile.displayName}
-                    onSaved={(name) => {
-                      profile.setDisplayName(name);
-                      setDirty(false);
-                    }}
-                  />
-                ) : (
-                  <p className="text-muted text-sm">Loading…</p>
-                )}
-              </SlotRow>
-            </Group>
+            <div onInput={() => setNameDirty(true)}>
+              <Group label="Display name">
+                <SlotRow>
+                  {profile.known ? (
+                    <DisplayNameEditor
+                      userId={auth.user.id}
+                      initialName={profile.displayName}
+                      onSaved={(name) => {
+                        profile.setDisplayName(name);
+                        setNameDirty(false);
+                      }}
+                    />
+                  ) : (
+                    <p className="text-muted text-sm">Loading…</p>
+                  )}
+                </SlotRow>
+              </Group>
+            </div>
 
-            <UsernameGroup
-              known={profile.known}
-              handle={profile.handle}
-              onClaimed={(handle) => {
-                profile.setHandle(handle);
-                setDirty(false);
-              }}
-            />
+            <div onInput={() => setHandleDirty(true)}>
+              <UsernameGroup
+                known={profile.known}
+                handle={profile.handle}
+                onClaimed={(handle) => {
+                  profile.setHandle(handle);
+                  setHandleDirty(false);
+                }}
+              />
+            </div>
           </>
         ) : (
           <SignedOutProfileGroup />
         )}
 
-        <VibeProfileGroup />
+        <VibeProfileGroup onNavigate={guardExit} />
       </div>
 
-      {confirmingDiscard ? (
+      {pendingExit ? (
         <DiscardChangesDialog
-          onKeepEditing={() => setConfirmingDiscard(false)}
-          backHref="/settings/preferences"
+          onKeepEditing={() => setPendingExit(null)}
+          backHref={pendingExit}
         />
       ) : null}
     </main>
@@ -276,12 +302,27 @@ function SignedOutProfileGroup(): JSX.Element {
   );
 }
 
-/** Quiz-derived, never hand-edited: view, retake, or clear (V8-R-ACC-004). */
-function VibeProfileGroup(): JSX.Element {
-  const [hasVibeProfile, setHasVibeProfile] = useState(false);
+/**
+ * Quiz-derived, never hand-edited: VIEW, retake, or clear (V8-R-ACC-004).
+ *
+ * "View or retake" is the requirement's own title, and the view half was
+ * missing: the row said only "Your quiz answers are saved" and its one link
+ * started a NEW quiz. The saved profile — archetype, tags, neighborhoods —
+ * was on the device the whole time and unreachable, so the footnote promised
+ * a view the screen did not have. It reads that profile out now.
+ *
+ * Still no text field: the profile is DERIVED, and the only way to change it
+ * is to answer the questions again. That is the exclusion the ledger states.
+ */
+function VibeProfileGroup({
+  onNavigate,
+}: {
+  onNavigate: (href: string) => boolean;
+}): JSX.Element {
+  const [vibe, setVibe] = useState<ReturnType<typeof loadProfile>>(null);
 
   useEffect(() => {
-    setHasVibeProfile(loadProfile() !== null);
+    setVibe(loadProfile());
   }, []);
 
   const handleClear = () => {
@@ -292,7 +333,7 @@ function VibeProfileGroup(): JSX.Element {
     )
       return;
     clearProfile();
-    setHasVibeProfile(false);
+    setVibe(null);
   };
 
   return (
@@ -300,18 +341,34 @@ function VibeProfileGroup(): JSX.Element {
       label="Vibe profile"
       footnote="Your vibe profile is derived from the quiz. View or retake the quiz — it is not rewritten by hand here."
     >
-      <SlotRow>
-        <p className="text-sm">
-          {hasVibeProfile
-            ? 'Your quiz answers are saved.'
-            : 'No vibe profile yet.'}
-        </p>
-      </SlotRow>
+      {vibe ? (
+        <SlotRow>
+          <p className="font-display text-lg">{vibe.archetype}</p>
+          {vibe.tags.length > 0 ? (
+            <p className="text-sm text-muted leading-relaxed">
+              {vibe.tags.join(' · ')}
+            </p>
+          ) : null}
+          {vibe.preferredNeighborhoods.length > 0 ? (
+            <p className="text-xs text-muted leading-relaxed">
+              Neighborhoods: {vibe.preferredNeighborhoods.join(', ')}
+            </p>
+          ) : null}
+          <p className="text-xs text-muted">
+            Saved {new Date(vibe.savedAt).toLocaleDateString()}
+          </p>
+        </SlotRow>
+      ) : (
+        <SlotRow>
+          <p className="text-sm">No vibe profile yet.</p>
+        </SlotRow>
+      )}
       <LinkRow
         href="/quiz"
-        label={hasVibeProfile ? 'Retake the quiz' : 'Take the quiz'}
+        label={vibe ? 'Retake the quiz' : 'Take the quiz'}
+        onNavigate={() => onNavigate('/quiz')}
       />
-      {hasVibeProfile ? (
+      {vibe ? (
         <SlotRow>
           <button
             type="button"

@@ -43,11 +43,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { signOutAndRevokePush } from '@/app/settings/_signOut';
-import { clearAgeAck, readAgeAck, writeAgeAck } from '../_ageAck';
+import { AGE_EXIT_PATH, clearAgeAck, readAgeAck, writeAgeAck } from '../_ageAck';
 import { LOCATION_STEP, returnDestination, stepHref } from '../_sequence';
-
-/** Where an under-21 visitor is sent: the marketing landing, not the app. */
-const EXIT_PATH = '/install';
 
 /** The next step, carrying the destination the sequence must end on. */
 function nextStep(): string {
@@ -261,7 +258,7 @@ export default function OnboardingAgePage(): JSX.Element | null {
           </p>
           <button
             type="button"
-            onClick={() => router.push(EXIT_PATH)}
+            onClick={() => router.push(AGE_EXIT_PATH)}
             className="w-full mt-4 bg-surface border border-border font-display text-base py-3 rounded-full min-h-[44px] touch-manipulation"
           >
             Close

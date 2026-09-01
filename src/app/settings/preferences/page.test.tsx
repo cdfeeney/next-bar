@@ -78,14 +78,19 @@ describe('V8-R-ACC-005 — Settings is a grouped list with five sections', () =>
       .getAllByRole('heading', { level: 2 })
       .map((h) => h.textContent);
 
-    expect(headings.slice(0, 5)).toEqual([
+    // The WHOLE list, not a prefix and a suffix. Checking `slice(0, 5)` and
+    // the last entry left the middle unguarded, and a sixth primary "App"
+    // section sat there unnoticed — precisely the "section quietly added"
+    // failure this assertion exists to catch, one position over from the
+    // "quietly dropped" one it did catch.
+    expect(headings).toEqual([
       'Profile',
       'Connections',
       'Privacy & sharing',
       'Notifications',
       'Security & account',
+      'Help',
     ]);
-    expect(headings[headings.length - 1]).toBe('Help');
   });
 
   it('returns to the Account root, not to another tab', () => {

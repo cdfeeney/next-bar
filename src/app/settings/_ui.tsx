@@ -85,10 +85,19 @@ export function LinkRow({
   href,
   label,
   value,
+  onNavigate,
 }: {
   href: string;
   label: string;
   value?: ReactNode;
+  /**
+   * Same contract as `StackHeader`'s `onBack`: return whether to proceed, and
+   * `false` cancels the navigation. A screen with unsaved work has to guard
+   * EVERY way off it, not just the back arrow — guarding one exit and leaving
+   * the in-page rows as plain links is a discard prompt that is simply absent
+   * on the route people actually took.
+   */
+  onNavigate?: () => boolean;
 }): JSX.Element {
   const body = (
     <>
@@ -103,12 +112,17 @@ export function LinkRow({
   );
   // mailto: and other non-app targets leave the router entirely — a plain
   // anchor, not a prefetching Link.
+  const intercept = onNavigate
+    ? (event: { preventDefault: () => void }) => {
+        if (!onNavigate()) event.preventDefault();
+      }
+    : undefined;
   return href.startsWith('/') ? (
-    <Link href={href} className={ROW_BASE}>
+    <Link href={href} className={ROW_BASE} onClick={intercept}>
       {body}
     </Link>
   ) : (
-    <a href={href} className={ROW_BASE}>
+    <a href={href} className={ROW_BASE} onClick={intercept}>
       {body}
     </a>
   );

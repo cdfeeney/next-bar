@@ -91,6 +91,17 @@ describe('the global age gate', () => {
     expect(gate()).toBeNull();
   });
 
+  test('stands down where the exit lands, so Close is terminal and not a loop', () => {
+    // The exit WITHDRAWS the ack and then pushes here, so the device arrives
+    // unacknowledged by construction. An overlay that covered this route asked
+    // the 21+ question again on the marketing page, and its "I'm under 21"
+    // pushed straight back to the exit — Close never left.
+    pathname = '/install';
+    render(<AgeGate />);
+
+    expect(gate()).toBeNull();
+  });
+
   test('still covers the rest of the app while the device is unacknowledged', () => {
     // Standing down is scoped to the one route that owns the question — it is
     // not a general dismissal, and the App-Store blocking contract elsewhere

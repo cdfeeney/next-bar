@@ -34,17 +34,38 @@ vi.mock('../_useOwnProfile', () => ({
     setIsPrivate: vi.fn(),
   }),
 }));
+let storedVibe: {
+  archetype: string;
+  tags: string[];
+  preferredNeighborhoods: string[];
+  savedAt: string;
+} | null = null;
 vi.mock('@/lib/storedProfile', () => ({
-  loadProfile: () => null,
+  loadProfile: () => storedVibe,
   clearProfile: vi.fn(),
 }));
 // The two editors are out of this lane's write scope; what matters here is
-// that they bubble `input` events, which any real text field does.
+// that they bubble `input` events (any real text field does) and that they
+// report a save upward through the callback the page passes them.
 vi.mock('@/components/DisplayNameEditor', () => ({
-  default: () => <input aria-label="Account name" />,
+  default: ({ onSaved }: { onSaved: (name: string) => void }) => (
+    <>
+      <input aria-label="Account name" />
+      <button type="button" onClick={() => onSaved('Alicia')}>
+        Save name
+      </button>
+    </>
+  ),
 }));
 vi.mock('@/components/ClaimHandle', () => ({
-  default: () => <input aria-label="Username" />,
+  default: ({ onClaimed }: { onClaimed: (handle: string) => void }) => (
+    <>
+      <input aria-label="Username" />
+      <button type="button" onClick={() => onClaimed('alicia')}>
+        Claim username
+      </button>
+    </>
+  ),
 }));
 
 import EditProfilePage from './page';
@@ -132,5 +153,88 @@ describe('leaving Edit profile with unsaved edits', () => {
     await userEvent.click(backLink());
 
     await waitFor(() => expect(discardDialog()).toBeTruthy());
+  });
+
+  test('saving one editor does not disarm the guard over the other', async () => {
+    // One page-level dirty flag was set by input from EITHER editor and
+    // cleared by a save from either, so saving the name silently disarmed the
+    // guard while the username draft was still on screen and Back lost it.
+    render(<EditProfilePage />);
+
+    await userEvent.type(screen.getByLabelText(/account name/i), 'Alicia');
+    await userEvent.type(screen.getByLabelText('Username'), 'alicia');
+    await userEvent.click(screen.getByRole('button', { name: /save name/i }));
+
+    await userEvent.click(backLink());
+
+    await waitFor(() => expect(discardDialog()).toBeTruthy());
+  });
+
+  test('stops guarding once every editor has been saved', async () => {
+    // The mirror of the test above: per-editor flags must still CLEAR, or the
+    // prompt becomes noise that people learn to tap through.
+    render(<EditProfilePage />);
+
+    await userEvent.type(screen.getByLabelText(/account name/i), 'Alicia');
+    await userEvent.type(screen.getByLabelText('Username'), 'alicia');
+    await userEvent.click(screen.getByRole('button', { name: /save name/i }));
+    await userEvent.click(screen.getByRole('button', { name: /claim username/i }));
+
+    await userEvent.click(backLink());
+
+    expect(discardDialog()).toBeNull();
+  });
+
+  test('guards the in-page quiz link, not only the back arrow', async () => {
+    // The Vibe profile row navigates away from inside the form. As a plain
+    // link it walked off with unsaved text and no prompt: the guard was not
+    // weak there, it was absent.
+    render(<EditProfilePage />);
+
+    await userEvent.type(screen.getByLabelText(/account name/i), 'Alicia');
+    await userEvent.click(screen.getByRole('link', { name: /take the quiz/i }));
+
+    await waitFor(() => expect(discardDialog()).toBeTruthy());
+    // Discard finishes the trip that was intercepted rather than dumping the
+    // user back on the settings list they never asked for.
+    expect(
+      screen.getByRole('link', { name: /^discard$/i }).getAttribute('href'),
+    ).toBe('/quiz');
+  });
+});
+
+describe('V8-R-ACC-004 — the saved vibe profile can be VIEWED, not just retaken', () => {
+  test('shows the derived profile when the quiz has been taken', async () => {
+    // The row used to say only "Your quiz answers are saved" and link to a NEW
+    // quiz, so the footnote promised a view the screen did not have.
+    storedVibe = {
+      archetype: 'Late-night wanderer',
+      tags: ['dive', 'live-music'],
+      preferredNeighborhoods: ['East Village'],
+      savedAt: '2026-08-01T00:00:00.000Z',
+    };
+    try {
+      render(<EditProfilePage />);
+
+      await waitFor(() =>
+        expect(screen.getByText('Late-night wanderer')).toBeInTheDocument(),
+      );
+      expect(screen.getByText(/dive · live-music/)).toBeInTheDocument();
+      expect(screen.getByText(/East Village/)).toBeInTheDocument();
+      expect(
+        screen.getByRole('link', { name: /retake the quiz/i }),
+      ).toBeInTheDocument();
+    } finally {
+      storedVibe = null;
+    }
+  });
+
+  test('says so plainly when there is nothing to view yet', () => {
+    render(<EditProfilePage />);
+
+    expect(screen.getByText('No vibe profile yet.')).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: /take the quiz/i }),
+    ).toBeInTheDocument();
   });
 });

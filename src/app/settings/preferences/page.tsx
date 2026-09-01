@@ -93,9 +93,16 @@ export default function SettingsHomePage(): JSX.Element {
           ) : null}
         </Group>
 
-        <AppGroup ratingsCount={ratings.length} />
-
+        {/* V8-R-ACC-005 fixes the list at FIVE sections, then "Help, Privacy
+            policy and Terms sit below the fold, deliberately last". The
+            install prompt and the sample night used to sit in a sixth primary
+            "App" section between Security & account and Help, which the
+            approved structure does not admit — and the heading test only
+            checked the first five and the last, so nothing caught it. They are
+            below-the-fold utilities, so they live in the below-the-fold group
+            rather than inventing a section for themselves. */}
         <Group label="Help">
+          <AppRows ratingsCount={ratings.length} />
           <LinkRow
             href="mailto:hi@next-bar.app?subject=Bar+correction"
             label="Tell us if something's wrong"
@@ -327,7 +334,7 @@ function NotificationsGroup(): JSX.Element {
  * `ratingsCount` re-reads the flag after a clear-ratings wipe, which also
  * removes the sample night.
  */
-function AppGroup({ ratingsCount }: { ratingsCount: number }): JSX.Element {
+function AppRows({ ratingsCount }: { ratingsCount: number }): JSX.Element {
   const [seeded, setSeeded] = useState(false);
 
   useEffect(() => {
@@ -335,7 +342,7 @@ function AppGroup({ ratingsCount }: { ratingsCount: number }): JSX.Element {
   }, [ratingsCount]);
 
   return (
-    <Group label="App">
+    <>
       <SlotRow>
         <div className="flex items-center justify-between gap-4">
           <p className="text-sm text-muted leading-relaxed">
@@ -382,6 +389,6 @@ function AppGroup({ ratingsCount }: { ratingsCount: number }): JSX.Element {
           </button>
         )}
       </SlotRow>
-    </Group>
+    </>
   );
 }

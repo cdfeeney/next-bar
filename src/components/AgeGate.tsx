@@ -2,7 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AGE_STEP_PATH, readAgeAck, writeAgeAck } from '@/app/onboarding/_ageAck';
+import {
+  AGE_EXIT_PATH,
+  AGE_STEP_PATH,
+  readAgeAck,
+  writeAgeAck,
+} from '@/app/onboarding/_ageAck';
 
 /**
  * 21+ age gate (H1 App-Store pack). Full-screen overlay on first visit;
@@ -53,7 +58,15 @@ export default function AgeGate(): JSX.Element | null {
 
   if (state !== 'unacked') return null;
   // The age step owns this question AND its "no" branch. Never cover it.
-  if (pathname === AGE_STEP_PATH) return null;
+  //
+  // AND NEVER COVER WHERE THAT BRANCH ENDS. The exit withdraws the ack and
+  // then sends the visitor to `AGE_EXIT_PATH`, so they arrive there
+  // unacknowledged by construction. Covering it re-asked the question they
+  // had just answered and whose "I'm under 21" pushed them back to the exit —
+  // a terminal screen that was a loop. Both routes are stand-down routes for
+  // the same reason: this overlay must not sit on top of the one flow that
+  // owns the "no".
+  if (pathname === AGE_STEP_PATH || pathname === AGE_EXIT_PATH) return null;
 
   const acknowledge = (): void => {
     writeAgeAck();

@@ -59,6 +59,27 @@ describe('signOutAndRevokePush', () => {
     expect(signOut).toHaveBeenCalledOnce();
   });
 
+  test('still signs out when the push teardown never settles', async () => {
+    // `navigator.serviceWorker.ready` RESOLVES on registration and otherwise
+    // never settles — it does not reject, so the surrounding try/catch could
+    // never end it. A browser exposing `navigator.serviceWorker` with no
+    // active registration hung sign-out, the under-21 exit, and the
+    // post-deletion cleanup forever. The teardown races a deadline instead.
+    vi.useFakeTimers();
+    try {
+      unsubscribe = () => new Promise<boolean>(() => {});
+      const signOut = vi.fn(async () => {});
+
+      const settled = signOutAndRevokePush(signOut);
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(settled).resolves.toBeUndefined();
+
+      expect(signOut).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('still signs out when there is no supabase client at all', async () => {
     supabaseOrNull = null;
     const signOut = vi.fn(async () => {});

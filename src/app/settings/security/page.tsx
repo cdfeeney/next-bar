@@ -134,8 +134,14 @@ async function clearServerRatings(
  */
 async function performAccountDeletion(
   auth: SignedInAuth,
+  /** Whether an earlier attempt already ended `unknown`, which makes a
+   *  subsequent `unauthorized` ambiguous rather than a certain refusal. */
+  afterUnknown: boolean,
 ): Promise<DeletionOutcome> {
-  const outcome = await requestAccountDeletionOutcome(auth.session.access_token);
+  const outcome = await requestAccountDeletionOutcome(
+    auth.session.access_token,
+    afterUnknown,
+  );
   if (outcome !== 'deleted') return outcome;
   // The auth user is gone server-side. signOut() SEALS the cache — right for
   // an ordinary sign-out, wrong here: this owner can never return. Deletion
@@ -309,8 +315,13 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
   const handleDelete = async () => {
     if (state === 'deleting') return;
     if (!isDeleteConfirmed(confirmText)) return;
+    // Once an attempt has ended 'unknown' the account may already be gone, and
+    // this tap is a RETRY: the route's `unauthorized` then means "this token
+    // names nobody" just as readily as "refused", so it stops counting as a
+    // certain refusal. Read before the state is overwritten by 'deleting'.
+    const afterUnknown = state === 'unknown';
     setState('deleting');
-    const outcome = await performAccountDeletion(auth);
+    const outcome = await performAccountDeletion(auth, afterUnknown);
     // 'deleted' has already navigated away. The other two both stay here and
     // say only what they know: a refusal is the honest "nothing was removed",
     // a lost answer is not allowed to borrow that sentence.

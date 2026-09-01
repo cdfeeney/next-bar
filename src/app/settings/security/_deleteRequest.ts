@@ -41,8 +41,28 @@ const REFUSED_BEFORE_DELETING = new Set([
   'unavailable',
 ]);
 
+/**
+ * `unauthorized` is certain only on a FIRST attempt.
+ *
+ * The route rejects with it when `getUser(token)` fails — which is exactly
+ * what a token belonging to an ALREADY-DELETED user does. So after an attempt
+ * that ended `unknown`, a retry's `unauthorized` has two readings: the request
+ * was refused before deleting anything, or the earlier attempt already
+ * succeeded and this token now names nobody. The screen prints "nothing was
+ * removed" for `refused`, and on the second reading that sentence is false
+ * about an account that is gone — the same false assurance the unknown state
+ * exists to prevent, reached one tap later.
+ *
+ * `rate_limited` and `unavailable` carry no such ambiguity: neither is
+ * something a deleted account causes, so both stay certain refusals.
+ */
+const AMBIGUOUS_AFTER_UNKNOWN = 'unauthorized';
+
 export async function requestAccountDeletionOutcome(
   accessToken: string,
+  /** Whether an earlier attempt in this session ended `unknown`, so the
+   *  account may already be gone. */
+  afterUnknown = false,
 ): Promise<DeletionOutcome> {
   let res: Response;
   try {
@@ -65,6 +85,7 @@ export async function requestAccountDeletionOutcome(
 
   if (res.ok && body.ok === true) return 'deleted';
   if (typeof body.error === 'string' && REFUSED_BEFORE_DELETING.has(body.error)) {
+    if (afterUnknown && body.error === AMBIGUOUS_AFTER_UNKNOWN) return 'unknown';
     return 'refused';
   }
   return 'unknown';
