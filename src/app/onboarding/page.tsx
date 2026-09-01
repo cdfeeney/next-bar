@@ -27,7 +27,15 @@ import {
   setOwnDisplayName,
 } from '@/lib/profile.server';
 import { useHandleAvailability } from '@/hooks/useHandleAvailability';
-import { isSafeReturnPath, setPromptedFlag } from '@/components/OnboardingGate';
+import { setPromptedFlag } from '@/components/OnboardingGate';
+import { OperationalState } from '@/components/states/OperationalState';
+import {
+  AGE_STEP,
+  HOME,
+  hasCompletedSequence,
+  returnDestination as destinationFrom,
+  stepHref,
+} from './_sequence';
 
 const CHARSET_HINT = '3–20 characters: letters, numbers, underscores.';
 
@@ -41,9 +49,8 @@ const CHARSET_HINT = '3–20 characters: letters, numbers, underscores.';
  * boundary for a value used exactly at navigation time.
  */
 function returnDestination(): string {
-  if (typeof window === 'undefined') return '/';
-  const next = new URLSearchParams(window.location.search).get('next');
-  return isSafeReturnPath(next) ? (next as string) : '/';
+  if (typeof window === 'undefined') return HOME;
+  return destinationFrom(window.location.search);
 }
 
 type SubmitStatus =
@@ -60,6 +67,32 @@ export default function OnboardingPage(): JSX.Element {
   // Only render the form once the profile fetch confirms handle IS NULL —
   // an already-onboarded visitor (back nav, old link) is bounced home.
   const [ready, setReady] = useState(false);
+  /**
+   * The profile read did not work. NOT the same as "no handle yet".
+   *
+   * `fetchOwnProfile` returns null for a read error as well as for a missing
+   * row, and this page used to treat both as "this account needs to be set
+   * up". Every auth user has a `profiles` row — 0001's `handle_new_user`
+   * trigger creates it and 0004 backfilled the rest — so for a signed-in
+   * visitor a null is a FAILED READ, and acting on it showed an already-
+   * onboarded account a blank identity form. Submitting it overwrote a real
+   * display name before `claim_handle` refused the username, which is a
+   * destructive edit made on the strength of an error.
+   */
+  const [readFailed, setReadFailed] = useState(false);
+  /** Bumped by Retry to re-run the read. */
+  const [attempt, setAttempt] = useState(0);
+  /**
+   * Clearing `readFailed` belongs to the RETRY, not to the top of the effect.
+   * The effect's identity depends on `router`, and clearing there made the
+   * screen flicker back to "Loading…" on any re-render that produced a new
+   * router — a failure that erases itself is the dead end this state exists to
+   * replace.
+   */
+  const retryRead = (): void => {
+    setReadFailed(false);
+    setAttempt((n) => n + 1);
+  };
   const availability = useHandleAvailability(desired);
 
   useEffect(() => {
@@ -75,18 +108,34 @@ export default function OnboardingPage(): JSX.Element {
     const epoch = getCacheEpoch();
     fetchOwnProfile(supabase).then((profile) => {
       if (cancelled || getCacheEpoch() !== epoch) return;
-      if (profile !== null && profile.handle !== null) {
+      // A null profile for a signed-in account is a failed read, not an
+      // account without a handle — see `readFailed` above. Stop here rather
+      // than offering a form that would overwrite identity we could not read.
+      if (profile === null) {
+        setReadFailed(true);
+        return;
+      }
+      if (profile.handle !== null) {
         router.replace(returnDestination());
         return;
       }
+      // THE DOOR INTO THE SEQUENCE (see ./_sequence). This route is both the
+      // entry point OnboardingGate redirects to and the sequence's last step,
+      // and the marker is what tells those two visits apart. Without this the
+      // age, location and quiz screens are unreachable except by typed URL.
+      // `replace`, not `push`: the door is not a place to come back to.
+      if (!hasCompletedSequence(window.location.search)) {
+        router.replace(stepHref(AGE_STEP, returnDestination()));
+        return;
+      }
       // Prefill a previously saved name (e.g. an earlier partial attempt).
-      if (profile?.displayName) setName(profile.displayName);
+      if (profile.displayName) setName(profile.displayName);
       setReady(true);
     });
     return () => {
       cancelled = true;
     };
-  }, [auth.status, router]);
+  }, [auth.status, router, attempt]);
 
   const skip = (): void => {
     setPromptedFlag();
@@ -171,6 +220,14 @@ export default function OnboardingPage(): JSX.Element {
                 Back home
               </Link>
             </p>
+          ) : readFailed ? (
+            /* Says what went wrong and offers the one recovery, instead of a
+               blank form built on a read that failed (V8-R-OPS-007). */
+            <OperationalState
+              kind="failed"
+              message="We couldn't load your profile, so we can't set up your username yet. Check your connection and try again."
+              recovery={{ label: 'Retry', onAction: retryRead }}
+            />
           ) : !ready ? (
             <p className="text-muted text-sm">Loading…</p>
           ) : (
@@ -187,7 +244,10 @@ export default function OnboardingPage(): JSX.Element {
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Your name"
                   className="w-full bg-bg border border-border focus:border-accent outline-none rounded-2xl px-4 py-3 text-base min-h-[44px]"
-                  disabled={status.kind === 'submitting'}
+                  // readOnly, not disabled: a `disabled` field the user is
+                  // typing in loses focus to <body> mid-submission (the
+                  // BarLightbox rule this flow's other steps already follow).
+                  readOnly={status.kind === 'submitting'}
                 />
                 {!isValidDisplayName(name) ? (
                   <span className="text-xs text-accent block mt-1.5" role="alert">
@@ -209,7 +269,10 @@ export default function OnboardingPage(): JSX.Element {
                   onChange={(e) => setDesired(e.target.value)}
                   placeholder="username"
                   className="w-full bg-bg border border-border focus:border-accent outline-none rounded-2xl px-4 py-3 text-base min-h-[44px]"
-                  disabled={status.kind === 'submitting'}
+                  // readOnly, not disabled: a `disabled` field the user is
+                  // typing in loses focus to <body> mid-submission (the
+                  // BarLightbox rule this flow's other steps already follow).
+                  readOnly={status.kind === 'submitting'}
                 />
                 <span
                   className={[
@@ -243,20 +306,27 @@ export default function OnboardingPage(): JSX.Element {
               <div className="flex items-center gap-4 flex-wrap">
                 <button
                   type="submit"
-                  disabled={
+                  // aria-disabled, not disabled: this button holds focus when
+                  // the tap lands, and a focused control that becomes
+                  // `disabled` drops focus to <body>. `submit()` already
+                  // re-checks every one of these conditions, so the guard is
+                  // real and this attribute is the announcement of it.
+                  aria-disabled={
                     status.kind === 'submitting' ||
                     !isValidHandle(desired) ||
                     !isValidDisplayName(name)
                   }
-                  className="bg-accent text-bg font-display text-sm px-6 py-2.5 rounded-full min-h-[44px] touch-manipulation disabled:opacity-50"
+                  className="bg-accent text-bg font-display text-sm px-6 py-2.5 rounded-full min-h-[44px] touch-manipulation aria-disabled:opacity-50"
                 >
                   {status.kind === 'submitting' ? 'Setting up…' : "Let's go →"}
                 </button>
                 <button
                   type="button"
-                  onClick={skip}
-                  disabled={status.kind === 'submitting'}
-                  className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+                  onClick={() => {
+                    if (status.kind !== 'submitting') skip();
+                  }}
+                  aria-disabled={status.kind === 'submitting'}
+                  className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation aria-disabled:opacity-50"
                 >
                   Skip for now
                 </button>

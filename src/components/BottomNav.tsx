@@ -58,12 +58,18 @@ export default function BottomNav(): JSX.Element | null {
   // pre-funnel marketing surfaces or system endpoints. Auth + share are
   // full-screen focus surfaces: the raised center pill overlaps the form on
   // phone viewports, and a recipient opening a share link isn't in the app yet.
+  //
+  // The Settings stack below the Account root (/settings/*) is hierarchical,
+  // not a tab: the gear pushes it, a top-left back arrow returns, and it
+  // carries no bottom nav (approved/next-bar-account-a-settings.png). The
+  // Account ROOT itself (/settings) keeps the five-tab nav.
   if (
     pathname === '/install' ||
     pathname === '/join' ||
     pathname === '/auth' ||
     pathname.startsWith('/share') ||
-    pathname.startsWith('/api')
+    pathname.startsWith('/api') ||
+    pathname.startsWith('/settings/')
   ) {
     return null;
   }

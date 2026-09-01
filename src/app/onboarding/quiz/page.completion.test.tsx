@@ -1,0 +1,160 @@
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
+
+/**
+ * V8-R-ONB-005, on the branch e2e cannot reach.
+ *
+ * Every browser spec in this repo runs SIGNED OUT — nothing establishes a real
+ * Supabase session — so the signed-in completion path had no coverage at all,
+ * which is why "the sequence does not land a new account on the approved home"
+ * survived two review rounds as an argument rather than a measurement.
+ *
+ * Both destinations are asserted here through the component, on both of the
+ * step's exits (Skip and a completed quiz).
+ */
+
+const pushed: string[] = [];
+/**
+ * 'loading' is a real value of this status and was the gap: the destination
+ * was chosen with `auth.status === 'signed-in'`, which is false while the
+ * status is still resolving, so a signed-in account that skipped before
+ * `useAuth` settled was routed as though it were signed out.
+ */
+let authStatus: 'signed-in' | 'signed-out' | 'loading' = 'signed-out';
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: (href: string) => pushed.push(href) }),
+}));
+
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: () => ({ status: authStatus, user: null, signOut: async () => {} }),
+}));
+
+vi.mock('@/lib/storedProfile', () => ({
+  loadProfile: () => null,
+  saveProfile: vi.fn(),
+}));
+
+// The real quiz is walked in e2e; here it only has to reach its callback.
+vi.mock('@/components/VibeQuiz', () => ({
+  default: ({ onComplete }: { onComplete: (p: unknown) => void }) => (
+    <button
+      type="button"
+      onClick={() =>
+        onComplete({ tags: [], archetype: 'explorer', preferredNeighborhoods: [] })
+      }
+    >
+      finish the quiz
+    </button>
+  ),
+}));
+
+import OnboardingQuizPage from './page';
+
+beforeEach(() => {
+  pushed.length = 0;
+  authStatus = 'signed-out';
+  window.history.replaceState({}, '', '/onboarding/quiz');
+});
+
+describe('the end of the onboarding sequence', () => {
+  test('a signed-out visitor lands straight on the approved home', async () => {
+    render(<OnboardingQuizPage />);
+    await userEvent.click(screen.getByRole('button', { name: /show me bars/i }));
+    expect(pushed).toEqual(['/']);
+  });
+
+  test('a signed-in account is handed to the identity step NAMING the home as its destination', async () => {
+    // The identity step is required of every account and is not part of this
+    // canvas; what the requirement needs is that the sequence ends on `/`
+    // rather than wherever that step happens to default to.
+    //
+    // `seq=done` is the marker that stops `/onboarding` sending this visit
+    // back to the age step — the door and the last step are the same route.
+    authStatus = 'signed-in';
+    render(<OnboardingQuizPage />);
+    await userEvent.click(screen.getByRole('button', { name: /show me bars/i }));
+    expect(pushed).toEqual([
+      `/onboarding?next=${encodeURIComponent('/')}&seq=done`,
+    ]);
+  });
+
+  test('WAITS for auth rather than reading "loading" as signed out', async () => {
+    // The gap: `auth.status === 'signed-in'` is false while the status is
+    // still resolving, and the quiz is one tap from arrival on a cold load. A
+    // signed-in account that skipped in that window was routed as signed out
+    // and the identity step was silently dropped from its run. Guessing either
+    // way is wrong, so the navigation waits for a real answer.
+    authStatus = 'loading';
+    const view = render(<OnboardingQuizPage />);
+    await userEvent.click(screen.getByRole('button', { name: /show me bars/i }));
+
+    // Nothing yet — and specifically NOT the signed-out destination.
+    expect(pushed).toEqual([]);
+
+    authStatus = 'signed-in';
+    view.rerender(<OnboardingQuizPage />);
+
+    await waitFor(() =>
+      expect(pushed).toEqual([
+        `/onboarding?next=${encodeURIComponent('/')}&seq=done`,
+      ]),
+    );
+  });
+
+  test('COMPLETING the quiz ends in the same place as skipping it', async () => {
+    authStatus = 'signed-in';
+    render(<OnboardingQuizPage />);
+    await userEvent.click(screen.getByRole('button', { name: /^Start/ }));
+    await userEvent.click(
+      await screen.findByRole('button', { name: /finish the quiz/i }),
+    );
+    await waitFor(() =>
+      expect(pushed).toEqual([
+        `/onboarding?next=${encodeURIComponent('/')}&seq=done`,
+      ]),
+    );
+  });
+
+  /**
+   * The destination an invite-link signup entered on has to survive all four
+   * screens. OnboardingGate records it as `?next=`; if the sequence dropped it,
+   * a brand-new account would land on the home instead of the plan it was
+   * invited to — the regression this carry-through exists to prevent.
+   */
+  test('carries an invite destination through to the identity step', async () => {
+    authStatus = 'signed-in';
+    window.history.replaceState(
+      {},
+      '',
+      `/onboarding/quiz?next=${encodeURIComponent('/plan/abc')}`,
+    );
+    render(<OnboardingQuizPage />);
+    await userEvent.click(screen.getByRole('button', { name: /show me bars/i }));
+    expect(pushed).toEqual([
+      `/onboarding?next=${encodeURIComponent('/plan/abc')}&seq=done`,
+    ]);
+  });
+
+  test('a signed-out visitor goes to that destination directly', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/onboarding/quiz?next=${encodeURIComponent('/plan/abc')}`,
+    );
+    render(<OnboardingQuizPage />);
+    await userEvent.click(screen.getByRole('button', { name: /show me bars/i }));
+    expect(pushed).toEqual(['/plan/abc']);
+  });
+
+  test('starting the quiz moves focus off the button it unmounted', async () => {
+    render(<OnboardingQuizPage />);
+    await userEvent.click(screen.getByRole('button', { name: /^Start/ }));
+    await waitFor(() =>
+      expect(document.activeElement, 'focus fell through to <body>').not.toBe(
+        document.body,
+      ),
+    );
+  });
+});

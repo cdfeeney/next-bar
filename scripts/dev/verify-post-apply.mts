@@ -42,8 +42,11 @@ const EXPECTED_COUNTS: Record<string, number> = {
   'public.waitlist': 1,
 };
 
-const EXPECTED_HEAD = '0074_waitlist_reconcile.sql';
-const EXPECTED_ROWS = 66;
+// UPDATED 2026-09-01 for the 0075+0076 apply. These MOVE every time a migration set lands, and
+// a stale pin here reports a false failure at exactly the moment a real apply succeeds.
+// Before 0075/0076: head 0074_waitlist_reconcile.sql, 66 rows.
+const EXPECTED_HEAD = '0076_feed_access_consolidation_and_group_read_window.sql';
+const EXPECTED_ROWS = 68;
 
 /** Headline tables the applied set creates. Not exhaustive: a spot check, named as one. */
 const EXPECTED_NEW_TABLES = [
