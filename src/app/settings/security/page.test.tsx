@@ -1,6 +1,11 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { DeletionOutcome } from './_deleteRequest';
+
+/** What the (mocked) delete request reports for the test in hand. */
+let deletionOutcome: DeletionOutcome = 'deleted';
 
 /**
  * Security & account — V8-R-ACC-012's typed confirmation and, inside it,
@@ -30,8 +35,8 @@ vi.mock('@/lib/accountCache', () => ({
   abandonInFlightSyncs: vi.fn(),
   destroyAccountDataOnDeletion: vi.fn(),
 }));
-vi.mock('@/lib/accountDeletion', () => ({
-  requestAccountDeletion: vi.fn(async () => true),
+vi.mock('./_deleteRequest', () => ({
+  requestAccountDeletionOutcome: vi.fn(async () => deletionOutcome),
 }));
 vi.mock('@/lib/pairwise.server', () => ({
   deleteAllServerComparisons: vi.fn(async () => true),
@@ -42,6 +47,10 @@ vi.mock('@/lib/ratings.server', () => ({
 vi.mock('@/lib/supabase/client', () => ({ getBrowserSupabase: () => null }));
 
 import SecurityAccountPage from './page';
+
+beforeEach(() => {
+  deletionOutcome = 'deleted';
+});
 
 const dangerZone = (): HTMLElement =>
   screen.getByRole('heading', { name: /danger zone/i })
@@ -123,6 +132,68 @@ describe('V8-R-ACC-012 — deletion requires typing DELETE in full', () => {
     const confirm = screen.getByRole('button', { name: /permanently delete/i });
     expect(cancel.className).toContain('min-h-[48px]');
     expect(confirm.className).toContain('min-h-[44px]');
+  });
+});
+
+/**
+ * V8-R-OPS-001 — never present a fallback as a success, and never present a
+ * GUESS as a fact.
+ *
+ * The defect this pins: every non-success collapsed onto one boolean, so the
+ * danger zone answered "nothing was removed" to both a refusal and a lost
+ * response. The route deletes the auth user and only THEN writes its reply, so
+ * a connection dropped in between is precisely the case where the account is
+ * most likely already gone — and the screen told its owner it had survived.
+ * Being told your account still exists when it does not is worse than being
+ * told nothing, because you stop looking.
+ */
+describe('V8-R-ACC-012 — the deletion result says only what is known', () => {
+  const armAndDelete = async (): Promise<void> => {
+    render(<SecurityAccountPage />);
+    await userEvent.click(
+      screen.getByRole('button', { name: /^Delete account$/i }),
+    );
+    await userEvent.type(screen.getByLabelText(/type/i), 'DELETE');
+    await userEvent.click(
+      screen.getByRole('button', { name: /permanently delete/i }),
+    );
+  };
+
+  it('reports a server refusal as nothing removed, which is what happened', async () => {
+    deletionOutcome = 'refused';
+
+    await armAndDelete();
+
+    await waitFor(() =>
+      expect(screen.getByText(/nothing was removed/i)).toBeTruthy(),
+    );
+  });
+
+  it('refuses to claim "nothing was removed" when the answer was lost', async () => {
+    deletionOutcome = 'unknown';
+
+    await armAndDelete();
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/couldn.t confirm whether your account was deleted/i),
+      ).toBeTruthy(),
+    );
+    // The exact false assurance the old single-boolean path printed here.
+    expect(screen.queryByText(/nothing was removed/i)).toBeNull();
+  });
+
+  it('tells an unknown outcome how to find out, rather than to just retry', async () => {
+    // A blind retry against an account that is already gone answers 401 and
+    // reads as a second failure. Checking comes first.
+    deletionOutcome = 'unknown';
+
+    await armAndDelete();
+
+    await waitFor(() =>
+      expect(screen.getByText(/may\s+already be gone/i)).toBeTruthy(),
+    );
+    expect(screen.getByText(/try to sign in to check/i)).toBeTruthy();
   });
 });
 

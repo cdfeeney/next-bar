@@ -41,7 +41,27 @@ export function useOwnProfile(): OwnProfile {
   const [consentLive, setConsentLive] = useState(false);
 
   useEffect(() => {
-    if (auth.status !== 'signed-in') return;
+    if (auth.status !== 'signed-in') {
+      /**
+       * IDENTITY BELONGS TO THE SESSION. Returning early without clearing left
+       * the previous owner's display name and @handle in React state, and the
+       * Settings list happily kept rendering them on a signed-out page — the
+       * one surface where showing somebody else's name is unambiguously wrong.
+       * The epoch guards below stop a stale FETCH landing; nothing was undoing
+       * a fetch that had already landed.
+       *
+       * Every non-signed-in status resets, not just `signed-out`: `useAuth`
+       * only ever leaves `loading` (it never returns to it), so on mount this
+       * is a no-op over values that are already null, and `unavailable` has no
+       * identity to show either.
+       */
+      setHandle(null);
+      setKnown(false);
+      setDisplayName(null);
+      setIsPrivate(null);
+      setConsentLive(false);
+      return;
+    }
     const supabase = getBrowserSupabase();
     if (!supabase) return;
     let cancelled = false;

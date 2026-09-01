@@ -3,23 +3,33 @@
 /**
  * The 21+ device acknowledgement — one key, one reader, one writer.
  *
- * WHY IT LIVES UNDER THE ROUTE AND NOT IN `src/lib`. The value is the SAME
- * localStorage key `src/components/AgeGate.tsx` already owns, and the obvious
- * home for it is a shared `src/lib/ageAck.ts` both files import. This lane's
- * write scope is the onboarding/settings/states surface, and `src/lib` and
- * `src/components/AgeGate.tsx` belong to another lane that is running at the
- * same time — so the constant is repeated here deliberately rather than
- * silently edited into a file this lane does not own. `KEY` and `AgeGate`'s
- * `KEY` must stay identical; the confirmed-view test below is what fails if
- * they ever drift.
+ * WHY IT LIVES UNDER THE ROUTE AND NOT IN `src/lib`. The obvious home is a
+ * shared `src/lib/ageAck.ts`, but `src/lib` belongs to another lane; this
+ * lane's write scope is the onboarding/settings/states surface plus
+ * `src/components/AgeGate.tsx`. So the module sits under the route that owns
+ * the age question, and the overlay imports it from here.
+ *
+ * IT USED TO BE COPIED RATHER THAN IMPORTED. `AgeGate` held its own private
+ * `KEY` with a comment requiring the two to stay identical by hand, because
+ * that file was outside this lane at the time. It no longer is, so the copy
+ * is gone and there is exactly one definition — a constant two files must
+ * keep equal by discipline is a drift waiting to happen.
  *
  * The ack is a DEVICE-level statement, deliberately NOT registered in
  * accountCache ALL_KEYS: it is not account data, and a sign-out must not
  * un-acknowledge the age gate — the person at the keyboard did not change.
  */
 
-/** Must equal `KEY` in src/components/AgeGate.tsx. */
 export const AGE_ACK_KEY = 'next-bar:age-ack:v1';
+
+/**
+ * The onboarding step that owns the 21+ question AND its "no" branch.
+ *
+ * Exported so the global overlay can hand an under-21 answer here (with
+ * `?under21=1`) and stand down on this route, rather than growing a second
+ * copy of the exit. One route, one exit.
+ */
+export const AGE_STEP_PATH = '/onboarding/age';
 
 /**
  * Has this device already confirmed 21+?

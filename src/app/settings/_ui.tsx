@@ -15,14 +15,23 @@ import type { ReactNode } from 'react';
 const ROW_BASE =
   'w-full flex items-center gap-3 px-4 min-h-[48px] py-3 text-left touch-manipulation';
 
-/** Top-left back arrow + title. `backHref` is always an explicit route: the
- *  stack is reachable by deep link, where history.back() has nowhere to go. */
+/**
+ * Top-left back arrow + title. `backHref` is always an explicit route: the
+ * stack is reachable by deep link, where history.back() has nowhere to go.
+ *
+ * `onBack` lets a screen with unsaved work intercept the tap (V8-R-ACC-006's
+ * failure_recovery). It returns whether to proceed — `false` cancels the
+ * navigation and leaves the screen exactly as it was. Screens without unsaved
+ * state omit it and keep a plain link.
+ */
 export function StackHeader({
   title,
   backHref,
+  onBack,
 }: {
   title: string;
   backHref: string;
+  onBack?: () => boolean;
 }): JSX.Element {
   return (
     <header className="sticky top-0 z-10 bg-bg/95 backdrop-blur border-b border-border pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
@@ -30,6 +39,9 @@ export function StackHeader({
         <Link
           href={backHref}
           aria-label="Back"
+          onClick={(event) => {
+            if (onBack && !onBack()) event.preventDefault();
+          }}
           className="-ml-2 w-11 h-11 shrink-0 inline-flex items-center justify-center rounded-full text-text touch-manipulation"
         >
           <ChevronIcon direction="left" />

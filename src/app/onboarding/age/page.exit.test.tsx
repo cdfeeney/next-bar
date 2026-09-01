@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 /**
  * V8-R-ONB-003 — the 21+ step and its under-21 exit.
@@ -70,6 +70,36 @@ async function takeTheExit(): Promise<Rendered> {
   return view;
 }
 
+/** Must equal SIGN_OUT_SETTLE_MS in ./page. */
+const SETTLE_MS = 3_000;
+
+/**
+ * The same exit, driven under FAKE TIMERS — for the two tests that have to
+ * cross the settle window without waiting three real seconds.
+ *
+ * It cannot use `takeTheExit`: RTL's `findBy*` polls on a real timer, and
+ * vitest's fake timers are not the `jest` mock shape RTL sniffs for, so every
+ * async query hangs until the test times out instead of advancing the clock.
+ * `act` + synchronous queries needs none of that machinery — promises are
+ * microtasks and are not faked, so a bare `await act(async () => {})` flushes
+ * the sign-out call itself.
+ */
+async function takeTheExitOnFakeTimers(): Promise<Rendered> {
+  vi.useFakeTimers();
+  const view = render(<OnboardingAgePage />);
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: /under 21/i }));
+  await act(async () => {});
+  return view;
+}
+
+// Fake timers must never survive their test: a leak turns every later async
+// query in this file into a five-second timeout, which reads like eleven
+// unrelated regressions. `useRealTimers` is a no-op when none are installed.
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
   replaced.length = 0;
   pushed.length = 0;
@@ -130,6 +160,62 @@ describe('the under-21 exit', () => {
       expect(screen.getByText(/still signed in on this device/i)).toBeTruthy(),
     );
     expect(screen.queryByText(/we.ve signed you out/i)).toBeNull();
+  });
+
+  /**
+   * "PENDING" IS NOT A RESTING PLACE.
+   *
+   * The failure this pins: `supabase.auth.signOut()` RESOLVES with `{ error }`
+   * instead of throwing and `useAuth().signOut()` swallows it, so the common
+   * provider failure produces a resolved promise beside a session that is
+   * still live. Waiting on the auth status alone therefore left this screen
+   * saying "Signing you out…" forever, with no retry offered and Close still
+   * available — an indefinite "in progress" over a live session, which is the
+   * same false assurance as a premature success, only quieter.
+   */
+  test('a RESOLVED sign-out that leaves the session alive settles to FAILED, not to a permanent pending', async () => {
+    // Resolves cleanly. The status never leaves signed-in — the shape of a
+    // provider error that useAuth swallowed.
+    signOut = async () => {};
+    await takeTheExitOnFakeTimers();
+
+    // Before the settle window closes it must NOT accuse a sign-out that may
+    // still be propagating through the auth listener.
+    expect(screen.getByText(/signing you out/i)).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: /try signing out again/i }),
+    ).toBeNull();
+
+    await act(async () => {
+      vi.advanceTimersByTime(SETTLE_MS);
+    });
+
+    expect(screen.getByText(/still signed in on this device/i)).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /try signing out again/i }),
+    ).toBeTruthy();
+    expect(screen.queryByText(/signing you out/i)).toBeNull();
+  });
+
+  test('a sign-out that lands inside the settle window is never accused of failing', async () => {
+    // The other half of the window: supabase resolves signOut() BEFORE the
+    // auth listener fires, so calling it failed on resolution alone would
+    // report a false failure on every successful sign-out.
+    signOut = async () => {};
+    const view = await takeTheExitOnFakeTimers();
+
+    authStatus = 'signed-out';
+    await act(async () => {
+      view.rerender(<OnboardingAgePage />);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SETTLE_MS * 3);
+    });
+
+    expect(
+      screen.getByText(/we.ve signed you out of this device/i),
+    ).toBeTruthy();
+    expect(screen.queryByText(/still signed in on this device/i)).toBeNull();
   });
 
   test('a visitor who was never signed in is told nothing about a sign-out', async () => {

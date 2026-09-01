@@ -42,6 +42,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
+import { signOutAndRevokePush } from '@/app/settings/_signOut';
 import { clearAgeAck, readAgeAck, writeAgeAck } from '../_ageAck';
 import { LOCATION_STEP, returnDestination, stepHref } from '../_sequence';
 
@@ -55,6 +56,19 @@ function nextStep(): string {
 
 /** The one address the rest of the app already gives people. */
 const SUPPORT_EMAIL = 'hi@next-bar.app';
+
+/**
+ * How long a RESOLVED sign-out gets to be reflected in `auth.status` before
+ * this screen calls it failed.
+ *
+ * It cannot be zero. `supabase.auth.signOut()` resolves before the
+ * `onAuthStateChange` listener behind `useAuth` fires, so a successful
+ * sign-out is briefly a resolved promise sitting next to a `signed-in`
+ * status; checking on resolution would report a false failure every time.
+ * A session still signed-in this long after a resolved call is not coming
+ * down on its own — the provider returned `{ error }` and swallowed it.
+ */
+const SIGN_OUT_SETTLE_MS = 3_000;
 
 /** 'reading' is the pre-read frame only — render nothing until the ack read
  * resolves. */
@@ -79,6 +93,8 @@ export default function OnboardingAgePage(): JSX.Element | null {
    * evidence that there was anything to sign out of.
    */
   const [sawSession, setSawSession] = useState(false);
+  /** Whether the current sign-out CALL has settled, however it settled. */
+  const [signOutSettled, setSignOutSettled] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
@@ -93,15 +109,28 @@ export default function OnboardingAgePage(): JSX.Element | null {
    * nothing about whether the session actually ended, and painting "we've
    * signed you out" on resolution put a false sentence over a live session.
    * The only honest evidence available to this screen is the auth status
-   * itself leaving `signed-in`. Until it does, the screen keeps saying
-   * "Signing you out…" — incomplete, but never a false success.
+   * itself leaving `signed-in`.
+   *
+   * BUT "PENDING" IS NOT A RESTING PLACE. Waiting on the status alone meant a
+   * sign-out that RESOLVED with a swallowed `{ error }` — the common provider
+   * failure, and the one `useAuth`'s `Promise<void>` cannot report — left this
+   * screen saying "Signing you out…" forever, beside a live authenticated
+   * session, with no retry offered and Close still available. An indefinite
+   * "in progress" over a session that is still there is the same false
+   * assurance as a premature success, just quieter. So a settled call whose
+   * session is still `signed-in` after `SIGN_OUT_SETTLE_MS` is FAILED, which
+   * is what surfaces "Try signing out again".
    */
   useEffect(() => {
     if (signOutState !== 'pending') return;
     if (auth.status === 'signed-out' || auth.status === 'unavailable') {
       setSignOutState('done');
+      return;
     }
-  }, [signOutState, auth.status]);
+    if (!signOutSettled || auth.status !== 'signed-in') return;
+    const timer = setTimeout(() => setSignOutState('failed'), SIGN_OUT_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [signOutState, signOutSettled, auth.status]);
 
   // An in-page swap removes the button that was focused, which drops focus to
   // <body> and announces nothing. Put it on the new heading instead.
@@ -116,9 +145,14 @@ export default function OnboardingAgePage(): JSX.Element | null {
 
   const attemptSignOut = (): void => {
     setSignOutState('pending');
-    // Only a genuine transport throw is evidence of failure here; a clean
-    // resolution is not evidence of success, so it deliberately does nothing.
-    void auth.signOut().catch(() => setSignOutState('failed'));
+    setSignOutSettled(false);
+    // A throw is immediate evidence of failure. A clean resolution is not
+    // evidence of SUCCESS — only that the call is over, which is what starts
+    // the settle window in the effect above.
+    void signOutAndRevokePush(auth.signOut).then(
+      () => setSignOutSettled(true),
+      () => setSignOutState('failed'),
+    );
   };
 
   /**

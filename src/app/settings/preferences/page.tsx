@@ -13,6 +13,7 @@ import { listBlockedProfiles } from '@/lib/moderation/blocks';
 import { setOwnPrivacy } from '@/lib/profile.server';
 import { loadProfile } from '@/lib/storedProfile';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { signOutAndRevokePush } from '../_signOut';
 import {
   ButtonRow,
   Group,
@@ -83,7 +84,12 @@ export default function SettingsHomePage(): JSX.Element {
             value={auth.status === 'signed-in' ? 'Verified' : 'Signed out'}
           />
           {auth.status === 'signed-in' ? (
-            <ButtonRow label="Sign out" onClick={() => auth.signOut()} />
+            // V8-R-ACC-011 makes revoking this installation's notification
+            // token part of signing out, so both live behind one helper.
+            <ButtonRow
+              label="Sign out"
+              onClick={() => void signOutAndRevokePush(auth.signOut)}
+            />
           ) : null}
         </Group>
 

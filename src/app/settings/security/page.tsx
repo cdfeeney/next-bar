@@ -9,11 +9,15 @@ import {
   abandonInFlightSyncs,
   destroyAccountDataOnDeletion,
 } from '@/lib/accountCache';
-import { requestAccountDeletion } from '@/lib/accountDeletion';
 import { deleteAllServerComparisons } from '@/lib/pairwise.server';
 import { deleteAllServerRatings } from '@/lib/ratings.server';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { signOutAndRevokePush } from '../_signOut';
 import { ButtonRow, Group, SlotRow, StackHeader, StatusRow } from '../_ui';
+import {
+  requestAccountDeletionOutcome,
+  type DeletionOutcome,
+} from './_deleteRequest';
 
 /**
  * Security & account (approved/next-bar-account-a-settings.png, screen 5).
@@ -121,13 +125,18 @@ async function clearServerRatings(
 }
 
 /**
- * Destroy the account server-side and leave. Returns false when NOTHING was
- * deleted (the route is all-or-nothing); on success it never returns usefully
- * — the page has already been replaced.
+ * Destroy the account server-side and leave.
+ *
+ * Returns what is KNOWN about the outcome, not a success flag: `refused` means
+ * the server answered before deleting anything, `unknown` means no usable
+ * answer came back and the account may already be gone. Only `deleted` leaves
+ * — and it never returns usefully, because the page has been replaced.
  */
-async function performAccountDeletion(auth: SignedInAuth): Promise<boolean> {
-  const ok = await requestAccountDeletion(auth.session.access_token);
-  if (!ok) return false;
+async function performAccountDeletion(
+  auth: SignedInAuth,
+): Promise<DeletionOutcome> {
+  const outcome = await requestAccountDeletionOutcome(auth.session.access_token);
+  if (outcome !== 'deleted') return outcome;
   // The auth user is gone server-side. signOut() SEALS the cache — right for
   // an ordinary sign-out, wrong here: this owner can never return. Deletion
   // hard-destroys EVERYTHING, personal keys included; clearing the cache alone
@@ -139,12 +148,12 @@ async function performAccountDeletion(auth: SignedInAuth): Promise<boolean> {
   // and by the time `finally` runs `auth` no longer names the account.
   const deletedUserId = auth.user.id;
   try {
-    await auth.signOut();
+    await signOutAndRevokePush(auth.signOut);
   } finally {
     destroyAccountDataOnDeletion(deletedUserId);
     window.location.assign('/');
   }
-  return true;
+  return 'deleted';
 }
 
 export default function SecurityAccountPage(): JSX.Element {
@@ -207,8 +216,14 @@ function SignedInAccount({
           description="Signing out ends the session on this device. Next Bar cannot list your other devices on this build."
         />
         {/* Sign out is an ordinary secondary action and is deliberately NOT
-            grouped with deletion (V8-R-ACC-011). It is also on Settings home. */}
-        <ButtonRow label="Sign out" onClick={() => auth.signOut()} />
+            grouped with deletion (V8-R-ACC-011). It is also on Settings home.
+            Both go through the helper that also revokes this installation's
+            notification token, which the requirement makes part of the same
+            action. */}
+        <ButtonRow
+          label="Sign out"
+          onClick={() => void signOutAndRevokePush(auth.signOut)}
+        />
       </Group>
 
       <Group
@@ -265,8 +280,12 @@ function SignedOutAccount({
 }
 
 // Account deletion: idle → armed (type-to-confirm visible) → deleting.
-// 'failed' shows an inline error and returns to armed.
-type DeleteState = 'idle' | 'armed' | 'deleting' | 'failed';
+// A finished attempt that did NOT leave the page rests in one of two states,
+// and collapsing them was the defect: 'failed' is the server answering that it
+// deleted nothing, 'unknown' is no usable answer at all. Both keep the
+// type-to-confirm form on screen; they differ only in what they can honestly
+// claim about the account.
+type DeleteState = 'idle' | 'armed' | 'deleting' | 'failed' | 'unknown';
 
 /**
  * The confirmation is EXACT — not trimmed, not case-folded.
@@ -291,10 +310,12 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
     if (state === 'deleting') return;
     if (!isDeleteConfirmed(confirmText)) return;
     setState('deleting');
-    const ok = await performAccountDeletion(auth);
-    // Nothing was deleted (the route is all-or-nothing) — say so and let the
-    // user retry or bail.
-    if (!ok) setState('failed');
+    const outcome = await performAccountDeletion(auth);
+    // 'deleted' has already navigated away. The other two both stay here and
+    // say only what they know: a refusal is the honest "nothing was removed",
+    // a lost answer is not allowed to borrow that sentence.
+    if (outcome === 'refused') setState('failed');
+    if (outcome === 'unknown') setState('unknown');
   };
 
   return (
@@ -381,6 +402,19 @@ function DeleteConfirm({
         <p className="text-red-400 text-xs" role="status">
           Couldn&apos;t delete your account — nothing was removed. Try again in a
           moment, or email hi@next-bar.app.
+        </p>
+      ) : null}
+      {/* The honest sentence for a lost answer. It must NOT say "nothing was
+          removed": the route deletes the account and only then replies, so a
+          dropped response is exactly the case where the account is most likely
+          already gone. Telling someone their data survived, when it did not,
+          stops them checking — the one outcome worse than saying "we don't
+          know". */}
+      {state === 'unknown' ? (
+        <p className="text-red-400 text-xs" role="status">
+          We couldn&apos;t confirm whether your account was deleted — it may
+          already be gone. Reload this page and try to sign in to check before
+          trying again, or email hi@next-bar.app.
         </p>
       ) : null}
       {/* Cancel is the larger, more prominent of the two. */}

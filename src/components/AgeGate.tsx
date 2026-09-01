@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import { AGE_STEP_PATH, readAgeAck, writeAgeAck } from '@/app/onboarding/_ageAck';
 
 /**
  * 21+ age gate (H1 App-Store pack). Full-screen overlay on first visit;
@@ -16,33 +18,53 @@ import { useEffect, useState } from 'react';
  * of the overlay for acked users, no flash of content for new ones — the
  * page underneath renders regardless, but the overlay mounts within the
  * first client frame).
+ *
+ * THE OVERLAY ASKED A QUESTION IT WOULD NOT ACCEPT "NO" TO. Until this
+ * change it offered exactly one button — "I'm 21 or older" — so an under-21
+ * visitor could only affirm falsely or sit on a screen with no way forward.
+ * That was not merely an omission: `/onboarding/age` implements the full
+ * under-21 exit required by V8-R-ONB-003, and this overlay renders from the
+ * root layout on TOP of it, so the one screen that owns the exit was
+ * covered by a dialog that had none. Two halves, both here:
+ *
+ *   - "I'm under 21" hands the answer to the screen that owns it, via the
+ *     `?under21=1` flag that screen already honours. No second copy of the
+ *     exit, its sign-out, or its ack withdrawal lives here.
+ *   - The overlay STANDS DOWN on the age step itself. That step asks the
+ *     same question with the same two answers, so covering it was asking
+ *     twice and hiding the answer; and after the hand-off the exit screen
+ *     has to be visible to be read. Stateless, so a visitor who navigates
+ *     back off the step meets the gate again — the ack is the only thing
+ *     that puts it down, and the under-21 exit withdraws it.
  */
-const KEY = 'next-bar:age-ack:v1';
 
 type AckState = 'unknown' | 'acked' | 'unacked';
 
 export default function AgeGate(): JSX.Element | null {
+  const router = useRouter();
+  const pathname = usePathname();
   const [state, setState] = useState<AckState>('unknown');
 
   useEffect(() => {
-    try {
-      setState(window.localStorage.getItem(KEY) === '1' ? 'acked' : 'unacked');
-    } catch {
-      // Storage unavailable (private-mode edge cases): show the gate; the
-      // ack just won't persist. Fail toward asking, never toward skipping.
-      setState('unacked');
-    }
+    // Fail toward asking: an unreadable store (private mode) reads as
+    // unacknowledged, which `readAgeAck` already guarantees.
+    setState(readAgeAck() ? 'acked' : 'unacked');
   }, []);
 
   if (state !== 'unacked') return null;
+  // The age step owns this question AND its "no" branch. Never cover it.
+  if (pathname === AGE_STEP_PATH) return null;
 
   const acknowledge = (): void => {
-    try {
-      window.localStorage.setItem(KEY, '1');
-    } catch {
-      // Non-fatal: the session continues; the gate returns next visit.
-    }
+    writeAgeAck();
     setState('acked');
+  };
+
+  // Deliberately does NOT write, clear, or infer anything about the ack: the
+  // step it hands to withdraws the ack itself, and duplicating that here is
+  // how the two copies drift apart.
+  const decline = (): void => {
+    router.push(`${AGE_STEP_PATH}?under21=1`);
   };
 
   return (
@@ -73,9 +95,15 @@ export default function AgeGate(): JSX.Element | null {
         >
           I&apos;m 21 or older
         </button>
+        <button
+          type="button"
+          onClick={decline}
+          className="block mx-auto mt-4 text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+        >
+          I&apos;m under 21
+        </button>
         <p className="text-muted text-xs leading-relaxed mt-4">
-          Under 21? We&apos;ll see you in a few years. Please drink
-          responsibly.
+          Please drink responsibly.
         </p>
       </div>
     </div>
