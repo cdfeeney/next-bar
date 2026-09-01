@@ -37,6 +37,7 @@ export default function ComposeStep({
   people,
   friends,
   failure,
+  busy = false,
   onCaptionChange,
   onBarChange,
   onPeopleChange,
@@ -55,6 +56,13 @@ export default function ComposeStep({
    * here with every field intact and says so out loud.
    */
   failure: string | null;
+  /**
+   * True while a publish is in flight. Compose is not where publishing happens,
+   * so this is defence in depth behind the Destinations Back lock: if any future
+   * route ever lands here mid-write, this screen's ✕ and Escape must not be the
+   * hole that discards the receipt.
+   */
+  busy?: boolean;
   onCaptionChange: (next: string) => void;
   onBarChange: (next: Bar | null) => void;
   onPeopleChange: (next: readonly TaggedPerson[]) => void;
@@ -62,7 +70,7 @@ export default function ComposeStep({
   onExit: () => void;
 }): JSX.Element {
   const [sheet, setSheet] = useState<'bar' | 'people' | null>(null);
-  const ref = useModalDialog<HTMLDivElement>(onExit, sheet === null);
+  const ref = useModalDialog<HTMLDivElement>(busy ? null : onExit, sheet === null);
   const remaining = MAX_COMPOSER_CAPTION - caption.length;
 
   return (
@@ -77,7 +85,7 @@ export default function ComposeStep({
     >
       <div className="flex items-start justify-between gap-3">
         <h2 className="font-display text-2xl">Share a moment.</h2>
-        <ExitButton testId="composer-compose-exit" onClick={onExit} />
+        <ExitButton testId="composer-compose-exit" onClick={onExit} disabled={busy} />
       </div>
 
       <StoryFrame

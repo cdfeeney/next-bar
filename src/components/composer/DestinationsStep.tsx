@@ -8,10 +8,10 @@ import {
   DESTINATION_LABELS,
   ctaLabel,
   summaryLines,
-  undeliverableDestinations,
   type ComposerGroup,
   type ComposerNightOut,
   type DestinationKey,
+  type RetiredDestinations,
   type StoryAudienceChoice,
 } from './types';
 
@@ -48,7 +48,7 @@ export default function DestinationsStep({
   barName,
   busy,
   failure,
-  landed = [],
+  retired = {},
   undeliverable,
   sheetOpen = false,
   onToggleDestination,
@@ -73,11 +73,12 @@ export default function DestinationsStep({
   busy: boolean;
   failure: string | null;
   /**
-   * Destinations this capture is ALREADY live on after a partial failure. Their
-   * rows are locked: one media object reaches one destination at most once
-   * (V8-R-CMP-003), so re-selecting is not offered rather than merely discouraged.
+   * Destinations closed to further sending, and why — `sent` (confirmed) or
+   * `maybe` (the attempt threw and said nothing). Both lock the row, because one
+   * media object reaches one destination at most once (V8-R-CMP-003); only the
+   * wording differs, since the composer must not claim a delivery it cannot know.
    */
-  landed?: readonly DestinationKey[];
+  retired?: RetiredDestinations;
   /**
    * Selected destinations that currently have no target, reconciled against the
    * live props by the parent. Passed in rather than recomputed so the CTA, the
@@ -118,7 +119,14 @@ export default function DestinationsStep({
    * prevent turning one OFF.
    */
   const rowDisabled = (key: DestinationKey, unavailable = false): boolean =>
-    !on(key) && (unavailable || landed.includes(key));
+    !on(key) && (unavailable || retired[key] !== undefined);
+  /** What a closed row may CLAIM — only what the composer actually knows. */
+  const retiredHint = (key: DestinationKey): string | null =>
+    retired[key] === 'sent'
+      ? 'Already shared here'
+      : retired[key] === 'maybe'
+        ? 'May already be shared'
+        : null;
 
   const lines = summaryLines({
     destinations,
@@ -147,7 +155,14 @@ export default function DestinationsStep({
           type="button"
           data-testid="composer-back"
           onClick={onBack}
-          className="text-muted text-sm min-h-[44px] -ml-1 pr-3 touch-manipulation"
+          // Back is an EXIT ROUTE, not just navigation: Compose carries its own
+          // ✕ and its own armed Escape, so leaving this screen mid-write walks
+          // straight past the lock below and unmounts the composer before its
+          // receipt arrives. Locking ✕ and Escape here and leaving this open was
+          // the round-4 defect.
+          disabled={busy}
+          aria-disabled={busy}
+          className="text-muted text-sm min-h-[44px] -ml-1 pr-3 touch-manipulation disabled:opacity-40"
         >
           ‹ Back
         </button>
@@ -169,11 +184,7 @@ export default function DestinationsStep({
           <DestinationRow
             testId="composer-destination-feed"
             destination="feed"
-            hint={
-              landed.includes('feed')
-                ? 'Already shared here'
-                : 'Stays until you delete it · friends can comment'
-            }
+            hint={retiredHint('feed') ?? 'Stays until you delete it · friends can comment'}
             on={on('feed')}
             disabled={rowDisabled('feed')}
             onClick={() => onToggleDestination('feed')}
@@ -184,7 +195,7 @@ export default function DestinationsStep({
           <DestinationRow
             testId="composer-destination-story"
             destination="story"
-            hint={landed.includes('story') ? 'Already shared here' : 'Visible for 24 hours'}
+            hint={retiredHint('story') ?? 'Visible for 24 hours'}
             on={on('story')}
             disabled={rowDisabled('story')}
             onClick={() => onToggleDestination('story')}
@@ -216,11 +227,10 @@ export default function DestinationsStep({
             testId="composer-destination-night_out"
             destination="night_out"
             hint={
-              landed.includes('night_out')
-                ? 'Already shared here'
-                : nightOut === null
-                  ? 'No night out tonight'
-                  : `${nightOut.label} · 24 hours from the start`
+              retiredHint('night_out')
+              ?? (nightOut === null
+                ? 'No night out tonight'
+                : `${nightOut.label} · 24 hours from the start`)
             }
             on={on('night_out')}
             // With no night out there is nothing to save to, so the row cannot
@@ -234,11 +244,7 @@ export default function DestinationsStep({
           <DestinationRow
             testId="composer-destination-group"
             destination="group"
-            hint={
-              landed.includes('group')
-                ? 'Already shared here'
-                : groupSummary(groups, selectedGroupIds)
-            }
+            hint={retiredHint('group') ?? groupSummary(groups, selectedGroupIds)}
             on={on('group')}
             disabled={rowDisabled('group')}
             onClick={() => onToggleDestination('group')}

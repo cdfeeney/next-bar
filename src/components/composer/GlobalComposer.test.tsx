@@ -300,6 +300,10 @@ describe('V8-R-CMP-003 — Story alone never implies Feed; one media object', ()
     const story = screen.getByTestId('composer-destination-story') as HTMLButtonElement;
     expect(feed.disabled).toBe(true);
     expect(story.disabled).toBe(true);
+    // A throw says nothing about what landed, so the row must not CLAIM one —
+    // it says "may", matching the compose screen's wording for the same state.
+    expect(feed.textContent).toContain('May already be shared');
+    expect(feed.textContent).not.toContain('Already shared here');
     await user.click(feed);
     expect(feed.getAttribute('aria-pressed')).toBe('false');
     expect(published).toHaveLength(1);
@@ -331,6 +335,69 @@ describe('V8-R-CMP-003 — Story alone never implies Feed; one media object', ()
     settle({ ok: true, publishId: 'p1', delivered: ['feed'] });
     await screen.findByTestId('composer-receipt');
     expect(exits).toBe(0);
+  });
+
+  /**
+   * Back is an EXIT ROUTE, not just navigation: Compose carries its own ✕ and
+   * its own armed Escape. Locking ✕ and Escape on Destinations while leaving
+   * Back open meant the lock could simply be walked around.
+   */
+  test('the mid-write lock cannot be walked around via Back', async () => {
+    const user = userEvent.setup();
+    let settle: (result: PublishResult) => void = () => {};
+    mount({
+      onPublish: (input) => {
+        published.push(input);
+        return new Promise<PublishResult>((resolve) => {
+          settle = resolve;
+        });
+      },
+    });
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-share'));
+
+    const back = screen.getByTestId('composer-back') as HTMLButtonElement;
+    expect(back.disabled).toBe(true);
+    await user.click(back);
+    // Still on Destinations, so Compose's armed exit was never reachable.
+    expect(screen.getByTestId('composer-destinations')).toBeTruthy();
+    expect(screen.queryByTestId('composer-compose')).toBeNull();
+    expect(exits).toBe(0);
+
+    settle({ ok: true, publishId: 'p1', delivered: ['feed'] });
+    await screen.findByTestId('composer-receipt');
+    expect(exits).toBe(0);
+  });
+
+  test('a group publish that reaches only some threads names the rest and keeps them selected', async () => {
+    const user = userEvent.setup();
+    publishResult = {
+      ok: false,
+      message: 'One group did not get it.',
+      delivered: ['group'],
+      deliveredGroupIds: ['crew'],
+    };
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-group'));
+    await user.click(screen.getByTestId('composer-group-toggle'));
+    await user.click(await screen.findByText('Bar Crew'));
+    await user.click(screen.getByText('Uni'));
+    await user.click(screen.getByTestId('composer-share'));
+
+    // 'group' covers two threads, so it is NOT closed while one is still missing —
+    // and the retry targets only the thread that did not get it.
+    const failed = await screen.findByTestId('composer-destinations-failed');
+    expect(failed.textContent).toContain('Uni did not get it');
+    expect((screen.getByTestId('composer-destination-group') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+
+    publishResult = { ok: true, publishId: 'p2', delivered: ['group'] };
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-receipt');
+    expect([...published[1].groupIds]).toEqual(['uni']);
   });
 
   test('a rejected publish is treated as indeterminate, never as landed-nowhere', async () => {
@@ -946,6 +1013,45 @@ describe('V8-R-CMP-011 — the three receipts and Undo', () => {
     await screen.findByTestId('composer-receipt');
     await user.click(screen.getByTestId('composer-receipt-undo'));
 
+    const failure = await screen.findByTestId('composer-undo-failed');
+    expect(failure.textContent).toContain('It is still live.');
+    expect(exits).toBe(0);
+  });
+
+  /**
+   * Leaving while an Undo is in flight means a failed Undo can never say so,
+   * and the author walks away believing a still-live post was withdrawn.
+   */
+  test('every way off the receipt is locked while an Undo is in flight', async () => {
+    const user = userEvent.setup();
+    let settle: (result: { ok: true } | { ok: false; message: string }) => void = () => {};
+    mount({
+      onUndo: () =>
+        new Promise<{ ok: true } | { ok: false; message: string }>((resolve) => {
+          settle = resolve;
+        }),
+    });
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-receipt');
+    await user.click(screen.getByTestId('composer-receipt-undo'));
+
+    const undo = screen.getByTestId('composer-receipt-undo') as HTMLButtonElement;
+    const primary = screen.getByTestId('composer-receipt-primary') as HTMLButtonElement;
+    const exit = screen.getByTestId('composer-receipt-exit') as HTMLButtonElement;
+    expect(undo.disabled).toBe(true);
+    expect(primary.disabled).toBe(true);
+    expect(exit.disabled).toBe(true);
+
+    await user.click(exit);
+    await user.click(primary);
+    await user.click(undo);
+    await user.keyboard('{Escape}');
+    expect(exits).toBe(0);
+
+    // A failed Undo can now still say the post is live, which is the whole point.
+    settle({ ok: false, message: 'That could not be undone.' });
     const failure = await screen.findByTestId('composer-undo-failed');
     expect(failure.textContent).toContain('It is still live.');
     expect(exits).toBe(0);

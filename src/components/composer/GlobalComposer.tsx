@@ -11,10 +11,12 @@ import SharedReceipt from './SharedReceipt';
 import StoryAudienceSheet from './StoryAudienceSheet';
 import {
   DESTINATION_LABELS,
+  missingGroupIds,
   reconcileSelection,
   resolveStoryRecipients,
   storyAudienceLapsed,
   type ComposerGroup,
+  type RetiredDestinations,
   type ComposerNightOut,
   type DestinationKey,
   type PublishInput,
@@ -95,16 +97,20 @@ export default function GlobalComposer({
   const [audienceOpen, setAudienceOpen] = useState(false);
   const [audienceLapsed, setAudienceLapsed] = useState(false);
   /**
-   * Destinations this capture is already live on, from a partial failure the
-   * host could not give an Undo handle for. They can never be re-selected
-   * (V8-R-CMP-003) — the composer publishes one media object to each
+   * Destinations closed to further sending, and WHY — `sent` when the host
+   * confirmed delivery, `maybe` when the attempt threw and carried no answer.
+   * Neither can be re-selected (V8-R-CMP-003): one media object reaches one
    * destination at most once.
    */
-  const [landed, setLanded] = useState<readonly DestinationKey[]>([]);
+  const [retired, setRetired] = useState<RetiredDestinations>({});
+  /** Which night out was selected, so a different live one is never substituted. */
+  const [selectedNightOutId, setSelectedNightOutId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [composeFailure, setComposeFailure] = useState<string | null>(null);
   const [destinationFailure, setDestinationFailure] = useState<string | null>(null);
   const [undoFailure, setUndoFailure] = useState<string | null>(null);
+  /** An Undo is in flight — every exit from the receipt is locked until it settles. */
+  const [undoing, setUndoing] = useState(false);
   const [published, setPublished] = useState<{
     publishId: string;
     postId: string | null;
@@ -130,11 +136,12 @@ export default function GlobalComposer({
       storyAudience,
       storyAudienceGroupId: audienceGroupId,
       customIds,
+      nightOutId: selectedNightOutId,
     },
     groups,
     mutualIds,
     mutualsReady: friendsReady,
-    hasNightOut: nightOut !== null,
+    liveNightOutId: nightOut?.id ?? null,
   });
   const storyRecipients = live.storyAudienceIds;
   const storyRecipientCount = storyAudience === 'friends' ? null : storyRecipients.length;
@@ -147,8 +154,12 @@ export default function GlobalComposer({
     // stops the reflex retry, but nothing stopped the author tapping it back on
     // and sending the same media twice. One capture reaches one destination at
     // most once, for the life of this composer.
-    if (landed.includes(key)) return;
+    if (retired[key] !== undefined) return;
     setDestinationFailure(null);
+    // Record WHICH night out this selection means, so a later one cannot inherit it.
+    if (key === 'night_out') {
+      setSelectedNightOutId(destinations.includes('night_out') ? null : (nightOut?.id ?? null));
+    }
     setDestinations((current) =>
       current.includes(key)
         ? current.filter((entry) => entry !== key)
@@ -254,7 +265,11 @@ export default function GlobalComposer({
       // the attempted set is conservative on purpose: the cost of retiring a
       // destination that did NOT receive it is one un-shared destination, and
       // the cost of the opposite mistake is a duplicate post nobody asked for.
-      setLanded((current) => ORDER.filter((key) => attempted.includes(key) || current.includes(key)));
+      setRetired((current) => {
+        const next: RetiredDestinations = { ...current };
+        for (const key of attempted) next[key] = next[key] ?? 'maybe';
+        return next;
+      });
       setDestinations([]);
       setComposeFailure(
         'That did not finish, and some places may already have it. Check before sharing again.',
@@ -298,10 +313,30 @@ export default function GlobalComposer({
       // make the retry safe: drop what already landed from the selection AND
       // remember it, so neither a second tap nor a deliberate re-selection can
       // send this capture to the same destination twice.
-      setLanded((current) => ORDER.filter((key) => landed.includes(key) || current.includes(key)));
-      setDestinations((current) => current.filter((key) => !landed.includes(key)));
+      //
+      // Group is the exception: it covers N threads, so it is only closed when
+      // EVERY chosen thread landed. When some are still missing the row stays
+      // open and its selection narrows to exactly those, so a retry finishes
+      // the job instead of re-sending to threads that already have it.
+      const stillMissingGroups = missingGroupIds({
+        selectedGroupIds: live.groupIds,
+        delivered: landed,
+        deliveredGroupIds: result.deliveredGroupIds,
+      });
+      const closed = landed.filter((key) => key !== 'group' || stillMissingGroups.length === 0);
+      setRetired((current) => {
+        const next: RetiredDestinations = { ...current };
+        for (const key of closed) next[key] = 'sent';
+        return next;
+      });
+      setDestinations((current) => current.filter((key) => !closed.includes(key)));
+      if (stillMissingGroups.length > 0) setSelectedGroupIds(stillMissingGroups);
+      const missingGroupNames = groups
+        .filter((group) => stillMissingGroups.includes(group.id))
+        .map((group) => group.name)
+        .join(' and ');
       setDestinationFailure(
-        `${result.message} ${landed.map((key) => DESTINATION_LABELS[key]).join(' and ')} already went through, so ${landed.length === 1 ? 'it is' : 'they are'} no longer available.`,
+        `${result.message} ${closed.map((key) => DESTINATION_LABELS[key]).join(' and ')} already went through, so ${closed.length === 1 ? 'it is' : 'they are'} no longer available.${missingGroupNames === '' ? '' : ` ${missingGroupNames} did not get it, and ${stillMissingGroups.length === 1 ? 'is' : 'are'} still selected.`}`,
       );
       return;
     }
@@ -326,14 +361,17 @@ export default function GlobalComposer({
         delivered={published.delivered}
         queued={published.queued}
         undoFailure={undoFailure}
+        undoing={undoing}
         onExit={onExit}
         onViewPost={() => onViewPost(published.postId)}
         onViewStory={onViewStory}
         onUndo={() => {
           // Undo DELETES on the server. Closing regardless would leave live
           // posts the author was told had been withdrawn.
+          if (undoing) return;
           setUndoFailure(null);
-          void onUndo(published.publishId).then(
+          setUndoing(true);
+          void onUndo(published.publishId).finally(() => setUndoing(false)).then(
             (result) => {
               if (result.ok) onExit();
               else setUndoFailure(result.message);
@@ -365,7 +403,7 @@ export default function GlobalComposer({
           barName={bar?.name ?? null}
           busy={busy}
           failure={destinationFailure}
-          landed={landed}
+          retired={retired}
           undeliverable={live.undeliverable}
           sheetOpen={audienceOpen}
           onToggleDestination={toggleDestination}
@@ -449,6 +487,7 @@ export default function GlobalComposer({
       bar={bar}
       people={taggedPeople}
       friends={friends}
+      busy={busy}
       failure={composeFailure}
       onCaptionChange={setCaption}
       onBarChange={setBar}

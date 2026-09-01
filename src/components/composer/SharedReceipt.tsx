@@ -38,6 +38,7 @@ export default function SharedReceipt({
   delivered,
   queued = false,
   undoFailure,
+  undoing = false,
   onExit,
   onUndo,
   onViewPost,
@@ -52,12 +53,20 @@ export default function SharedReceipt({
   queued?: boolean;
   /** Set when Undo did not reach the server. What was published is STILL LIVE. */
   undoFailure: string | null;
+  /**
+   * True while an Undo is in flight. Every way OFF this screen is locked until
+   * it settles: leaving first means a failed Undo can never say so, and the
+   * author walks away believing a still-live post was withdrawn (V8-R-CMP-011,
+   * "a failed Undo must not report success"). It also stops a second tap
+   * dispatching a concurrent deletion.
+   */
+  undoing?: boolean;
   onExit: () => void;
   onUndo: () => void;
   onViewPost: () => void;
   onViewStory: () => void;
 }): JSX.Element {
-  const ref = useModalDialog<HTMLDivElement>(onExit);
+  const ref = useModalDialog<HTMLDivElement>(undoing ? null : onExit);
   const receipt = receiptFor(delivered);
   const missing = missingDestinations(selected, delivered);
   const headline = queued
@@ -77,7 +86,12 @@ export default function SharedReceipt({
     >
       <div className="flex justify-end">
         {/* After Share, ✕ returns to Social (V8-R-CMP-009). */}
-        <ExitButton testId="composer-receipt-exit" onClick={onExit} label="Back to Social" />
+        <ExitButton
+          testId="composer-receipt-exit"
+          onClick={onExit}
+          disabled={undoing}
+          label={undoing ? 'Undoing — please wait' : 'Back to Social'}
+        />
       </div>
 
       <h2 data-testid="composer-receipt-headline" className="font-display text-2xl text-center mt-2">
@@ -125,6 +139,8 @@ export default function SharedReceipt({
           type="button"
           data-testid="composer-receipt-primary"
           data-action={receipt.primaryAction}
+          disabled={undoing}
+          aria-disabled={undoing}
           onClick={
             receipt.primaryAction === 'view-post'
               ? onViewPost
@@ -132,7 +148,7 @@ export default function SharedReceipt({
                 ? onViewStory
                 : onExit
           }
-          className="flex-1 min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+          className="flex-1 min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation disabled:opacity-40 hover:border-accent transition-colors"
         >
           {receipt.primaryLabel}
         </button>
@@ -140,9 +156,11 @@ export default function SharedReceipt({
           type="button"
           data-testid="composer-receipt-undo"
           onClick={onUndo}
-          className="flex-1 min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+          disabled={undoing}
+          aria-disabled={undoing}
+          className="flex-1 min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation disabled:opacity-40 hover:border-accent transition-colors"
         >
-          Undo
+          {undoing ? 'Undoing…' : 'Undo'}
         </button>
       </div>
 

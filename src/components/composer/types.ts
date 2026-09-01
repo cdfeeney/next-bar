@@ -110,6 +110,19 @@ export type PublishInput = {
   nightOutId: string | null;
 };
 
+/**
+ * WHICH GROUP THREADS LANDED, not merely whether "Group" did.
+ *
+ * `sendGroupMessage` takes ONE group id, so the host loops and the loop can
+ * fail partway: with A and B selected, A can succeed and B fail. `delivered`
+ * is keyed by DESTINATION, so on its own it must either claim Group succeeded
+ * entirely — hiding that B is missing — or claim it failed entirely while A is
+ * live and unmentioned. Both are the silent partial V8-R-CMP-002 forbids.
+ *
+ * A host that reports `group` in `delivered` therefore reports this too. Absent,
+ * it means every selected group landed, which keeps the single-group case as
+ * simple as it was.
+ */
 export type PublishResult =
   | {
       ok: true;
@@ -117,6 +130,8 @@ export type PublishResult =
       publishId: string;
       /** What actually landed. A strict subset of the selection is a PARTIAL publish. */
       delivered: readonly DestinationKey[];
+      /** Which group threads actually received it. Omit when all of them did. */
+      deliveredGroupIds?: readonly string[];
       /** True when the publish was queued offline. Never labelled "Shared" (V8-R-CMP-008). */
       queued?: boolean;
       /** Set when the receipt's primary action can open the new Feed post. */
@@ -127,6 +142,8 @@ export type PublishResult =
       message: string;
       /** Anything that DID land before the failure, so a partial is never silent. */
       delivered?: readonly DestinationKey[];
+      /** Which group threads received it, when `delivered` includes `group`. */
+      deliveredGroupIds?: readonly string[];
       /**
        * Identifies the part that DID land, when any did. Undo has to be
        * reachable for a live post even though the publish as a whole failed —
@@ -145,6 +162,20 @@ export type PublishResult =
  * fourth for "one destination that is neither Feed nor Story" would be inventing
  * one. "1 place" rather than "1 places" is grammar, not a fourth receipt.
  */
+/**
+ * Why a destination is closed to further sending.
+ *
+ * `sent` — the host confirmed it landed. `maybe` — the attempt THREW, so it
+ * carried no `delivered` and the composer cannot know. Both lock the row, and
+ * the difference is only what the row is allowed to CLAIM: round 4 locked them
+ * identically and told the author "Already shared here" about destinations that
+ * may have received nothing, while the compose screen said "may already have
+ * it" about the same state. Locking on a guess is right; asserting one is not.
+ */
+export type RetirementReason = 'sent' | 'maybe';
+
+export type RetiredDestinations = Partial<Record<DestinationKey, RetirementReason>>;
+
 export type ComposerReceipt = {
   kind: 'feed' | 'story' | 'places';
   headline: string;
@@ -300,6 +331,27 @@ export function missingDestinations(
 }
 
 /**
+ * The group threads that were chosen but did not receive it.
+ *
+ * `delivered` cannot express this: it is keyed by destination, and Group is one
+ * key covering N threads. Without this a publish to A and B where only A landed
+ * reports "Group" as delivered and B vanishes silently — the partial-publish
+ * clause of V8-R-CMP-002 applied one level down.
+ *
+ * An ABSENT `deliveredGroupIds` means all of them landed, so the ordinary
+ * single-group case reports nothing missing.
+ */
+export function missingGroupIds(input: {
+  selectedGroupIds: readonly string[];
+  delivered: readonly DestinationKey[];
+  deliveredGroupIds?: readonly string[];
+}): readonly string[] {
+  if (!input.delivered.includes('group')) return [];
+  if (input.deliveredGroupIds === undefined) return [];
+  return input.selectedGroupIds.filter((id) => !input.deliveredGroupIds!.includes(id));
+}
+
+/**
  * ONE RECONCILIATION OF STORED INTENT AGAINST THE LIVE WORLD (rounds 1-3).
  *
  * WHY THIS EXISTS, because it replaces three rounds of individual guards.
@@ -332,6 +384,16 @@ export type ComposerSelection = {
   storyAudience: StoryAudienceChoice;
   storyAudienceGroupId: string | null;
   customIds: readonly string[];
+  /**
+   * WHICH night out was chosen, not merely that one was.
+   *
+   * Reconciling on `hasNightOut` alone was a SUBSTITUTION, which is the one
+   * thing this function promises never to do: select tonight's night out, let
+   * it end and a new one begin, and the row stayed on while `nightOutId`
+   * silently retargeted to a plan the author never picked. Identity is what
+   * makes "only ever narrows" true rather than aspirational.
+   */
+  nightOutId: string | null;
 };
 
 export type ReconciledSelection = {
@@ -355,7 +417,8 @@ export function reconcileSelection(input: {
   /** Accepted mutual friends. Empty while the circle has not resolved. */
   mutualIds: readonly string[];
   mutualsReady: boolean;
-  hasNightOut: boolean;
+  /** Tonight's night out AS IT IS NOW, or null. Compared by id, never assumed. */
+  liveNightOutId: string | null;
 }): ReconciledSelection {
   const { selection } = input;
   const liveGroupIds = input.groups.map((group) => group.id);
@@ -370,13 +433,17 @@ export function reconcileSelection(input: {
     customIds: selection.customIds,
   });
 
-  const undeliverable: DestinationKey[] = [];
-  if (selection.destinations.includes('group') && groupIds.length === 0) {
-    undeliverable.push('group');
-  }
-  if (selection.destinations.includes('night_out') && !input.hasNightOut) {
-    undeliverable.push('night_out');
-  }
+  // ONE implementation of the fail-closed rule, called rather than restated.
+  // Round 4 inlined a second copy here and left the exported one production-dead,
+  // which is the very drift this reconciliation exists to prevent.
+  const undeliverable = undeliverableDestinations({
+    destinations: selection.destinations,
+    groupIds,
+    // Deliverable only when the chosen night out IS the live one. A different
+    // live night out is not a substitute for the one the author picked.
+    hasNightOut:
+      selection.nightOutId !== null && selection.nightOutId === input.liveNightOutId,
+  });
 
   return {
     groupIds,

@@ -310,7 +310,7 @@ describe('reconcileSelection — stored intent against the live world', () => {
     groups: GROUPS,
     mutualIds: ['alex', 'sam'],
     mutualsReady: true,
-    hasNightOut: true,
+    liveNightOutId: 'no1' as string | null,
   };
   const selection = {
     destinations: ['feed'] as readonly ('feed' | 'story' | 'night_out' | 'group')[],
@@ -319,6 +319,7 @@ describe('reconcileSelection — stored intent against the live world', () => {
     storyAudience: 'friends' as const,
     storyAudienceGroupId: null,
     customIds: [] as readonly string[],
+    nightOutId: 'no1' as string | null,
   };
 
   test('drops a group target that no longer exists, and says the row has nowhere to go', () => {
@@ -351,10 +352,33 @@ describe('reconcileSelection — stored intent against the live world', () => {
   test('reports a Night Out that has gone away since it was selected', () => {
     const live = reconcileSelection({
       ...base,
-      hasNightOut: false,
+      liveNightOutId: null,
       selection: { ...selection, destinations: ['night_out'] },
     });
     expect([...live.undeliverable]).toEqual(['night_out']);
+  });
+
+  /**
+   * The invariant this whole function claims: reconciling NARROWS, it never
+   * SUBSTITUTES. Matching on existence alone quietly retargeted a selected
+   * night out onto whatever plan happened to be live next.
+   */
+  test('refuses a DIFFERENT live Night Out rather than silently retargeting to it', () => {
+    const live = reconcileSelection({
+      ...base,
+      liveNightOutId: 'no2',
+      selection: { ...selection, destinations: ['night_out'], nightOutId: 'no1' },
+    });
+    expect([...live.undeliverable]).toEqual(['night_out']);
+  });
+
+  test('keeps a Night Out that is still the one that was chosen', () => {
+    const live = reconcileSelection({
+      ...base,
+      liveNightOutId: 'no1',
+      selection: { ...selection, destinations: ['night_out'], nightOutId: 'no1' },
+    });
+    expect([...live.undeliverable]).toEqual([]);
   });
 
   test('reports a lapsed story narrowing rather than widening it', () => {
@@ -409,7 +433,7 @@ describe('reconcileSelection — stored intent against the live world', () => {
         groupIds: ['deleted'],
         tagIds: ['ghost'],
       },
-      hasNightOut: false,
+      liveNightOutId: null,
     });
     expect([...live.groupIds]).toEqual([]);
     expect([...live.tagIds]).toEqual([]);
