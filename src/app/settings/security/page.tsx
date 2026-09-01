@@ -311,22 +311,36 @@ function isDeleteConfirmed(text: string): boolean {
 function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
   const [state, setState] = useState<DeleteState>('idle');
   const [confirmText, setConfirmText] = useState('');
+  /**
+   * Has ANY attempt in this session ended `unknown`? Latches true and never
+   * clears.
+   *
+   * IT CANNOT BE DERIVED FROM `state`. A first version read `state ===
+   * 'unknown'` at the top of the handler, which is true only while the screen
+   * is still showing that outcome — and Cancel resets `state` to 'idle'. So
+   * the sequence "attempt ends unknown, tap Cancel, re-arm, retry" lost the
+   * fact that the account may already be gone, the dead token produced the
+   * route's `unauthorized`, and the screen printed "nothing was removed" over
+   * a destroyed account: exactly the false assurance the whole three-outcome
+   * design exists to prevent, reached by one extra tap. What the classifier
+   * needs is a fact about the SESSION's history, and transient view state is
+   * not that.
+   */
+  const [sawUnknown, setSawUnknown] = useState(false);
 
   const handleDelete = async () => {
     if (state === 'deleting') return;
     if (!isDeleteConfirmed(confirmText)) return;
-    // Once an attempt has ended 'unknown' the account may already be gone, and
-    // this tap is a RETRY: the route's `unauthorized` then means "this token
-    // names nobody" just as readily as "refused", so it stops counting as a
-    // certain refusal. Read before the state is overwritten by 'deleting'.
-    const afterUnknown = state === 'unknown';
     setState('deleting');
-    const outcome = await performAccountDeletion(auth, afterUnknown);
+    const outcome = await performAccountDeletion(auth, sawUnknown);
     // 'deleted' has already navigated away. The other two both stay here and
     // say only what they know: a refusal is the honest "nothing was removed",
     // a lost answer is not allowed to borrow that sentence.
     if (outcome === 'refused') setState('failed');
-    if (outcome === 'unknown') setState('unknown');
+    if (outcome === 'unknown') {
+      setSawUnknown(true);
+      setState('unknown');
+    }
   };
 
   return (

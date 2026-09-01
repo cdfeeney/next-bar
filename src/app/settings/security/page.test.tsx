@@ -35,8 +35,20 @@ vi.mock('@/lib/accountCache', () => ({
   abandonInFlightSyncs: vi.fn(),
   destroyAccountDataOnDeletion: vi.fn(),
 }));
+/**
+ * The mock HONOURS `afterUnknown` rather than ignoring it. A mock that drops
+ * the argument cannot tell a correct caller from one that forgets the flag,
+ * and the cancel-then-retry defect below passed a green suite for exactly
+ * that reason.
+ */
+const seenAfterUnknown: boolean[] = [];
 vi.mock('./_deleteRequest', () => ({
-  requestAccountDeletionOutcome: vi.fn(async () => deletionOutcome),
+  requestAccountDeletionOutcome: vi.fn(async (_token: string, afterUnknown = false) => {
+    seenAfterUnknown.push(afterUnknown);
+    // Mirrors the real classifier: once an attempt has ended unknown, nothing
+    // short of a confirmed deletion is certain again.
+    return afterUnknown && deletionOutcome !== 'deleted' ? 'unknown' : deletionOutcome;
+  }),
 }));
 vi.mock('@/lib/pairwise.server', () => ({
   deleteAllServerComparisons: vi.fn(async () => true),
@@ -50,6 +62,7 @@ import SecurityAccountPage from './page';
 
 beforeEach(() => {
   deletionOutcome = 'deleted';
+  seenAfterUnknown.length = 0;
 });
 
 const dangerZone = (): HTMLElement =>
@@ -194,6 +207,36 @@ describe('V8-R-ACC-012 — the deletion result says only what is known', () => {
       expect(screen.getByText(/may\s+already be gone/i)).toBeTruthy(),
     );
     expect(screen.getByText(/try to sign in to check/i)).toBeTruthy();
+  });
+
+  it('remembers an unknown outcome across Cancel, so a re-armed retry cannot claim a refusal', async () => {
+    // The flag was first derived from the transient view state, which Cancel
+    // resets to 'idle'. So: attempt ends unknown -> Cancel -> re-arm -> retry
+    // asked as if it were a FIRST attempt, the dead token produced the route's
+    // `unauthorized`, and the screen printed "nothing was removed" over an
+    // account the first attempt may already have destroyed. Whether an earlier
+    // attempt left the account's fate open is a fact about the SESSION, not
+    // about what is currently on screen.
+    deletionOutcome = 'unknown';
+    await armAndDelete();
+    await waitFor(() => expect(seenAfterUnknown).toEqual([false]));
+
+    await userEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
+
+    // Re-arm and retry. The server now refuses outright.
+    deletionOutcome = 'refused';
+    await userEvent.click(
+      screen.getByRole('button', { name: /^Delete account$/i }),
+    );
+    await userEvent.type(screen.getByLabelText(/type/i), 'DELETE');
+    await userEvent.click(
+      screen.getByRole('button', { name: /permanently delete/i }),
+    );
+
+    // The retry must be asked as a retry …
+    await waitFor(() => expect(seenAfterUnknown).toEqual([false, true]));
+    // … and the screen must not go back to the confident sentence.
+    expect(screen.queryByText(/nothing was removed/i)).toBeNull();
   });
 });
 
