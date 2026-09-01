@@ -851,6 +851,40 @@ begin
        and mo.bucket_id = 'story-media'
        and msg.deleted_at is null
        and public.group_message_is_visible(msg.id)
+       -- AND THE MESSAGE'S GROUP DESTINATION MUST NOT HAVE BEEN RETIRED.
+       -- 0067's query stopped at `deleted_at is null`, which is the message's
+       -- OWN liveness and not the destination's. `remove_media_destination`
+       -- (0066) is a second, granted removal path: it stamps `removed_at` on
+       -- the kind='group' spine row and — unlike its story branch, which
+       -- soft-deletes the story — leaves `group_messages` completely untouched.
+       -- So after an owner removes a photo from a group destination, the
+       -- message row is still live and still visible to every member, and this
+       -- branch would keep minting signed URLs for bytes the owner was told had
+       -- been removed. `delete_group_message` and the hard-delete trigger both
+       -- stamp the same row, so this term also agrees with them.
+       --
+       -- Written as "live, or never minted" rather than "a live row exists":
+       -- `send_group_message` always writes the spine row, but a message that
+       -- predates it — or any row this file cannot see — must not be blanked by
+       -- the absence of a destination it never had. Only an actual retirement
+       -- withdraws the authorization.
+       and (
+         not exists (
+           select 1
+             from public.media_destinations d
+            where d.media_id = msg.media_id
+              and d.kind = 'group'
+              and d.ref_id = msg.id::text
+         )
+         or exists (
+           select 1
+             from public.media_destinations d
+            where d.media_id = msg.media_id
+              and d.kind = 'group'
+              and d.ref_id = msg.id::text
+              and d.removed_at is null
+         )
+       )
   ) into v_group_readable;
 
   -- THE FEED ANSWER, COMPUTED ONCE. It is both the fallback branch at the bottom
@@ -950,6 +984,11 @@ begin
     --     destination is live, which fails OPEN on the hide (the reported post is
     --     hidden regardless; only the bytes stay signable) rather than fails
     --     closed onto a surface 0069 has no authority over.
+    --     'group' IS NO LONGER ONE OF THOSE KINDS. This function computes the
+    --     group answer itself as `v_group_readable`, so for that one kind the
+    --     question is not unknowable and the fail-open concession is not owed —
+    --     see the exclusion on the destination term and `not v_group_readable`
+    --     below, which is the term that actually decides it.
     -- Both belong in the integration check, against the chain as actually
     -- installed, not against this file.
     if v_prior.readable
@@ -980,7 +1019,19 @@ begin
            from public.media_destinations d
            join public.media_objects m on m.id = d.media_id
           where m.storage_path = p_name
-            and d.kind not in ('feed', 'archive')
+            -- 'group' IS EXCLUDED HERE, and it is the one kind whose exclusion
+            -- is not a judgement about liveness. The residual stated above —
+            -- "whether a live destination of a kind this file does not own is
+            -- VISIBLE TO THIS CALLER" — does not apply to 'group', because this
+            -- function now computes that exact answer itself, once, as
+            -- `v_group_readable`, and the final `and not v_group_readable` term
+            -- below is what owns it. Leaving 'group' in this generic list made
+            -- that final term UNREACHABLE: any live group spine row stood the
+            -- whole veto down before it could be consulted, so an author who had
+            -- left the group kept a signable URL for a Feed post they had
+            -- reported. Two terms answering the same question, one of them
+            -- blind, is how the veto lost the promise it states.
+            and d.kind not in ('feed', 'archive', 'group')
             and d.removed_at is null
             -- 0066's own liveness rule, copied rather than re-derived: a story
             -- destination row is never retired, so `removed_at is null` alone

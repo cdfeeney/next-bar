@@ -259,7 +259,14 @@ describe('0069 — one definition of the Feed audience gate', () => {
       'public.can_view_feed_post(uuid, uuid)',
       'public.feed_post_reported_by(uuid, uuid)',
     ]) {
-      expect(SQL, `${signature} is not revoked from authenticated`).toContain(
+      // CODE, not SQL. Read over the raw text this assertion was satisfied by
+      // the revoke's own commented-out corpse: `--` in front of the statement
+      // leaves the string present, and `grantedToAuthenticated` then compares
+      // -1 > -1 over CODE and reports "not granted" because neither a grant nor
+      // a revoke survives. Both cases passed while the created SECURITY DEFINER
+      // function kept its default EXECUTE — the arbitrary-viewer oracle this
+      // case exists to forbid, green all the way through an apply.
+      expect(CODE, `${signature} is not revoked from authenticated`).toContain(
         `revoke all on function ${signature} from public, anon, authenticated;`,
       );
       expect(
@@ -535,13 +542,31 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
     // destination AND in a reported Feed post gets (true, null) from 0066's owner
     // branch, so the discriminator alone blanked a group photo they can still see.
     // Both terms, therefore.
+    //
+    // ROUND 1 PANEL OF THIS FILE, CODEX, MEDIUM — 'group' LEFT THIS LIST.
+    // It was here for the reason the comment above gives: only WP6 can say
+    // whether a live group destination is visible to THIS caller. That stopped
+    // being true when the function began computing the group answer itself.
+    // With 'group' still in the list, ANY live spine row stood the whole veto
+    // down before the closing `and not v_group_readable` could be consulted, so
+    // an author who had left the group kept a signable URL for a post they had
+    // reported and the closing term was unreachable. The pairing case below
+    // pins that term, so neither can be traded away for the other.
     expect(sqlShape(body)).toContain(
       'and not exists ( select 1 from public.media_destinations d'
       + ' join public.media_objects m on m.id = d.media_id'
       + ' where m.storage_path = p_name'
-      + " and d.kind not in ('feed', 'archive')"
+      + " and d.kind not in ('feed', 'archive', 'group')"
       + ' and d.removed_at is null',
     );
+  });
+
+  it('the group answer, not the destination list, is what stands the veto down for a group', () => {
+    // The complement of the exclusion above. `v_group_readable` is the term that
+    // decides the group case, and it has to be REACHABLE: restoring 'group' to the
+    // generic list makes this line dead code without changing its text, which is
+    // why the two cases are asserted as a pair rather than one of them alone.
+    expect(sqlShape(body)).toContain('and not v_group_readable then');
   });
 
   it('an EXPIRED story destination does not count as live, per 0066 own rule', () => {

@@ -251,6 +251,39 @@ describe('round 9: a group photo authorises an UNBOUNDED read window', () => {
     expect(body).toMatch(/v_group_readable/);
     expect(body).toMatch(/group_message_is_visible/);
   });
+
+  it('a photo removed from its group destination stops being group-readable', () => {
+    // ROUND 1 PANEL, CODEX, HIGH. `msg.deleted_at is null` is the MESSAGE's liveness,
+    // not the destination's, and they are retired by different verbs.
+    // `remove_media_destination` (0066) is granted to authenticated, stamps
+    // `removed_at` on the kind='group' spine row, and — unlike its story branch,
+    // which soft-deletes the story — leaves `group_messages` untouched. So the
+    // message stayed visible to every member and this branch kept minting signed
+    // URLs for a photo the owner had been told was removed.
+    //
+    // Asserted over `shape` (comment-stripped, whitespace-collapsed) so the guard
+    // cannot be satisfied by the text of its own explanation.
+    expect(
+      shape,
+      'the group answer no longer checks that the destination survives, so a removed photo stays signable',
+    ).toContain(
+      "or exists ( select 1 from public.media_destinations d"
+      + " where d.media_id = msg.media_id and d.kind = 'group'"
+      + " and d.ref_id = msg.id::text and d.removed_at is null )",
+    );
+
+    // The other half of the pair. "Live, or never minted" is the rule; degrading it
+    // to a bare `exists (live row)` would blank any message whose spine row predates
+    // send_group_message writing one, which is a different bug in the other direction.
+    expect(
+      shape,
+      'the never-minted branch is gone, so a message with no spine row is refused',
+    ).toContain(
+      "and ( not exists ( select 1 from public.media_destinations d"
+      + " where d.media_id = msg.media_id and d.kind = 'group'"
+      + " and d.ref_id = msg.id::text )",
+    );
+  });
 });
 
 describe('round-2 panel findings', () => {
