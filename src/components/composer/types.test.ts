@@ -6,6 +6,7 @@ import {
   COMPOSER_DESTINATIONS,
   MAX_COMPOSER_CAPTION,
   ctaLabel,
+  groupTargetsMissing,
   missingDestinations,
   receiptFor,
   resolveStoryRecipients,
@@ -194,6 +195,20 @@ describe('V8-R-CMP-008 — the CTA names its effect', () => {
 
   test('an empty selection asks for one instead of offering to share', () => {
     expect(ctaLabel([])).toBe('Pick a place to share');
+  });
+});
+
+describe('V8-R-CMP-007 / -008 — Group is not a destination until it names a group', () => {
+  test('Group selected with no group chosen cannot be delivered', () => {
+    expect(groupTargetsMissing({ destinations: ['group'], groupIds: [] })).toBe(true);
+  });
+
+  test('Group with a chosen group can', () => {
+    expect(groupTargetsMissing({ destinations: ['group'], groupIds: ['uni'] })).toBe(false);
+  });
+
+  test('an unselected Group row is not a missing target', () => {
+    expect(groupTargetsMissing({ destinations: ['feed'], groupIds: [] })).toBe(false);
   });
 });
 

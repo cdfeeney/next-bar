@@ -7,6 +7,7 @@ import { ExitButton } from './ComposeStep';
 import {
   DESTINATION_LABELS,
   ctaLabel,
+  groupTargetsMissing,
   summaryLines,
   type ComposerGroup,
   type ComposerNightOut,
@@ -47,6 +48,7 @@ export default function DestinationsStep({
   barName,
   busy,
   failure,
+  sheetOpen = false,
   onToggleDestination,
   onToggleGroupsOpen,
   onToggleGroup,
@@ -68,6 +70,15 @@ export default function DestinationsStep({
   barName: string | null;
   busy: boolean;
   failure: string | null;
+  /**
+   * True while the Story-audience sheet is open ABOVE this screen. It disarms
+   * this dialog's own key handling: two live traps on one document race, the
+   * outer one fires first, and Escape would exit the whole composer — losing
+   * the draft — instead of closing the sheet. `useModalDialog`'s `enabled` flag
+   * exists for exactly this, and `ComposeStep` already uses it for its own two
+   * sheets.
+   */
+  sheetOpen?: boolean;
   onToggleDestination: (key: DestinationKey) => void;
   onToggleGroupsOpen: () => void;
   onToggleGroup: (groupId: string) => void;
@@ -76,9 +87,12 @@ export default function DestinationsStep({
   onExit: () => void;
   onPublish: () => void;
 }): JSX.Element {
-  const ref = useModalDialog<HTMLDivElement>(onExit);
+  const ref = useModalDialog<HTMLDivElement>(onExit, !sheetOpen);
   const on = (key: DestinationKey): boolean => destinations.includes(key);
-  const ready = destinations.length > 0 && !busy;
+  // A Group row with no group chosen is a destination the CTA cannot deliver,
+  // so it is refused here rather than reported afterwards as a partial.
+  const groupIncomplete = groupTargetsMissing({ destinations, groupIds: selectedGroupIds });
+  const ready = destinations.length > 0 && !busy && !groupIncomplete;
 
   const lines = summaryLines({
     destinations,
@@ -276,7 +290,14 @@ export default function DestinationsStep({
           aria-disabled={!ready}
           className="w-full min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation disabled:opacity-40 hover:bg-accentDim transition-colors"
         >
-          {busy ? 'Sharing…' : ctaLabel(destinations)}
+          {/* An unavailable CTA says WHY. A disabled button with a label that
+              still promises "Share to Group" is the same silence the
+              requirement's fail-closed clause exists to prevent. */}
+          {busy
+            ? 'Sharing…'
+            : groupIncomplete
+              ? 'Choose a group to share to'
+              : ctaLabel(destinations)}
         </button>
       </div>
     </div>

@@ -127,6 +127,13 @@ export type PublishResult =
       message: string;
       /** Anything that DID land before the failure, so a partial is never silent. */
       delivered?: readonly DestinationKey[];
+      /**
+       * Identifies the part that DID land, when any did. Undo has to be
+       * reachable for a live post even though the publish as a whole failed —
+       * without this the composer can name the partial but never withdraw it,
+       * so a host that reports `delivered` must report this with it.
+       */
+      publishId?: string;
     };
 
 /**
@@ -290,4 +297,21 @@ export function missingDestinations(
   delivered: readonly DestinationKey[],
 ): readonly DestinationKey[] {
   return selected.filter((key) => !delivered.includes(key));
+}
+
+/**
+ * V8-R-CMP-007 / -008 — the Group row is not a destination until it names a group.
+ *
+ * "The CTA writes to EVERY selected destination", so a selection the CTA cannot
+ * deliver is refused BEFORE publishing rather than reported afterwards as a
+ * partial. Group on with no group chosen is exactly that: `sendGroupMessage`
+ * takes one group id, so an empty list reaches no thread at all. The Story
+ * audience already fails closed the same way (`storyAudienceLapsed`); this is
+ * the missing half for the Group DESTINATION.
+ */
+export function groupTargetsMissing(input: {
+  destinations: readonly DestinationKey[];
+  groupIds: readonly string[];
+}): boolean {
+  return input.destinations.includes('group') && input.groupIds.length === 0;
 }

@@ -180,6 +180,81 @@ describe('V8-R-CMP-003 — Story alone never implies Feed; one media object', ()
     expect([...published[0].destinations]).toEqual(['feed', 'story']);
     expect(published[0].main).toBe('data:image/jpeg;base64,aaa');
   });
+
+  /**
+   * The duplicate-publish path a partial failure opens. Feed is already live;
+   * re-sending the original selection would give it the same capture twice.
+   */
+  test('a partial failure that identifies itself goes to the receipt, not back to the CTA', async () => {
+    const user = userEvent.setup();
+    publishResult = {
+      ok: false,
+      message: 'Story did not send.',
+      delivered: ['feed'],
+      publishId: 'p-partial',
+    };
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-share'));
+
+    // The live half is stated, the dead half is named, and Undo can withdraw
+    // what landed — none of which is reachable from the destination screen.
+    const receipt = await screen.findByTestId('composer-receipt');
+    expect(
+      within(receipt).getByTestId('composer-receipt-partial').textContent,
+    ).toContain('Story did not go through');
+    expect(within(receipt).getByTestId('composer-receipt-undo')).toBeTruthy();
+    // The CTA is gone, so the whole selection cannot be re-sent.
+    expect(screen.queryByTestId('composer-share')).toBeNull();
+    expect(published).toHaveLength(1);
+  });
+
+  test('a partial failure with nothing to undo drops what landed, so a retry cannot duplicate it', async () => {
+    const user = userEvent.setup();
+    publishResult = { ok: false, message: 'Story did not send.', delivered: ['feed'] };
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-share'));
+
+    const failed = await screen.findByTestId('composer-destinations-failed');
+    expect(failed.textContent).toContain('Feed already went through');
+    // Feed is deselected, so the obvious retry re-sends only what is missing.
+    expect(screen.getByTestId('composer-destination-feed').getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+
+    publishResult = { ok: true, publishId: 'p2', delivered: ['story'] };
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-receipt');
+
+    expect(published).toHaveLength(2);
+    expect([...published[1].destinations]).toEqual(['story']);
+  });
+
+  test('a rejected publish returns to Compose with the draft rather than wedging on "Sharing…"', async () => {
+    const user = userEvent.setup();
+    mount({
+      onPublish: async () => {
+        throw new Error('upload blew up');
+      },
+    });
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-share'));
+
+    const compose = await screen.findByTestId('composer-compose');
+    expect(
+      within(compose).getByTestId('composer-publish-failed').textContent,
+    ).toContain('Your draft is still here');
+    // And the composer is usable again — not stuck disabled reading "Sharing…".
+    expect(
+      (within(compose).getByTestId('composer-next') as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
 });
 
 describe('V8-R-CMP-004 — the Feed row', () => {
@@ -248,7 +323,7 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     expect(published[0].storyAudienceGroupId).toBe('crew');
   });
 
-  test('fails closed: a narrowing that reaches nobody refuses the publish', async () => {
+  test('fails closed: the sheet will not commit a narrowing that reaches nobody', async () => {
     const user = userEvent.setup();
     mount({ groups: [{ id: 'none', name: 'Strangers', memberIds: ['nobody'] }] });
     await toDestinations(user);
@@ -257,11 +332,81 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     const sheet = await screen.findByTestId('composer-audience-sheet');
     await user.click(within(sheet).getByText('A group'));
     await user.click(await within(sheet).findByText('Strangers'));
-    // Done is unavailable, so the only way out is the sheet's ✕ — which drops
-    // the narrowing rather than storing a label nothing is behind.
+    // Done is unavailable, so the narrowing can never be committed at all.
     expect(
       (screen.getByTestId('composer-audience-done') as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+
+  /**
+   * The SHEET-side gate above is not the requirement. V8-R-CMP-005 fails closed
+   * at the moment of PUBLISHING, because an audience that resolved when it was
+   * chosen can reach nobody by the time Share is tapped — an Account default
+   * that never resolved here, or a circle that changed underneath. That branch
+   * lives in `publish()` and had no test: deleting it left the suite green.
+   */
+  test('fails closed: publishing with a lapsed audience is refused, not widened', async () => {
+    const user = userEvent.setup();
+    // The Account default narrows to a custom set that has not been picked in
+    // this composer, so the audience resolves to nobody without the sheet ever
+    // having been opened.
+    mount({ defaultStoryAudience: 'custom' });
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-share'));
+
+    // Refused: nothing was published, and it was NOT quietly widened to Friends
+    // — which would have delivered broader than the screen said.
+    expect(published).toHaveLength(0);
+    const alert = await screen.findByTestId('composer-audience-lapsed');
+    expect(alert.textContent).toContain('Nothing was shared');
+    expect(screen.getByTestId('composer-audience-sheet')).toBeTruthy();
+  });
+
+  test('dismissing the sheet restores the committed audience instead of widening it', async () => {
+    const user = userEvent.setup();
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-story-audience'));
+    const sheet = await screen.findByTestId('composer-audience-sheet');
+    await user.click(within(sheet).getByText('A group'));
+    await user.click(await within(sheet).findByText('Bar Crew'));
+    await user.click(screen.getByTestId('composer-audience-done'));
+    expect(screen.getByTestId('composer-story-audience-value').textContent).toBe(
+      'Group · 1 person',
+    );
+
+    // Reopen, browse to Custom — which reaches nobody until people are picked —
+    // then back out. "Never mind" must not widen Bar Crew to everyone.
+    await user.click(screen.getByTestId('composer-story-audience'));
+    const reopened = await screen.findByTestId('composer-audience-sheet');
+    await user.click(within(reopened).getByText('Custom'));
+    await user.click(within(reopened).getByLabelText('Close story audience'));
+
+    expect(screen.getByTestId('composer-story-audience-value').textContent).toBe(
+      'Group · 1 person',
+    );
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-receipt');
+    expect([...published[0].storyAudienceIds]).toEqual(['alex']);
+    expect(published[0].storyAudienceGroupId).toBe('crew');
+  });
+
+  test('Escape inside the audience sheet closes the sheet, never the composer', async () => {
+    const user = userEvent.setup();
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-story-audience'));
+    await screen.findByTestId('composer-audience-sheet');
+
+    await user.keyboard('{Escape}');
+
+    // The destination screen's own trap must be disarmed under the sheet: if it
+    // is not, Escape unmounts the whole composer and the draft is gone.
+    expect(exits).toBe(0);
+    expect(screen.getByTestId('composer-destinations')).toBeTruthy();
   });
 
   test('the subrow governs the story only — the Group destination is untouched by it', async () => {
@@ -356,6 +501,35 @@ describe('V8-R-CMP-007 — the Group row expands in place', () => {
     expect(within(dropdown).queryByText(/new group/i)).toBeNull();
     expect(within(dropdown).queryByText(/invite/i)).toBeNull();
     expect(within(dropdown).queryByRole('textbox')).toBeNull();
+  });
+
+  /**
+   * `sendGroupMessage` takes ONE group id, so Group with nothing chosen reaches
+   * no thread at all. V8-R-CMP-008 says the CTA writes to EVERY selected
+   * destination, so an undeliverable selection is refused BEFORE publishing
+   * rather than reported afterwards as a partial.
+   */
+  test('Group with no group chosen cannot publish, and the CTA says why', async () => {
+    const user = userEvent.setup();
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-group'));
+
+    const cta = screen.getByTestId('composer-share') as HTMLButtonElement;
+    expect(cta.disabled).toBe(true);
+    expect(cta.textContent).toBe('Choose a group to share to');
+
+    await user.click(cta);
+    expect(published).toHaveLength(0);
+
+    // Choosing one makes it publishable, and the group actually travels.
+    await user.click(screen.getByTestId('composer-group-toggle'));
+    await user.click(await screen.findByText('Uni'));
+    expect((screen.getByTestId('composer-share') as HTMLButtonElement).disabled).toBe(false);
+    publishResult = { ok: true, publishId: 'p1', delivered: ['group'] };
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-receipt');
+    expect([...published[0].groupIds]).toEqual(['uni']);
   });
 });
 

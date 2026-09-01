@@ -10,6 +10,8 @@ import DestinationsStep from './DestinationsStep';
 import SharedReceipt from './SharedReceipt';
 import StoryAudienceSheet from './StoryAudienceSheet';
 import {
+  DESTINATION_LABELS,
+  groupTargetsMissing,
   resolveStoryRecipients,
   storyAudienceLapsed,
   type ComposerGroup,
@@ -138,8 +140,28 @@ export default function GlobalComposer({
     }
   };
 
+  /**
+   * The audience as it was last COMMITTED with Done, so dismissing the sheet
+   * restores that decision instead of discarding it. Browsing to another option
+   * and backing out must never widen a narrowing the author already made.
+   */
+  const [committedAudience, setCommittedAudience] = useState<{
+    choice: StoryAudienceChoice;
+    groupId: string | null;
+    customIds: readonly string[];
+  }>({ choice: defaultStoryAudience, groupId: null, customIds: [] });
+
   const publish = async (): Promise<void> => {
     if (busy || destinations.length === 0) return;
+
+    // FAIL CLOSED (V8-R-CMP-007/-008). Group selected with no group chosen
+    // reaches no thread, so it is refused here rather than published and then
+    // reported as a partial. The CTA is already unavailable; this is the guard
+    // behind it, so no caller can publish an undeliverable selection.
+    if (groupTargetsMissing({ destinations, groupIds: selectedGroupIds })) {
+      setDestinationFailure('Choose a group first, or turn the Group row off.');
+      return;
+    }
 
     // FAIL CLOSED (V8-R-CMP-005). A narrowed story audience that reaches nobody
     // — including one whose circle has not resolved — is refused and the sheet
@@ -160,33 +182,70 @@ export default function GlobalComposer({
 
     setBusy(true);
     setDestinationFailure(null);
-    const result = await onPublish({
-      main,
-      inset,
-      destinations,
-      caption: caption.trim().length > 0 ? caption.trim() : null,
-      barId: bar?.id ?? null,
-      tagIds: people.map((person) => person.id),
-      storyAudience,
-      storyAudienceIds: storyRecipients,
-      storyAudienceGroupId: storyAudience === 'group' ? audienceGroupId : null,
-      groupIds: destinations.includes('group') ? selectedGroupIds : [],
-      nightOutId: destinations.includes('night_out') ? (nightOut?.id ?? null) : null,
-    });
-    setBusy(false);
+    let result: PublishResult;
+    try {
+      result = await onPublish({
+        main,
+        inset,
+        destinations,
+        caption: caption.trim().length > 0 ? caption.trim() : null,
+        barId: bar?.id ?? null,
+        tagIds: people.map((person) => person.id),
+        storyAudience,
+        storyAudienceIds: storyRecipients,
+        storyAudienceGroupId: storyAudience === 'group' ? audienceGroupId : null,
+        groupIds: destinations.includes('group') ? selectedGroupIds : [],
+        nightOutId: destinations.includes('night_out') ? (nightOut?.id ?? null) : null,
+      });
+    } catch {
+      // A REJECTED promise is a publish that landed nowhere, not a state to sit
+      // in. Without this the composer keeps `busy` forever: the CTA stays
+      // disabled reading "Sharing…" and the draft can neither be published nor
+      // recovered. Treated exactly like `{ok:false}` with nothing delivered.
+      setBusy(false);
+      setComposeFailure('That did not send.');
+      setStep('compose');
+      return;
+    } finally {
+      setBusy(false);
+    }
 
     if (!result.ok) {
       // A publish that landed NOWHERE returns to Compose with the draft intact
-      // (V8-R-CMP-001 failure recovery). A publish that landed SOMEWHERE is a
-      // partial: it must not be reported as a plain failure, because part of it
-      // is live and Undo has to be reachable for that part.
+      // (V8-R-CMP-001 failure recovery).
       const landed = result.delivered ?? [];
       if (landed.length === 0) {
         setComposeFailure(result.message);
         setStep('compose');
         return;
       }
-      setDestinationFailure(result.message);
+      // A publish that landed SOMEWHERE is a PARTIAL, and the one thing it must
+      // never do is invite a retry of the whole selection: tapping Share again
+      // would send the same capture to a destination that already has it, which
+      // is the duplicate publish V8-R-CMP-003 forbids.
+      //
+      // When the host identifies what landed, go to the receipt for exactly
+      // that part. It already names the rest as missing and offers Undo, so the
+      // live half is both stated and withdrawable.
+      if (result.publishId !== undefined) {
+        setComposeFailure(null);
+        setPublished({
+          publishId: result.publishId,
+          postId: null,
+          selected: destinations,
+          delivered: landed,
+          queued: false,
+        });
+        setStep('shared');
+        return;
+      }
+      // With no publishId there is nothing to Undo, so the least this can do is
+      // make the retry safe: drop what already landed from the selection, so a
+      // second tap re-sends only what is genuinely still missing.
+      setDestinations((current) => current.filter((key) => !landed.includes(key)));
+      setDestinationFailure(
+        `${result.message} ${landed.map((key) => DESTINATION_LABELS[key]).join(' and ')} already went through, so ${landed.length === 1 ? 'it is' : 'they are'} no longer selected.`,
+      );
       return;
     }
 
@@ -241,6 +300,7 @@ export default function GlobalComposer({
           barName={bar?.name ?? null}
           busy={busy}
           failure={destinationFailure}
+          sheetOpen={audienceOpen}
           onToggleDestination={toggleDestination}
           onToggleGroupsOpen={() => setGroupsOpen((open) => !open)}
           onToggleGroup={(groupId) =>
@@ -277,24 +337,42 @@ export default function GlobalComposer({
               )
             }
             onDone={() => {
+              // Done is the only commit. Everything after this dismisses back
+              // to exactly this decision.
+              setCommittedAudience({
+                choice: storyAudience,
+                groupId: audienceGroupId,
+                customIds,
+              });
               setAudienceLapsed(false);
               setAudienceOpen(false);
             }}
             onClose={() => {
-              // Dismissing is a decision NOT to narrow, so a narrowing with
-              // nobody behind it is dropped rather than the dismissal blocked.
-              // The alternative — keeping it — stores a label the publish would
-              // then refuse, which is the same trap the story branch closed.
-              if (
-                storyAudienceLapsed({
-                  choice: storyAudience,
-                  mutualsReady: friendsReady,
-                  resolved: storyRecipients,
-                })
-              ) {
-                setStoryAudience('friends');
-                setAudienceGroupId(null);
-              }
+              // Dismissing DISCARDS what was being browsed and restores the
+              // last committed audience. It must not resolve a half-made choice
+              // to Friends: an author who had already committed "Bar Crew" and
+              // then tapped Custom to look would have had their narrowing
+              // widened to everyone by a gesture that means "never mind".
+              //
+              // Only when the RESTORED choice is itself unpublishable — nothing
+              // has ever been committed and the Account default cannot resolve —
+              // does it fall back to Friends, which is the original fail-closed
+              // intent and never widens a decision the author actually made.
+              const restoredRecipients = resolveStoryRecipients({
+                choice: committedAudience.choice,
+                mutualIds,
+                groupMemberIds:
+                  groups.find((group) => group.id === committedAudience.groupId)?.memberIds ?? [],
+                customIds: committedAudience.customIds,
+              });
+              const restoredLapses = storyAudienceLapsed({
+                choice: committedAudience.choice,
+                mutualsReady: friendsReady,
+                resolved: restoredRecipients,
+              });
+              setStoryAudience(restoredLapses ? 'friends' : committedAudience.choice);
+              setAudienceGroupId(restoredLapses ? null : committedAudience.groupId);
+              setCustomIds(restoredLapses ? [] : committedAudience.customIds);
               setAudienceLapsed(false);
               setAudienceOpen(false);
             }}
