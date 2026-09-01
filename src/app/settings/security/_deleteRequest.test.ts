@@ -86,29 +86,36 @@ describe('requestAccountDeletionOutcome', () => {
 });
 
 describe('retrying after an attempt that ended unknown', () => {
-  test('stops calling unauthorized a refusal — the token may name a deleted user', async () => {
-    // The route emits `unauthorized` when getUser(token) fails, which is
-    // exactly what a token belonging to an ALREADY-DELETED user does. On a
-    // retry the code no longer distinguishes "refused before deleting" from
-    // "the first attempt worked", so the screen must not print "nothing was
-    // removed" about an account that is gone.
-    respond(401, { ok: false, error: 'unauthorized' });
-
-    expect(await requestAccountDeletionOutcome('t', true)).toBe('unknown');
-  });
-
-  test.each(['rate_limited', 'unavailable'])(
-    'still reports %s as a certain refusal — a deleted account cannot cause it',
+  test.each(['unauthorized', 'rate_limited', 'unavailable'])(
+    'reports %s as unknown, because the FIRST attempt may already have deleted the account',
     async (error) => {
+      // "Refused" is a claim about the ACCOUNT — "nothing was removed" — not
+      // about this request. Once one attempt has ended unknown, the account
+      // may be gone, and nothing a LATER request answers can un-say that.
+      //
+      // An earlier version of this fix reasoned per-code and kept
+      // rate_limited and unavailable as certain refusals on the grounds that
+      // "a deleted account cannot cause them". True, and beside the point:
+      // what caused the second response says nothing about what the first one
+      // did. That version reprinted "nothing was removed" over a destroyed
+      // account one tap later, which is the failure the unknown state exists
+      // to prevent.
       respond(429, { ok: false, error });
 
-      expect(await requestAccountDeletionOutcome('t', true)).toBe('refused');
+      expect(await requestAccountDeletionOutcome('t', true)).toBe('unknown');
     },
   );
 
   test('a confirmed deletion on the retry is still a deletion', async () => {
+    // The one answer that stays certain: the server said it is gone.
     respond(200, { ok: true });
 
     expect(await requestAccountDeletionOutcome('t', true)).toBe('deleted');
+  });
+
+  test('a first attempt is unaffected — refusals there are still certain', async () => {
+    respond(401, { ok: false, error: 'unauthorized' });
+
+    expect(await requestAccountDeletionOutcome('t', false)).toBe('refused');
   });
 });

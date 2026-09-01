@@ -42,21 +42,23 @@ const REFUSED_BEFORE_DELETING = new Set([
 ]);
 
 /**
- * `unauthorized` is certain only on a FIRST attempt.
+ * AFTER AN UNKNOWN, NO REFUSAL IS CERTAIN ANY MORE — including this one.
  *
- * The route rejects with it when `getUser(token)` fails — which is exactly
- * what a token belonging to an ALREADY-DELETED user does. So after an attempt
- * that ended `unknown`, a retry's `unauthorized` has two readings: the request
- * was refused before deleting anything, or the earlier attempt already
- * succeeded and this token now names nobody. The screen prints "nothing was
- * removed" for `refused`, and on the second reading that sentence is false
- * about an account that is gone — the same false assurance the unknown state
- * exists to prevent, reached one tap later.
+ * "Refused" is a claim about THE ACCOUNT ("nothing was removed"), not about
+ * the request. Once one attempt has ended `unknown`, the account may already
+ * be gone, and no answer to a LATER request can un-say that. A first pass at
+ * this reasoned per-code — `unauthorized` is ambiguous because a deleted
+ * user's token produces it, while `rate_limited` and `unavailable` are "not
+ * something a deleted account causes" — and that asked the wrong question.
+ * What causes the second response is irrelevant: the first request is the one
+ * that may have deleted the account, and a rate-limited retry says nothing
+ * whatsoever about it. Reporting either as `refused` reprints "nothing was
+ * removed" over an account that is gone, which is the exact false assurance
+ * the `unknown` state exists to prevent.
  *
- * `rate_limited` and `unavailable` carry no such ambiguity: neither is
- * something a deleted account causes, so both stay certain refusals.
+ * So the rule is about certainty, not about codes: after an `unknown`, only a
+ * CONFIRMED deletion is certain. Everything else stays `unknown`.
  */
-const AMBIGUOUS_AFTER_UNKNOWN = 'unauthorized';
 
 export async function requestAccountDeletionOutcome(
   accessToken: string,
@@ -84,8 +86,10 @@ export async function requestAccountDeletionOutcome(
   }
 
   if (res.ok && body.ok === true) return 'deleted';
+  // A confirmed deletion is certain on any attempt. A refusal is only certain
+  // while no earlier attempt has left the account's fate open.
+  if (afterUnknown) return 'unknown';
   if (typeof body.error === 'string' && REFUSED_BEFORE_DELETING.has(body.error)) {
-    if (afterUnknown && body.error === AMBIGUOUS_AFTER_UNKNOWN) return 'unknown';
     return 'refused';
   }
   return 'unknown';

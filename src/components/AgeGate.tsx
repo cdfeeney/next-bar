@@ -53,8 +53,18 @@ export default function AgeGate(): JSX.Element | null {
   useEffect(() => {
     // Fail toward asking: an unreadable store (private mode) reads as
     // unacknowledged, which `readAgeAck` already guarantees.
+    //
+    // RE-READ ON EVERY ROUTE CHANGE, not once on mount. This overlay is
+    // mounted by the ROOT LAYOUT, so it outlives every client-side
+    // navigation — but the ack it reads is written by another screen. A
+    // mount-once read went stale the moment `/onboarding/age` confirmed 21+
+    // and pushed onward: the overlay still held `unacked`, the next route is
+    // not a stand-down route, and it covered that step with the question the
+    // device had just answered. Re-reading per route is the cheap half of
+    // "one key, one reader": the key is the state, and this is the component
+    // that has to keep looking at it.
     setState(readAgeAck() ? 'acked' : 'unacked');
-  }, []);
+  }, [pathname]);
 
   if (state !== 'unacked') return null;
   // The age step owns this question AND its "no" branch. Never cover it.

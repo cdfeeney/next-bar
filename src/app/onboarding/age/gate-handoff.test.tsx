@@ -41,6 +41,7 @@ vi.mock('@/app/onboarding/_ageAck', async () => {
 });
 
 import AgeGate from '@/components/AgeGate';
+import { AGE_STEP_PATH } from '../_ageAck';
 
 const gate = () => screen.queryByRole('dialog', { name: /are you 21 or older/i });
 
@@ -115,6 +116,23 @@ describe('the global age gate', () => {
   test('stays down for a device that already acknowledged', () => {
     acked = true;
     render(<AgeGate />);
+
+    expect(gate()).toBeNull();
+  });
+
+  test('notices an ack written by the age step and does not re-ask on the next route', () => {
+    // The overlay is mounted by the ROOT LAYOUT, so it survives every
+    // client-side navigation while the ack it reads is written by a different
+    // screen. A mount-once read went stale the instant /onboarding/age wrote
+    // the ack and pushed onward, and the overlay then covered the next step
+    // with the question the device had just answered.
+    pathname = AGE_STEP_PATH;
+    const { rerender } = render(<AgeGate />);
+    expect(gate()).toBeNull(); // stands down on the step itself
+
+    acked = true; // the step confirms 21+ …
+    pathname = '/onboarding/location'; // … and pushes on
+    rerender(<AgeGate />);
 
     expect(gate()).toBeNull();
   });

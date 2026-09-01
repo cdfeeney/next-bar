@@ -90,6 +90,34 @@ export default function EditProfilePage(): JSX.Element {
 
   const dirty = nameDirty || handleDirty;
 
+  /**
+   * The exits the BROWSER owns rather than this app: reload, tab close, and
+   * navigation to another origin. `beforeunload` is the only hook the platform
+   * gives for those, and it shows the browser's own wording — not the
+   * "Discard changes?" dialog below — so this is a second, coarser guard, not
+   * the same one reused.
+   *
+   * ponytail: in-app browser/hardware Back is still NOT intercepted. The App
+   * Router exposes no navigation guard, and the usual workaround — pushing a
+   * sentinel history entry and cancelling on `popstate` — corrupts the back
+   * stack for every other screen in the stack and breaks the one-level-back
+   * contract the operator settled on 2026-09-01. Closing that gap properly
+   * needs a router-level guard (or Next's `unstable_useNavigationGuard` once
+   * it stabilises), which is a change to routing this lane does not own. The
+   * gap is recorded rather than papered over: this comment is the honest
+   * statement that the guard is partial.
+   */
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      // Legacy browsers require a returnValue to show the prompt at all.
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
   /** The one gate every exit from this screen passes through. Returns whether
    *  the navigation may proceed. */
   const guardExit = (href: string): boolean => {
