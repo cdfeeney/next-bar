@@ -15,10 +15,26 @@ import { describe, expect, it } from 'vitest';
  * later reader can tell a guard from a decoration.
  */
 
-const SQL = readFileSync(
-  path.join(__dirname, '..', '..', 'supabase', 'migrations', '0067_groups.sql'),
-  'utf8',
-).replace(/\r\n/g, '\n');
+/**
+ * THE SUBJECT IS THE EFFECTIVE SQL, NOT 0067 ALONE.
+ *
+ * Phase C applied 0067 to production on 2026-08-31 while this lane was still in
+ * review, so its bytes are fenced by `public.schema_migrations` and the round-9
+ * fix below could no longer be delivered by editing it. 0076 states that work
+ * forward. Reading 0067 alone would now pin text the database does not run.
+ *
+ * Files in the order Postgres applies them; each object resolves to its LAST
+ * definition, which is what the database ends up holding.
+ */
+const FILES = [
+  '0067_groups.sql',
+  '0076_feed_access_consolidation_and_group_read_window.sql',
+] as const;
+
+const SQL = FILES
+  .map((file) => readFileSync(path.join(__dirname, '..', '..', 'supabase', 'migrations', file), 'utf8'))
+  .join('\n')
+  .replace(/\r\n/g, '\n');
 
 /**
  * The body of one function with its `--` comments STRIPPED.
@@ -34,8 +50,11 @@ function code(name: string): string {
 
 /** The body of one `create or replace function` block, by name. */
 function fn(name: string): string {
-  const start = SQL.indexOf(`create or replace function public.${name}`);
-  expect(start, `${name} must be defined in 0067`).toBeGreaterThan(-1);
+  // lastIndexOf: `create or replace` means the last statement wins, and
+  // media_read_window is redefined by 0076. Taking the first match would assert
+  // over 0067's superseded body — green text that nothing executes.
+  const start = SQL.lastIndexOf(`create or replace function public.${name}`);
+  expect(start, `${name} must be defined by the effective migration set`).toBeGreaterThan(-1);
   const end = SQL.indexOf('\n$$;', start);
   expect(end, `${name} must terminate`).toBeGreaterThan(start);
   return SQL.slice(start, end);
@@ -159,26 +178,71 @@ describe('V8-R-GRP-008 Night Out invitation notifications exist (round-1 finding
 
 describe('round 9: a group photo authorises an UNBOUNDED read window', () => {
   // ROUND 8 REVIEW, CODEX, MEDIUM. `media_read_window`'s boolean was already right and its
-  // TIMESTAMP was not: both terminal branches returned the STORY's expiry whenever a live story
-  // also referenced the media, so a group photo whose story copy had half a second left signed a
-  // near-zero-TTL URL and rendered as unavailable — in a thread whose retention has no clock at
-  // all. A group destination has no expiry of its own, and null is how that is spelled here.
+  // TIMESTAMP was not: it returned the STORY's expiry whenever a live story also referenced the
+  // media, so a group photo whose story copy had half a second left signed a near-zero-TTL URL
+  // and rendered as unavailable — in a thread whose retention has no clock at all. A group
+  // destination has no expiry of its own, and null is how that is spelled here.
   //
   // This is structural on purpose: the branch it guards is a decision only a database can make,
   // and it is exactly the kind of silent regression a mocked client cannot see.
+  //
+  // ==========================================================================
+  // WHY THIS CASE NO LONGER COUNTS TWO `case when v_group_readable` EXPRESSIONS.
+  //
+  // It used to, because 0067 owned the whole function and had exactly two terminal
+  // branches to guard. It does not own it any more, and NOT because 0076 moved the
+  // fix — because 0068 deleted the branch the fix patches. Measured on the
+  // committed files: 0067 replaces `media_read_window` and uses v_group_readable
+  // five times; 0068 replaces it AGAIN from 0066's body plus the Night Out grounds
+  // and uses it ZERO times ("REPLACED FORWARD, body preserved. Everything 0066
+  // decided is unchanged" — a parallel lane that had never read 0067); 0069 then
+  // renames that body aside and wraps it for the Feed. So since 0068 a group photo
+  // has been readable by its UPLOADER ONLY, and the two branches this case counted
+  // have not existed in the applied schema at all.
+  //
+  // 0076 restores the branch and carries the round-9 fix onto the delegating shape,
+  // where the rule is ONE clamp over the delegate's answer rather than two copies —
+  // and covers every branch the delegate can return from, not just the two 0067
+  // could reach. Counting an expression that is now correctly written once would be
+  // pinning 0067's file layout instead of the rule, so this case pins the rule: the
+  // clamp exists, it runs BEFORE the pass-through it overrides, the group fallback
+  // is reachable, and there is exactly ONE place a delegate expiry can escape.
+  // ==========================================================================
   const body = code('media_read_window');
+  const shape = body.replace(/\s+/g, ' ');
 
-  it('neither terminal branch hands back a story clock once the group grants the read', () => {
-    // BOTH of them — the owner's `return query select true, ...` and the viewer's. Counting is the
-    // point: guarding one and not the other is exactly the state round 8 shipped.
-    const guarded = body.match(
-      /case when v_group_readable then null::timestamptz else v_expiry end/g,
-    ) ?? [];
-    expect(guarded, 'the owner branch and the viewer branch each need the guard').toHaveLength(2);
+  const PASS_THROUGH = 'return query select v_prior.readable, v_prior.expires_at;';
+  const CLAMP = 'if v_prior.readable and v_group_readable then'
+    + ' return query select true, null::timestamptz;';
 
-    // And nothing may return a BARE v_expiry as the window any more.
-    expect(body.replace(/\s+/g, ' ')).not.toMatch(/return query select true, v_expiry/);
-    expect(body.replace(/\s+/g, ' ')).not.toMatch(/or v_group_readable, v_expiry/);
+  it('no branch hands back a story clock once the group grants the read', () => {
+    const clamp = shape.indexOf(CLAMP);
+    const passThrough = shape.indexOf(PASS_THROUGH);
+
+    expect(clamp, 'the group clamp over the delegate answer is gone').toBeGreaterThan(-1);
+    expect(passThrough, 'the delegate pass-through is gone').toBeGreaterThan(-1);
+    expect(
+      clamp,
+      'the clamp runs after the pass-through has already returned, so it is dead code',
+    ).toBeLessThan(passThrough);
+
+    // ONE escape, and the count is the assertion: a second unguarded pass-through
+    // added anywhere in the function is a second way for the story clock to come
+    // back, and the ordering check above would not see it.
+    expect(
+      shape.split(PASS_THROUGH).length - 1,
+      'a delegate expiry can be returned from more than one place, so the clamp is walkable',
+    ).toBe(1);
+  });
+
+  it('a member who is not the uploader is READABLE at all, on an unbounded window', () => {
+    // The half 0068 deleted. Nothing in the delegated chain has known about groups
+    // since then, so without this fallback the clamp above guards a branch that can
+    // never be reached and every non-uploader member still gets a refusal.
+    expect(
+      shape,
+      'the group fallback is gone, so a group photo is readable by its uploader only',
+    ).toContain('if v_group_readable then return query select true, null::timestamptz;');
   });
 
   it('the group term is still what makes the read READABLE, not the timestamp', () => {
@@ -186,6 +250,39 @@ describe('round 9: a group photo authorises an UNBOUNDED read window', () => {
     // v_group_readable from the boolean would refuse the case this section exists to allow.
     expect(body).toMatch(/v_group_readable/);
     expect(body).toMatch(/group_message_is_visible/);
+  });
+
+  it('a photo removed from its group destination stops being group-readable', () => {
+    // ROUND 1 PANEL, CODEX, HIGH. `msg.deleted_at is null` is the MESSAGE's liveness,
+    // not the destination's, and they are retired by different verbs.
+    // `remove_media_destination` (0066) is granted to authenticated, stamps
+    // `removed_at` on the kind='group' spine row, and — unlike its story branch,
+    // which soft-deletes the story — leaves `group_messages` untouched. So the
+    // message stayed visible to every member and this branch kept minting signed
+    // URLs for a photo the owner had been told was removed.
+    //
+    // Asserted over `shape` (comment-stripped, whitespace-collapsed) so the guard
+    // cannot be satisfied by the text of its own explanation.
+    expect(
+      shape,
+      'the group answer no longer checks that the destination survives, so a removed photo stays signable',
+    ).toContain(
+      "or exists ( select 1 from public.media_destinations d"
+      + " where d.media_id = msg.media_id and d.kind = 'group'"
+      + " and d.ref_id = msg.id::text and d.removed_at is null )",
+    );
+
+    // The other half of the pair. "Live, or never minted" is the rule; degrading it
+    // to a bare `exists (live row)` would blank any message whose spine row predates
+    // send_group_message writing one, which is a different bug in the other direction.
+    expect(
+      shape,
+      'the never-minted branch is gone, so a message with no spine row is refused',
+    ).toContain(
+      "and ( not exists ( select 1 from public.media_destinations d"
+      + " where d.media_id = msg.media_id and d.kind = 'group'"
+      + " and d.ref_id = msg.id::text )",
+    );
   });
 });
 
