@@ -42,6 +42,7 @@ export default function DestinationsStep({
   selectedGroupIds,
   groupsOpen,
   nightOut,
+  nightOutEnded = false,
   storyAudience,
   storyRecipientCount,
   people,
@@ -49,6 +50,7 @@ export default function DestinationsStep({
   busy,
   failure,
   retired = {},
+  retiredGroupIds = [],
   undeliverable,
   sheetOpen = false,
   onToggleDestination,
@@ -63,8 +65,13 @@ export default function DestinationsStep({
   groups: readonly ComposerGroup[];
   selectedGroupIds: readonly string[];
   groupsOpen: boolean;
-  /** Tonight's night out, or null — the row states which (V8-R-CMP-006). */
+  /**
+   * The night out this row is about — the CHOSEN one while it is selected,
+   * otherwise tonight's. The row states which (V8-R-CMP-006).
+   */
   nightOut: ComposerNightOut | null;
+  /** The chosen night out is no longer the live one, so it can no longer receive. */
+  nightOutEnded?: boolean;
   storyAudience: StoryAudienceChoice;
   /** Recipients AFTER the D-C-37 intersection; null means "all your friends". */
   storyRecipientCount: number | null;
@@ -79,6 +86,8 @@ export default function DestinationsStep({
    * wording differs, since the composer must not claim a delivery it cannot know.
    */
   retired?: RetiredDestinations;
+  /** Group threads this capture already reached — locked, same rule as the rows. */
+  retiredGroupIds?: readonly string[];
   /**
    * Selected destinations that currently have no target, reconciled against the
    * live props by the parent. Passed in rather than recomputed so the CTA, the
@@ -230,7 +239,9 @@ export default function DestinationsStep({
               retiredHint('night_out')
               ?? (nightOut === null
                 ? 'No night out tonight'
-                : `${nightOut.label} · 24 hours from the start`)
+                : nightOutEnded
+                  ? `${nightOut.label} has ended · turn this off to share`
+                  : `${nightOut.label} · 24 hours from the start`)
             }
             on={on('night_out')}
             // With no night out there is nothing to save to, so the row cannot
@@ -279,6 +290,7 @@ export default function DestinationsStep({
                   <ul>
                     {groups.map((group) => {
                       const picked = selectedGroupIds.includes(group.id);
+                      const alreadySent = retiredGroupIds.includes(group.id);
                       return (
                         <li key={group.id}>
                           <button
@@ -286,8 +298,10 @@ export default function DestinationsStep({
                             data-testid="composer-group-option"
                             data-group={group.id}
                             aria-pressed={picked}
+                            disabled={alreadySent}
+                            aria-disabled={alreadySent}
                             onClick={() => onToggleGroup(group.id)}
-                            className="w-full flex items-center gap-3 min-h-[44px] border-b border-border text-left touch-manipulation"
+                            className="w-full flex items-center gap-3 min-h-[44px] border-b border-border text-left touch-manipulation disabled:opacity-40"
                           >
                             <span className="min-w-0 flex-1 text-[13px] truncate">
                               {group.name}
@@ -295,7 +309,7 @@ export default function DestinationsStep({
                             <span
                               className={`text-[11px] uppercase tracking-widest ${picked ? 'text-accent' : 'text-muted'}`}
                             >
-                              {picked ? 'On' : 'Off'}
+                              {alreadySent ? 'Sent' : picked ? 'On' : 'Off'}
                             </span>
                           </button>
                         </li>

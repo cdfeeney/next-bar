@@ -400,6 +400,85 @@ describe('V8-R-CMP-003 — Story alone never implies Feed; one media object', ()
     expect([...published[1].groupIds]).toEqual(['uni']);
   });
 
+  /**
+   * `delivered` is keyed by DESTINATION, so 'group' says nothing about which of
+   * N threads received it. Round 5 accounted for that on the one branch its
+   * trigger happened to take; these two cover the branches that reach the
+   * RECEIPT, which is the path the host contract steers toward.
+   */
+  test('a fully-ok publish that missed a group thread still names it on the receipt', async () => {
+    const user = userEvent.setup();
+    publishResult = {
+      ok: true,
+      publishId: 'p1',
+      delivered: ['group'],
+      deliveredGroupIds: ['crew'],
+    };
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-group'));
+    await user.click(screen.getByTestId('composer-group-toggle'));
+    await user.click(await screen.findByText('Bar Crew'));
+    await user.click(screen.getByText('Uni'));
+    await user.click(screen.getByTestId('composer-share'));
+
+    const receipt = await screen.findByTestId('composer-receipt');
+    expect(within(receipt).getByTestId('composer-receipt-partial').textContent).toContain('Uni');
+  });
+
+  test('a partial failure WITH a publishId names the missed group thread on the receipt', async () => {
+    const user = userEvent.setup();
+    publishResult = {
+      ok: false,
+      message: 'Uni did not get it.',
+      delivered: ['group'],
+      deliveredGroupIds: ['crew'],
+      publishId: 'p-partial',
+    };
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-group'));
+    await user.click(screen.getByTestId('composer-group-toggle'));
+    await user.click(await screen.findByText('Bar Crew'));
+    await user.click(screen.getByText('Uni'));
+    await user.click(screen.getByTestId('composer-share'));
+
+    const receipt = await screen.findByTestId('composer-receipt');
+    expect(within(receipt).getByTestId('composer-receipt-partial').textContent).toContain('Uni');
+    expect(within(receipt).getByTestId('composer-receipt-undo')).toBeTruthy();
+  });
+
+  test('a group thread that received this capture cannot be picked again', async () => {
+    const user = userEvent.setup();
+    publishResult = {
+      ok: false,
+      message: 'Uni did not get it.',
+      delivered: ['group'],
+      deliveredGroupIds: ['crew'],
+    };
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-group'));
+    await user.click(screen.getByTestId('composer-group-toggle'));
+    await user.click(await screen.findByText('Bar Crew'));
+    await user.click(screen.getByText('Uni'));
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-destinations-failed');
+
+    // Bar Crew has it. The dropdown is still open, and must not offer it back.
+    const crew = (await screen.findAllByTestId('composer-group-option')).find(
+      (node) => node.getAttribute('data-group') === 'crew',
+    ) as HTMLButtonElement;
+    expect(crew.disabled).toBe(true);
+    expect(crew.textContent).toContain('Sent');
+
+    await user.click(crew);
+    publishResult = { ok: true, publishId: 'p2', delivered: ['group'] };
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-receipt');
+    expect([...published[1].groupIds]).toEqual(['uni']);
+  });
+
   test('a rejected publish is treated as indeterminate, never as landed-nowhere', async () => {
     const user = userEvent.setup();
     mount({
@@ -741,6 +820,31 @@ describe('V8-R-CMP-006 — the Night Out row', () => {
     expect([...published[0].destinations]).toEqual(['feed']);
   });
 
+  /**
+   * Refusing to PUBLISH a substituted night out was only half the rule: showing
+   * the replacement's label under the author's selection is the same
+   * substitution, happening on screen.
+   */
+  test('a replaced Night Out shows the CHOSEN plan, never the replacement', async () => {
+    const user = userEvent.setup();
+    const { rerender } = mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-night_out'));
+    expect(screen.getByTestId('composer-destination-night_out').textContent).toContain(
+      'Friday at The Fox',
+    );
+
+    // Friday ends and Saturday begins while the composer is open.
+    rerender(element({ nightOut: { id: 'no2', label: 'Saturday at The Crown' } }));
+
+    const row = screen.getByTestId('composer-destination-night_out');
+    expect(row.textContent).toContain('Friday at The Fox');
+    expect(row.textContent).not.toContain('Saturday at The Crown');
+    expect(row.textContent).toContain('has ended');
+    // And it still refuses to publish the substitute.
+    expect((screen.getByTestId('composer-share') as HTMLButtonElement).disabled).toBe(true);
+  });
+
   test('publishes tonight’s night out id when selected', async () => {
     const user = userEvent.setup();
     publishResult = { ok: true, publishId: 'p1', delivered: ['night_out'] };
@@ -1055,6 +1159,34 @@ describe('V8-R-CMP-011 — the three receipts and Undo', () => {
     const failure = await screen.findByTestId('composer-undo-failed');
     expect(failure.textContent).toContain('It is still live.');
     expect(exits).toBe(0);
+  });
+
+  /**
+   * A host that throws SYNCHRONOUSLY throws before any promise exists, so a
+   * `.finally` on its return value never runs. The lock would stay on forever
+   * and every exit from the receipt would stay disabled — worse than the defect
+   * the lock was added to fix.
+   */
+  test('an Undo that throws synchronously does not wedge the receipt', async () => {
+    const user = userEvent.setup();
+    mount({
+      onUndo: () => {
+        throw new Error('client unavailable');
+      },
+    });
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-receipt');
+    await user.click(screen.getByTestId('composer-receipt-undo'));
+
+    const failure = await screen.findByTestId('composer-undo-failed');
+    expect(failure.textContent).toContain('It is still live.');
+    // The lock released, so the author is not trapped on the receipt.
+    expect((screen.getByTestId('composer-receipt-undo') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('composer-receipt-exit') as HTMLButtonElement).disabled).toBe(false);
+    await user.click(screen.getByTestId('composer-receipt-exit'));
+    expect(exits).toBe(1);
   });
 
   test('a successful Undo leaves the composer', async () => {

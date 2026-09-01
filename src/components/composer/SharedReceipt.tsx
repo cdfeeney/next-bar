@@ -36,6 +36,7 @@ export default function SharedReceipt({
   barId,
   selected,
   delivered,
+  missingGroupNames = [],
   queued = false,
   undoFailure,
   undoing = false,
@@ -50,6 +51,13 @@ export default function SharedReceipt({
   selected: readonly DestinationKey[];
   /** What actually landed. */
   delivered: readonly DestinationKey[];
+  /**
+   * Group threads that were chosen but did not receive it. `delivered` cannot
+   * carry this — Group is ONE key covering N threads — so a publish that reached
+   * one group and missed another would show the Group chip and say nothing about
+   * the miss. V8-R-CMP-002's "never silent" applies one level down too.
+   */
+  missingGroupNames?: readonly string[];
   queued?: boolean;
   /** Set when Undo did not reach the server. What was published is STILL LIVE. */
   undoFailure: string | null;
@@ -116,14 +124,17 @@ export default function SharedReceipt({
         ))}
       </ul>
 
-      {missing.length > 0 ? (
+      {missing.length > 0 || missingGroupNames.length > 0 ? (
         <p
           data-testid="composer-receipt-partial"
           role="alert"
           className="text-sm leading-relaxed text-center mt-3 rounded-2xl border border-accent px-4 py-3"
         >
-          {missing.map((key) => DESTINATION_LABELS[key]).join(' and ')} did not go
-          through. Try those again.
+          {[
+            ...missing.map((key) => DESTINATION_LABELS[key]),
+            ...missingGroupNames,
+          ].join(' and ')}{' '}
+          did not go through. Try those again.
         </p>
       ) : null}
 

@@ -103,8 +103,21 @@ export default function GlobalComposer({
    * destination at most once.
    */
   const [retired, setRetired] = useState<RetiredDestinations>({});
-  /** Which night out was selected, so a different live one is never substituted. */
-  const [selectedNightOutId, setSelectedNightOutId] = useState<string | null>(null);
+  /**
+   * Group threads this capture has already reached. The destination-level
+   * `retired` map cannot express this — Group is one key over N threads — so
+   * without it a delivered thread stayed a normal toggle and could be re-picked.
+   */
+  const [retiredGroupIds, setRetiredGroupIds] = useState<readonly string[]>([]);
+  /**
+   * WHICH night out was selected, kept whole rather than by id alone: the row
+   * and the CMP-014 summary must name the plan the author chose, not whichever
+   * one happens to be live now. Reconciliation already refused to PUBLISH a
+   * substitute; showing the substitute's label was the same substitution
+   * happening on screen.
+   */
+  const [selectedNightOut, setSelectedNightOut] = useState<ComposerNightOut | null>(null);
+  const selectedNightOutId = selectedNightOut?.id ?? null;
   const [busy, setBusy] = useState(false);
   const [composeFailure, setComposeFailure] = useState<string | null>(null);
   const [destinationFailure, setDestinationFailure] = useState<string | null>(null);
@@ -116,6 +129,8 @@ export default function GlobalComposer({
     postId: string | null;
     selected: readonly DestinationKey[];
     delivered: readonly DestinationKey[];
+    /** Group threads that were chosen but did not receive it. */
+    missingGroupNames: readonly string[];
     queued: boolean;
   } | null>(null);
 
@@ -158,7 +173,7 @@ export default function GlobalComposer({
     setDestinationFailure(null);
     // Record WHICH night out this selection means, so a later one cannot inherit it.
     if (key === 'night_out') {
-      setSelectedNightOutId(destinations.includes('night_out') ? null : (nightOut?.id ?? null));
+      setSelectedNightOut(destinations.includes('night_out') ? null : nightOut);
     }
     setDestinations((current) =>
       current.includes(key)
@@ -231,6 +246,8 @@ export default function GlobalComposer({
     setDestinationFailure(null);
     /** What this attempt could possibly have delivered to, for the throw path. */
     const attempted = destinations;
+    /** The group threads this attempt asked for, for per-thread accounting. */
+    const requestedGroupIds = destinations.includes('group') ? live.groupIds : [];
     let result: PublishResult;
     try {
       result = await onPublish({
@@ -280,10 +297,40 @@ export default function GlobalComposer({
       setBusy(false);
     }
 
+    // ONE READING OF THE RESULT, BEFORE ANY BRANCH.
+    //
+    // Rounds 1, 2, 3 and 5 each found the same shape of defect: a rule applied
+    // on the branch where it was noticed and not on its siblings. Round 5 added
+    // per-thread group accounting to the one branch its trigger happened to take,
+    // and the two branches that reach the RECEIPT — the documented-preferred path
+    // — silently dropped it. So what landed is now interpreted ONCE, here, and
+    // every branch below consumes the same answer.
+    const landed = result.ok ? result.delivered : (result.delivered ?? []);
+    /** Which group threads received it. Absent means all of the requested ones did. */
+    const deliveredGroups = landed.includes('group')
+      ? (result.deliveredGroupIds ?? requestedGroupIds)
+      : [];
+    const stillMissingGroups = missingGroupIds({
+      selectedGroupIds: requestedGroupIds,
+      delivered: landed,
+      deliveredGroupIds: result.deliveredGroupIds,
+    });
+    const missingGroupNames = groups
+      .filter((group) => stillMissingGroups.includes(group.id))
+      .map((group) => group.name);
+
+    // A thread that received this capture can never receive it again, on ANY
+    // branch — including the ones that go straight to the receipt.
+    if (deliveredGroups.length > 0) {
+      setRetiredGroupIds((current) => [
+        ...current,
+        ...deliveredGroups.filter((id) => !current.includes(id)),
+      ]);
+    }
+
     if (!result.ok) {
       // A publish that landed NOWHERE returns to Compose with the draft intact
       // (V8-R-CMP-001 failure recovery).
-      const landed = result.delivered ?? [];
       if (landed.length === 0) {
         setComposeFailure(result.message);
         setStep('compose');
@@ -294,9 +341,10 @@ export default function GlobalComposer({
       // would send the same capture to a destination that already has it, which
       // is the duplicate publish V8-R-CMP-003 forbids.
       //
-      // When the host identifies what landed, go to the receipt for exactly
-      // that part. It already names the rest as missing and offers Undo, so the
-      // live half is both stated and withdrawable.
+      // When the host identifies what landed, go to the receipt for exactly that
+      // part. It names the rest as missing — including the group threads that
+      // did not get it — and offers Undo, so the live half is both stated and
+      // withdrawable.
       if (result.publishId !== undefined) {
         setComposeFailure(null);
         setPublished({
@@ -304,6 +352,7 @@ export default function GlobalComposer({
           postId: null,
           selected: destinations,
           delivered: landed,
+          missingGroupNames,
           queued: false,
         });
         setStep('shared');
@@ -318,11 +367,6 @@ export default function GlobalComposer({
       // EVERY chosen thread landed. When some are still missing the row stays
       // open and its selection narrows to exactly those, so a retry finishes
       // the job instead of re-sending to threads that already have it.
-      const stillMissingGroups = missingGroupIds({
-        selectedGroupIds: live.groupIds,
-        delivered: landed,
-        deliveredGroupIds: result.deliveredGroupIds,
-      });
       const closed = landed.filter((key) => key !== 'group' || stillMissingGroups.length === 0);
       setRetired((current) => {
         const next: RetiredDestinations = { ...current };
@@ -331,13 +375,19 @@ export default function GlobalComposer({
       });
       setDestinations((current) => current.filter((key) => !closed.includes(key)));
       if (stillMissingGroups.length > 0) setSelectedGroupIds(stillMissingGroups);
-      const missingGroupNames = groups
-        .filter((group) => stillMissingGroups.includes(group.id))
-        .map((group) => group.name)
-        .join(' and ');
-      setDestinationFailure(
-        `${result.message} ${closed.map((key) => DESTINATION_LABELS[key]).join(' and ')} already went through, so ${closed.length === 1 ? 'it is' : 'they are'} no longer available.${missingGroupNames === '' ? '' : ` ${missingGroupNames} did not get it, and ${stillMissingGroups.length === 1 ? 'is' : 'are'} still selected.`}`,
-      );
+      // Built from the parts that ACTUALLY apply. A single template produced
+      // " already went through, so they are no longer available." with an empty
+      // list whenever the only landed destination was a partially-delivered
+      // Group — nothing is closed in that case, and the sentence said otherwise.
+      const closedSentence =
+        closed.length === 0
+          ? ''
+          : ` ${closed.map((key) => DESTINATION_LABELS[key]).join(' and ')} already went through, so ${closed.length === 1 ? 'it is' : 'they are'} no longer available.`;
+      const groupSentence =
+        missingGroupNames.length === 0
+          ? ''
+          : ` ${missingGroupNames.join(' and ')} did not get it, and ${missingGroupNames.length === 1 ? 'is' : 'are'} still selected.`;
+      setDestinationFailure(`${result.message}${closedSentence}${groupSentence}`);
       return;
     }
 
@@ -347,6 +397,9 @@ export default function GlobalComposer({
       postId: result.postId ?? null,
       selected: destinations,
       delivered: result.delivered,
+      // Even a fully-ok publish can have missed a thread: `delivered` is keyed by
+      // destination, so 'group' says nothing about which of N threads got it.
+      missingGroupNames,
       queued: result.queued === true,
     });
     setStep('shared');
@@ -359,6 +412,7 @@ export default function GlobalComposer({
         barId={bar?.id ?? null}
         selected={published.selected}
         delivered={published.delivered}
+        missingGroupNames={published.missingGroupNames}
         queued={published.queued}
         undoFailure={undoFailure}
         undoing={undoing}
@@ -371,7 +425,16 @@ export default function GlobalComposer({
           if (undoing) return;
           setUndoFailure(null);
           setUndoing(true);
-          void onUndo(published.publishId).finally(() => setUndoing(false)).then(
+          // `onUndo` is called INSIDE a promise chain, because a host that throws
+          // SYNCHRONOUSLY would otherwise throw before any promise existed —
+          // neither `finally` nor the rejection handler would run, `undoing`
+          // would stay true, and every exit from the receipt would stay disabled
+          // forever. That stuck receipt would be worse than the defect the lock
+          // was added to fix.
+          void Promise.resolve()
+            .then(() => onUndo(published.publishId))
+            .finally(() => setUndoing(false))
+            .then(
             (result) => {
               if (result.ok) onExit();
               else setUndoFailure(result.message);
@@ -396,7 +459,12 @@ export default function GlobalComposer({
           groups={groups}
           selectedGroupIds={live.groupIds}
           groupsOpen={groupsOpen}
-          nightOut={nightOut}
+          // The row shows the CHOSEN plan while one is selected, so a replacement
+          // cannot appear under the author's selection.
+          nightOut={destinations.includes('night_out') ? selectedNightOut : nightOut}
+          nightOutEnded={
+            destinations.includes('night_out') && live.undeliverable.includes('night_out')
+          }
           storyAudience={storyAudience}
           storyRecipientCount={storyRecipientCount}
           people={taggedPeople}
@@ -408,13 +476,17 @@ export default function GlobalComposer({
           sheetOpen={audienceOpen}
           onToggleDestination={toggleDestination}
           onToggleGroupsOpen={() => setGroupsOpen((open) => !open)}
-          onToggleGroup={(groupId) =>
+          retiredGroupIds={retiredGroupIds}
+          onToggleGroup={(groupId) => {
+            // A thread that already has this capture can never be picked again
+            // (V8-R-CMP-003), the same rule the destination rows keep.
+            if (retiredGroupIds.includes(groupId)) return;
             setSelectedGroupIds((current) =>
               current.includes(groupId)
                 ? current.filter((entry) => entry !== groupId)
                 : [...current, groupId],
-            )
-          }
+            );
+          }}
           onOpenAudience={() => setAudienceOpen(true)}
           onBack={() => setStep('compose')}
           onExit={onExit}
