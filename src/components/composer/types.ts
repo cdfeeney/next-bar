@@ -300,6 +300,106 @@ export function missingDestinations(
 }
 
 /**
+ * ONE RECONCILIATION OF STORED INTENT AGAINST THE LIVE WORLD (rounds 1-3).
+ *
+ * WHY THIS EXISTS, because it replaces three rounds of individual guards.
+ * The composer stores what the author CHOSE — destinations, group targets,
+ * tagged people, a story audience — and the world moves underneath it: a group
+ * is deleted, a friend stops following back, tonight's night out ends. Every
+ * round of review found another field where the stored choice was trusted after
+ * it had gone stale, and each was patched where it was found:
+ *
+ *   round 2  a committed story audience that lapsed was widened to Friends
+ *   round 3  a vanished night out stranded the whole share behind a dead row
+ *   round 3  a deleted group's id was still sent as a live target
+ *   round 3  an unfriended tag was still sent, and could not be untagged
+ *
+ * That is one defect wearing four hats, so it gets one answer rather than a
+ * fifth guard. Everything the screens render and everything `onPublish`
+ * receives comes from HERE, derived from the live props on every render — which
+ * is what `resolveStoryRecipients` was already doing correctly for the story
+ * audience alone, generalised to the whole selection.
+ *
+ * Reconciling only ever NARROWS: an id that is no longer real is dropped, never
+ * substituted. Dropping a recipient is safe (it reaches fewer people); the one
+ * thing this must never do is widen, which is why a lapsed story audience is
+ * reported rather than replaced.
+ */
+export type ComposerSelection = {
+  destinations: readonly DestinationKey[];
+  groupIds: readonly string[];
+  tagIds: readonly string[];
+  storyAudience: StoryAudienceChoice;
+  storyAudienceGroupId: string | null;
+  customIds: readonly string[];
+};
+
+export type ReconciledSelection = {
+  /** Group DESTINATION targets that still exist. */
+  groupIds: readonly string[];
+  /** Tagged profiles who are still mutual friends. */
+  tagIds: readonly string[];
+  /** Story recipients after the D-C-37 intersection. */
+  storyAudienceIds: readonly string[];
+  /** Selected destinations that now have no target at all. */
+  undeliverable: readonly DestinationKey[];
+  /** The story audience narrows to nobody — refuse rather than widen. */
+  storyLapsed: boolean;
+  /** Tagged people the narrowed story would not reach — `publish_story` refuses them. */
+  strandedTagIds: readonly string[];
+};
+
+export function reconcileSelection(input: {
+  selection: ComposerSelection;
+  groups: readonly ComposerGroup[];
+  /** Accepted mutual friends. Empty while the circle has not resolved. */
+  mutualIds: readonly string[];
+  mutualsReady: boolean;
+  hasNightOut: boolean;
+}): ReconciledSelection {
+  const { selection } = input;
+  const liveGroupIds = input.groups.map((group) => group.id);
+  const groupIds = selection.groupIds.filter((id) => liveGroupIds.includes(id));
+  const tagIds = selection.tagIds.filter((id) => input.mutualIds.includes(id));
+
+  const audienceGroup = input.groups.find((group) => group.id === selection.storyAudienceGroupId);
+  const storyAudienceIds = resolveStoryRecipients({
+    choice: selection.storyAudience,
+    mutualIds: input.mutualIds,
+    groupMemberIds: audienceGroup?.memberIds ?? [],
+    customIds: selection.customIds,
+  });
+
+  const undeliverable: DestinationKey[] = [];
+  if (selection.destinations.includes('group') && groupIds.length === 0) {
+    undeliverable.push('group');
+  }
+  if (selection.destinations.includes('night_out') && !input.hasNightOut) {
+    undeliverable.push('night_out');
+  }
+
+  return {
+    groupIds,
+    tagIds,
+    storyAudienceIds,
+    undeliverable,
+    storyLapsed:
+      selection.destinations.includes('story')
+      && storyAudienceLapsed({
+        choice: selection.storyAudience,
+        mutualsReady: input.mutualsReady,
+        resolved: storyAudienceIds,
+      }),
+    strandedTagIds: taggedOutsideStoryAudience({
+      destinations: selection.destinations,
+      storyAudience: selection.storyAudience,
+      storyAudienceIds,
+      tagIds,
+    }),
+  };
+}
+
+/**
  * V8-R-CMP-008 — every selected destination that the CTA could not actually
  * deliver to, in canonical order.
  *

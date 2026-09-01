@@ -11,10 +11,9 @@ import SharedReceipt from './SharedReceipt';
 import StoryAudienceSheet from './StoryAudienceSheet';
 import {
   DESTINATION_LABELS,
+  reconcileSelection,
   resolveStoryRecipients,
   storyAudienceLapsed,
-  taggedOutsideStoryAudience,
-  undeliverableDestinations,
   type ComposerGroup,
   type ComposerNightOut,
   type DestinationKey,
@@ -115,20 +114,32 @@ export default function GlobalComposer({
   } | null>(null);
 
   const mutualIds = friendsReady ? friends.map((friend) => friend.id) : [];
-  const audienceGroup = groups.find((group) => group.id === audienceGroupId) ?? null;
   /**
-   * Resolved against the LIVE circle every render, never against the pick made
-   * earlier: unfollow someone in another tab and the count on screen drops with
-   * them. The server intersects again and refuses a non-mutual, so this is the
-   * honest UI half of a rule the database enforces.
+   * THE SINGLE RECONCILIATION. Every value the screens render and every value
+   * `onPublish` receives is derived here from the LIVE props on each render, so
+   * a stored choice can never outlive the thing it points at: unfollow someone
+   * in another tab and the count on screen drops with them, delete a group and
+   * it stops being a target, end the night out and its row stops being
+   * deliverable. Reconciling only narrows, never substitutes.
    */
-  const storyRecipients = resolveStoryRecipients({
-    choice: storyAudience,
+  const live = reconcileSelection({
+    selection: {
+      destinations,
+      groupIds: selectedGroupIds,
+      tagIds: people.map((person) => person.id),
+      storyAudience,
+      storyAudienceGroupId: audienceGroupId,
+      customIds,
+    },
+    groups,
     mutualIds,
-    groupMemberIds: audienceGroup?.memberIds ?? [],
-    customIds,
+    mutualsReady: friendsReady,
+    hasNightOut: nightOut !== null,
   });
+  const storyRecipients = live.storyAudienceIds;
   const storyRecipientCount = storyAudience === 'friends' ? null : storyRecipients.length;
+  /** Tagged people who are still mutual friends — what the screens show and what publishes. */
+  const taggedPeople = people.filter((person) => live.tagIds.includes(person.id));
 
   const toggleDestination = (key: DestinationKey): void => {
     // V8-R-CMP-003. A destination that already has this capture can never be
@@ -172,14 +183,9 @@ export default function GlobalComposer({
     // nothing, so it is refused here rather than sent and then reported as a
     // partial. The CTA is already unavailable; this is the guard behind it, so
     // no caller can publish an undeliverable selection.
-    const undeliverable = undeliverableDestinations({
-      destinations,
-      groupIds: selectedGroupIds,
-      hasNightOut: nightOut !== null,
-    });
-    if (undeliverable.length > 0) {
+    if (live.undeliverable.length > 0) {
       setDestinationFailure(
-        `${undeliverable.map((key) => DESTINATION_LABELS[key]).join(' and ')} has nowhere to go. Choose a target or turn it off.`,
+        `${live.undeliverable.map((key) => DESTINATION_LABELS[key]).join(' and ')} has nowhere to go. Choose a target or turn it off.`,
       );
       return;
     }
@@ -188,14 +194,7 @@ export default function GlobalComposer({
     // — including one whose circle has not resolved — is refused and the sheet
     // is reopened. It is never quietly widened to Friends, which would deliver
     // BROADER than the screen said.
-    if (
-      destinations.includes('story')
-      && storyAudienceLapsed({
-        choice: storyAudience,
-        mutualsReady: friendsReady,
-        resolved: storyRecipients,
-      })
-    ) {
+    if (live.storyLapsed) {
       setAudienceLapsed(true);
       setAudienceOpen(true);
       return;
@@ -206,15 +205,9 @@ export default function GlobalComposer({
     // so publishing would lose the Story destination at the server. Refused here
     // rather than silently ADDING the tagged person to the audience, because
     // widening a narrowing to make a tag work is what D-C-37 forbids.
-    const strandedTags = taggedOutsideStoryAudience({
-      destinations,
-      storyAudience,
-      storyAudienceIds: storyRecipients,
-      tagIds: people.map((person) => person.id),
-    });
-    if (strandedTags.length > 0) {
+    if (live.strandedTagIds.length > 0) {
       const names = people
-        .filter((person) => strandedTags.includes(person.id))
+        .filter((person) => live.strandedTagIds.includes(person.id))
         .map((person) => person.name)
         .join(', ');
       setDestinationFailure(
@@ -225,6 +218,8 @@ export default function GlobalComposer({
 
     setBusy(true);
     setDestinationFailure(null);
+    /** What this attempt could possibly have delivered to, for the throw path. */
+    const attempted = destinations;
     let result: PublishResult;
     try {
       result = await onPublish({
@@ -233,11 +228,13 @@ export default function GlobalComposer({
         destinations,
         caption: caption.trim().length > 0 ? caption.trim() : null,
         barId: bar?.id ?? null,
-        tagIds: people.map((person) => person.id),
+        // Every id below is RECONCILED, so nothing that has stopped existing can
+        // reach a backend that would reject it.
+        tagIds: live.tagIds,
         storyAudience,
         storyAudienceIds: storyRecipients,
         storyAudienceGroupId: storyAudience === 'group' ? audienceGroupId : null,
-        groupIds: destinations.includes('group') ? selectedGroupIds : [],
+        groupIds: destinations.includes('group') ? live.groupIds : [],
         nightOutId: destinations.includes('night_out') ? (nightOut?.id ?? null) : null,
       });
     } catch {
@@ -249,9 +246,15 @@ export default function GlobalComposer({
       // composer cannot know what landed — and unlike `{ok:false}` it is the
       // uncontrolled path, so it must not be ASSUMED empty.
       //
-      // So it fails safe rather than fails closed: the draft is kept, the
-      // selection is CLEARED so nothing can be re-sent by reflex, and the
-      // author is told the publish may have partly gone through and to check.
+      // So it fails safe: the draft is kept, and every destination that was
+      // ATTEMPTED is RETIRED — added to `landed` — because any of them may now
+      // hold this capture. Clearing the selection alone was not enough; the
+      // author could re-select Feed by hand and send it twice, which is the
+      // same duplicate CMP-003 forbids, reached by a different route. Retiring
+      // the attempted set is conservative on purpose: the cost of retiring a
+      // destination that did NOT receive it is one un-shared destination, and
+      // the cost of the opposite mistake is a duplicate post nobody asked for.
+      setLanded((current) => ORDER.filter((key) => attempted.includes(key) || current.includes(key)));
       setDestinations([]);
       setComposeFailure(
         'That did not finish, and some places may already have it. Check before sharing again.',
@@ -353,16 +356,17 @@ export default function GlobalComposer({
         <DestinationsStep
           destinations={destinations}
           groups={groups}
-          selectedGroupIds={selectedGroupIds}
+          selectedGroupIds={live.groupIds}
           groupsOpen={groupsOpen}
           nightOut={nightOut}
           storyAudience={storyAudience}
           storyRecipientCount={storyRecipientCount}
-          people={people}
+          people={taggedPeople}
           barName={bar?.name ?? null}
           busy={busy}
           failure={destinationFailure}
           landed={landed}
+          undeliverable={live.undeliverable}
           sheetOpen={audienceOpen}
           onToggleDestination={toggleDestination}
           onToggleGroupsOpen={() => setGroupsOpen((open) => !open)}
@@ -443,7 +447,7 @@ export default function GlobalComposer({
       photo={photo}
       caption={caption}
       bar={bar}
-      people={people}
+      people={taggedPeople}
       friends={friends}
       failure={composeFailure}
       onCaptionChange={setCaption}

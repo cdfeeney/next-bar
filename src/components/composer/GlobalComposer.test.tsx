@@ -7,6 +7,7 @@ import type { StoryPhoto, TaggedPerson } from '@/components/story/storyStore';
 import GlobalComposer from './GlobalComposer';
 import type { ComposerGroup, PublishInput, PublishResult } from './types';
 
+
 /**
  * The global composer driven through its real screens (WP4).
  *
@@ -275,6 +276,63 @@ describe('V8-R-CMP-003 — Story alone never implies Feed; one media object', ()
    * landed. Assuming "nowhere" is what let a host that committed Feed and then
    * threw leave the whole selection armed for a duplicate retry.
    */
+  test('an indeterminate publish RETIRES every destination it attempted', async () => {
+    const user = userEvent.setup();
+    mount({
+      onPublish: async (input) => {
+        published.push(input);
+        throw new Error('committed Feed, then threw on Story');
+      },
+    });
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-compose');
+
+    await user.click(screen.getByTestId('composer-next'));
+    await screen.findByTestId('composer-destinations');
+
+    // Both were attempted and either may now hold the capture, so neither can be
+    // chosen again — clearing the selection alone let the author re-select Feed
+    // by hand and publish the same media twice.
+    const feed = screen.getByTestId('composer-destination-feed') as HTMLButtonElement;
+    const story = screen.getByTestId('composer-destination-story') as HTMLButtonElement;
+    expect(feed.disabled).toBe(true);
+    expect(story.disabled).toBe(true);
+    await user.click(feed);
+    expect(feed.getAttribute('aria-pressed')).toBe('false');
+    expect(published).toHaveLength(1);
+  });
+
+  test('the composer cannot be abandoned while a publish is in flight', async () => {
+    const user = userEvent.setup();
+    let settle: (result: PublishResult) => void = () => {};
+    mount({
+      onPublish: (input) => {
+        published.push(input);
+        return new Promise<PublishResult>((resolve) => {
+          settle = resolve;
+        });
+      },
+    });
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-share'));
+
+    // Mid-write: leaving now would discard the receipt for something about to be
+    // live, including a partial, which CMP-002 says must never be silent.
+    const exit = screen.getByTestId('composer-destinations-exit') as HTMLButtonElement;
+    expect(exit.disabled).toBe(true);
+    await user.click(exit);
+    await user.keyboard('{Escape}');
+    expect(exits).toBe(0);
+
+    settle({ ok: true, publishId: 'p1', delivered: ['feed'] });
+    await screen.findByTestId('composer-receipt');
+    expect(exits).toBe(0);
+  });
+
   test('a rejected publish is treated as indeterminate, never as landed-nowhere', async () => {
     const user = userEvent.setup();
     mount({
@@ -583,6 +641,39 @@ describe('V8-R-CMP-006 — the Night Out row', () => {
     expect(row.getAttribute('aria-pressed')).toBe('false');
   });
 
+  /**
+   * The deselect invariant. Round 3 disabled this row whenever its night out was
+   * gone — including when the row was already ON — which stranded the entire
+   * share behind a CTA demanding an action the screen forbade, with only ✕ (and
+   * a lost draft) as a way out.
+   */
+  test('a Night Out that goes away after selection can still be turned off', async () => {
+    const user = userEvent.setup();
+    const { rerender } = mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-destination-night_out'));
+
+    // Tonight's night out ends while the composer is open.
+    rerender(element({ nightOut: null }));
+
+    const row = screen.getByTestId('composer-destination-night_out') as HTMLButtonElement;
+    expect(row.getAttribute('aria-pressed')).toBe('true');
+    // The CTA says to turn it off, so turning it off must be possible.
+    expect((screen.getByTestId('composer-share') as HTMLButtonElement).disabled).toBe(true);
+    expect(row.disabled).toBe(false);
+
+    await user.click(row);
+    expect(row.getAttribute('aria-pressed')).toBe('false');
+
+    // And the rest of the share is no longer held hostage by it.
+    publishResult = { ok: true, publishId: 'p1', delivered: ['feed'] };
+    expect((screen.getByTestId('composer-share') as HTMLButtonElement).disabled).toBe(false);
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-receipt');
+    expect([...published[0].destinations]).toEqual(['feed']);
+  });
+
   test('publishes tonight’s night out id when selected', async () => {
     const user = userEvent.setup();
     publishResult = { ok: true, publishId: 'p1', delivered: ['night_out'] };
@@ -882,6 +973,33 @@ describe('V8-R-CMP-013 — the bar tag is a decision, never a detection', () => 
     await user.click(screen.getByTestId('composer-share'));
     await screen.findByTestId('composer-receipt');
     expect(published[0].barId).toBeNull();
+  });
+
+  /**
+   * The People sheet only ever lists CURRENT friends, so a tag left behind by
+   * someone who unfollowed could not be removed through the UI at all — and it
+   * would still be sent to backends that reject a non-mutual tag. Reconciling
+   * drops it, which is a narrowing and therefore always safe.
+   */
+  test('a tagged person who stops being a mutual friend drops out and never publishes', async () => {
+    const user = userEvent.setup();
+    const { rerender } = mount();
+    await user.click(screen.getByTestId('composer-people'));
+    await user.click(await screen.findByText('Alex Ray'));
+    await user.click(await screen.findByText('Sam Poe'));
+    await user.keyboard('{Escape}');
+    expect(screen.getByTestId('composer-people').getAttribute('data-value')).toBe('Alex + 1');
+
+    // Alex unfollows while the composer is open.
+    rerender(element({ friends: [SAM] }));
+    expect(screen.getByTestId('composer-people').getAttribute('data-value')).toBe('Sam');
+
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-receipt');
+
+    expect([...published[0].tagIds]).toEqual(['sam']);
   });
 
   test('the row opens the shared bar sheet and returns straight to Compose', async () => {

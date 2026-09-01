@@ -200,10 +200,13 @@ export default function ComposeStep({
 export function ExitButton({
   testId,
   onClick,
+  disabled = false,
   label = 'Close without sharing',
 }: {
   testId: string;
   onClick: () => void;
+  /** Set while a publish is in flight — leaving then would discard its receipt. */
+  disabled?: boolean;
   label?: string;
 }): JSX.Element {
   return (
@@ -211,8 +214,10 @@ export function ExitButton({
       type="button"
       data-testid={testId}
       onClick={onClick}
+      disabled={disabled}
+      aria-disabled={disabled}
       aria-label={label}
-      className="w-11 h-11 -mr-2 -mt-1 shrink-0 flex items-center justify-center rounded-full border border-border text-muted touch-manipulation"
+      className="w-11 h-11 -mr-2 -mt-1 shrink-0 flex items-center justify-center rounded-full border border-border text-muted touch-manipulation disabled:opacity-40"
     >
       ✕
     </button>

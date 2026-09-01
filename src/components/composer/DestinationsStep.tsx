@@ -49,6 +49,7 @@ export default function DestinationsStep({
   busy,
   failure,
   landed = [],
+  undeliverable,
   sheetOpen = false,
   onToggleDestination,
   onToggleGroupsOpen,
@@ -78,6 +79,12 @@ export default function DestinationsStep({
    */
   landed?: readonly DestinationKey[];
   /**
+   * Selected destinations that currently have no target, reconciled against the
+   * live props by the parent. Passed in rather than recomputed so the CTA, the
+   * summary and the publish guard cannot drift apart.
+   */
+  undeliverable: readonly DestinationKey[];
+  /**
    * True while the Story-audience sheet is open ABOVE this screen. It disarms
    * this dialog's own key handling: two live traps on one document race, the
    * outer one fires first, and Escape would exit the whole composer — losing
@@ -94,17 +101,24 @@ export default function DestinationsStep({
   onExit: () => void;
   onPublish: () => void;
 }): JSX.Element {
-  const ref = useModalDialog<HTMLDivElement>(onExit, !sheetOpen);
+  // Escape is inert WHILE PUBLISHING (`onClose` null) so an in-flight write
+  // cannot be abandoned before its receipt, and inert under the sheet so the
+  // two traps do not race. The Tab cycle stays armed in both cases.
+  const ref = useModalDialog<HTMLDivElement>(busy ? null : onExit, !sheetOpen);
   const on = (key: DestinationKey): boolean => destinations.includes(key);
-  // A selected destination with no target — Group with no group chosen, or a
-  // Night Out that has gone away since it was picked — is one the CTA cannot
-  // deliver, so it is refused here rather than reported afterwards as a partial.
-  const undeliverable = undeliverableDestinations({
-    destinations,
-    groupIds: selectedGroupIds,
-    hasNightOut: nightOut !== null,
-  });
   const ready = destinations.length > 0 && !busy && undeliverable.length === 0;
+  /**
+   * A row that is ON must ALWAYS be turn-off-able.
+   *
+   * Round 3 disabled the Night Out row whenever its night out was gone, which
+   * also disabled it when the row was still ON from an earlier selection — so
+   * the author could not clear it, the CTA stayed disabled demanding they clear
+   * it, and the whole share was stranded with only ✕ (losing the draft) as a
+   * way out. `disabled` may prevent turning a destination ON. It may never
+   * prevent turning one OFF.
+   */
+  const rowDisabled = (key: DestinationKey, unavailable = false): boolean =>
+    !on(key) && (unavailable || landed.includes(key));
 
   const lines = summaryLines({
     destinations,
@@ -137,7 +151,15 @@ export default function DestinationsStep({
         >
           ‹ Back
         </button>
-        <ExitButton testId="composer-destinations-exit" onClick={onExit} />
+        {/* Closing mid-write would discard the receipt for something that is
+            about to be live — including a partial, which V8-R-CMP-002 says must
+            never be silent. Unavailable until the publish settles. */}
+        <ExitButton
+          testId="composer-destinations-exit"
+          onClick={onExit}
+          disabled={busy}
+          label={busy ? 'Sharing — please wait' : undefined}
+        />
       </div>
 
       <h2 className="font-display text-2xl mt-1">Where does this go?</h2>
@@ -153,7 +175,7 @@ export default function DestinationsStep({
                 : 'Stays until you delete it · friends can comment'
             }
             on={on('feed')}
-            disabled={landed.includes('feed')}
+            disabled={rowDisabled('feed')}
             onClick={() => onToggleDestination('feed')}
           />
         </li>
@@ -164,7 +186,7 @@ export default function DestinationsStep({
             destination="story"
             hint={landed.includes('story') ? 'Already shared here' : 'Visible for 24 hours'}
             on={on('story')}
-            disabled={landed.includes('story')}
+            disabled={rowDisabled('story')}
             onClick={() => onToggleDestination('story')}
           />
           {/* JOINED to the row it governs — no gap, no separate card — so its
@@ -201,10 +223,9 @@ export default function DestinationsStep({
                   : `${nightOut.label} · 24 hours from the start`
             }
             on={on('night_out')}
-            // With no night out there is nothing to save to. The row still
-            // appears and still says why — "the row states so rather than
-            // silently doing nothing".
-            disabled={nightOut === null || landed.includes('night_out')}
+            // With no night out there is nothing to save to, so the row cannot
+            // be turned ON — but one already on can always be turned OFF.
+            disabled={rowDisabled('night_out', nightOut === null)}
             onClick={() => onToggleDestination('night_out')}
           />
         </li>
@@ -219,7 +240,7 @@ export default function DestinationsStep({
                 : groupSummary(groups, selectedGroupIds)
             }
             on={on('group')}
-            disabled={landed.includes('group')}
+            disabled={rowDisabled('group')}
             onClick={() => onToggleDestination('group')}
           />
           {/* EXPANDS IN PLACE. The dropdown is joined to its row, and the

@@ -8,6 +8,7 @@ import {
   ctaLabel,
   missingDestinations,
   receiptFor,
+  reconcileSelection,
   resolveStoryRecipients,
   storyAudienceLapsed,
   summaryLines,
@@ -292,6 +293,128 @@ describe('V8-R-CMP-005 — a tag the story will not reach', () => {
         storyAudienceIds: [],
       }),
     ).toEqual([]);
+  });
+});
+
+/**
+ * The single reconciliation. Rounds 1-3 each found another field whose stored
+ * choice was trusted after the world moved underneath it; this is the one rule
+ * that replaced those four separate guards, so it is argued with directly.
+ */
+describe('reconcileSelection — stored intent against the live world', () => {
+  const GROUPS = [
+    { id: 'crew', name: 'Bar Crew', memberIds: ['alex', 'stranger'] },
+    { id: 'uni', name: 'Uni', memberIds: ['sam'] },
+  ];
+  const base = {
+    groups: GROUPS,
+    mutualIds: ['alex', 'sam'],
+    mutualsReady: true,
+    hasNightOut: true,
+  };
+  const selection = {
+    destinations: ['feed'] as readonly ('feed' | 'story' | 'night_out' | 'group')[],
+    groupIds: [] as readonly string[],
+    tagIds: [] as readonly string[],
+    storyAudience: 'friends' as const,
+    storyAudienceGroupId: null,
+    customIds: [] as readonly string[],
+  };
+
+  test('drops a group target that no longer exists, and says the row has nowhere to go', () => {
+    const live = reconcileSelection({
+      ...base,
+      selection: { ...selection, destinations: ['group'], groupIds: ['deleted'] },
+    });
+    expect([...live.groupIds]).toEqual([]);
+    expect([...live.undeliverable]).toEqual(['group']);
+  });
+
+  test('keeps a group target that still exists', () => {
+    const live = reconcileSelection({
+      ...base,
+      selection: { ...selection, destinations: ['group'], groupIds: ['uni'] },
+    });
+    expect([...live.groupIds]).toEqual(['uni']);
+    expect([...live.undeliverable]).toEqual([]);
+  });
+
+  test('drops a tagged person who is no longer a mutual friend', () => {
+    const live = reconcileSelection({
+      ...base,
+      mutualIds: ['sam'],
+      selection: { ...selection, tagIds: ['alex', 'sam'] },
+    });
+    expect([...live.tagIds]).toEqual(['sam']);
+  });
+
+  test('reports a Night Out that has gone away since it was selected', () => {
+    const live = reconcileSelection({
+      ...base,
+      hasNightOut: false,
+      selection: { ...selection, destinations: ['night_out'] },
+    });
+    expect([...live.undeliverable]).toEqual(['night_out']);
+  });
+
+  test('reports a lapsed story narrowing rather than widening it', () => {
+    const live = reconcileSelection({
+      ...base,
+      mutualIds: ['sam'],
+      selection: {
+        ...selection,
+        destinations: ['story'],
+        storyAudience: 'group',
+        storyAudienceGroupId: 'crew',
+      },
+    });
+    // Bar Crew holds alex (gone) and stranger (never mutual) — nobody is left.
+    expect([...live.storyAudienceIds]).toEqual([]);
+    expect(live.storyLapsed).toBe(true);
+  });
+
+  test('a story audience is never lapsed when Story is not a destination', () => {
+    const live = reconcileSelection({
+      ...base,
+      mutualIds: [],
+      selection: { ...selection, storyAudience: 'custom', customIds: ['ghost'] },
+    });
+    expect(live.storyLapsed).toBe(false);
+  });
+
+  test('names a tag the narrowed story would not reach', () => {
+    const live = reconcileSelection({
+      ...base,
+      selection: {
+        ...selection,
+        destinations: ['story'],
+        tagIds: ['sam'],
+        storyAudience: 'group',
+        storyAudienceGroupId: 'crew',
+      },
+    });
+    // Bar Crew resolves to alex; sam is tagged but would not see it.
+    expect([...live.storyAudienceIds]).toEqual(['alex']);
+    expect([...live.strandedTagIds]).toEqual(['sam']);
+  });
+
+  test('reconciling only ever narrows — it never invents a replacement', () => {
+    const live = reconcileSelection({
+      ...base,
+      mutualIds: [],
+      mutualsReady: false,
+      selection: {
+        ...selection,
+        destinations: ['group', 'night_out'],
+        groupIds: ['deleted'],
+        tagIds: ['ghost'],
+      },
+      hasNightOut: false,
+    });
+    expect([...live.groupIds]).toEqual([]);
+    expect([...live.tagIds]).toEqual([]);
+    expect([...live.storyAudienceIds]).toEqual([]);
+    expect([...live.undeliverable]).toEqual(['group', 'night_out']);
   });
 });
 
