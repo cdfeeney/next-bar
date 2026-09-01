@@ -538,9 +538,24 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
   it('an audience member reaches the bytes through the media window; a stranger does not', async () => {
     await inRollback(async () => {
       const { alice, bob, carol } = await seed({ mutual: true });
-      const { mediaPath } = await publishAs(alice);
+      const { id: story, mediaPath } = await publishAs(alice);
       // The window follows the row: same audience, same answer.
-      expect((await readWindow(bob, mediaPath)).readable).toBe(true);
+      const seen = await readWindow(bob, mediaPath);
+      expect(seen.readable).toBe(true);
+      // AND THE WINDOW IS BOUNDED BY THE STORY. `readable` alone is not the
+      // whole answer: `/api/media/[mediaId]/url` hands this expiry to
+      // `serverTtlSeconds`, which reads null as "no expiry of its own" and
+      // grants the full SIGNED_URL_MAX_SECONDS ceiling. A window that answered
+      // `(true, null)` for a LIVE referenced story would therefore mint a URL
+      // that outlives the story it came from — V8-R-STO-015 through the front
+      // door — while every assertion here that reads only `readable` stayed
+      // green. The expiry is the second half of the answer, so assert it.
+      await asOwner();
+      const { rows } = await db.query(
+        'select expires_at from public.stories where id = $1', [story],
+      );
+      expect(seen.expiresAt).not.toBeNull();
+      expect(seen.expiresAt?.getTime()).toBe((rows[0].expires_at as Date).getTime());
       expect((await readWindow(carol, mediaPath)).readable).toBe(false);
     });
   });
