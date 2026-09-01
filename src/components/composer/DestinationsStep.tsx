@@ -7,8 +7,8 @@ import { ExitButton } from './ComposeStep';
 import {
   DESTINATION_LABELS,
   ctaLabel,
-  groupTargetsMissing,
   summaryLines,
+  undeliverableDestinations,
   type ComposerGroup,
   type ComposerNightOut,
   type DestinationKey,
@@ -48,6 +48,7 @@ export default function DestinationsStep({
   barName,
   busy,
   failure,
+  landed = [],
   sheetOpen = false,
   onToggleDestination,
   onToggleGroupsOpen,
@@ -71,6 +72,12 @@ export default function DestinationsStep({
   busy: boolean;
   failure: string | null;
   /**
+   * Destinations this capture is ALREADY live on after a partial failure. Their
+   * rows are locked: one media object reaches one destination at most once
+   * (V8-R-CMP-003), so re-selecting is not offered rather than merely discouraged.
+   */
+  landed?: readonly DestinationKey[];
+  /**
    * True while the Story-audience sheet is open ABOVE this screen. It disarms
    * this dialog's own key handling: two live traps on one document race, the
    * outer one fires first, and Escape would exit the whole composer — losing
@@ -89,10 +96,15 @@ export default function DestinationsStep({
 }): JSX.Element {
   const ref = useModalDialog<HTMLDivElement>(onExit, !sheetOpen);
   const on = (key: DestinationKey): boolean => destinations.includes(key);
-  // A Group row with no group chosen is a destination the CTA cannot deliver,
-  // so it is refused here rather than reported afterwards as a partial.
-  const groupIncomplete = groupTargetsMissing({ destinations, groupIds: selectedGroupIds });
-  const ready = destinations.length > 0 && !busy && !groupIncomplete;
+  // A selected destination with no target — Group with no group chosen, or a
+  // Night Out that has gone away since it was picked — is one the CTA cannot
+  // deliver, so it is refused here rather than reported afterwards as a partial.
+  const undeliverable = undeliverableDestinations({
+    destinations,
+    groupIds: selectedGroupIds,
+    hasNightOut: nightOut !== null,
+  });
+  const ready = destinations.length > 0 && !busy && undeliverable.length === 0;
 
   const lines = summaryLines({
     destinations,
@@ -135,8 +147,13 @@ export default function DestinationsStep({
           <DestinationRow
             testId="composer-destination-feed"
             destination="feed"
-            hint="Stays until you delete it · friends can comment"
+            hint={
+              landed.includes('feed')
+                ? 'Already shared here'
+                : 'Stays until you delete it · friends can comment'
+            }
             on={on('feed')}
+            disabled={landed.includes('feed')}
             onClick={() => onToggleDestination('feed')}
           />
         </li>
@@ -145,8 +162,9 @@ export default function DestinationsStep({
           <DestinationRow
             testId="composer-destination-story"
             destination="story"
-            hint="Visible for 24 hours"
+            hint={landed.includes('story') ? 'Already shared here' : 'Visible for 24 hours'}
             on={on('story')}
+            disabled={landed.includes('story')}
             onClick={() => onToggleDestination('story')}
           />
           {/* JOINED to the row it governs — no gap, no separate card — so its
@@ -176,15 +194,17 @@ export default function DestinationsStep({
             testId="composer-destination-night_out"
             destination="night_out"
             hint={
-              nightOut === null
-                ? 'No night out tonight'
-                : `${nightOut.label} · 24 hours from the start`
+              landed.includes('night_out')
+                ? 'Already shared here'
+                : nightOut === null
+                  ? 'No night out tonight'
+                  : `${nightOut.label} · 24 hours from the start`
             }
             on={on('night_out')}
             // With no night out there is nothing to save to. The row still
             // appears and still says why — "the row states so rather than
             // silently doing nothing".
-            disabled={nightOut === null}
+            disabled={nightOut === null || landed.includes('night_out')}
             onClick={() => onToggleDestination('night_out')}
           />
         </li>
@@ -193,8 +213,13 @@ export default function DestinationsStep({
           <DestinationRow
             testId="composer-destination-group"
             destination="group"
-            hint={groupSummary(groups, selectedGroupIds)}
+            hint={
+              landed.includes('group')
+                ? 'Already shared here'
+                : groupSummary(groups, selectedGroupIds)
+            }
             on={on('group')}
+            disabled={landed.includes('group')}
             onClick={() => onToggleDestination('group')}
           />
           {/* EXPANDS IN PLACE. The dropdown is joined to its row, and the
@@ -295,8 +320,8 @@ export default function DestinationsStep({
               requirement's fail-closed clause exists to prevent. */}
           {busy
             ? 'Sharing…'
-            : groupIncomplete
-              ? 'Choose a group to share to'
+            : undeliverable.length > 0
+              ? undeliverableLabel(undeliverable)
               : ctaLabel(destinations)}
         </button>
       </div>
@@ -343,6 +368,14 @@ function DestinationRow({
       </span>
     </button>
   );
+}
+
+/** Why the CTA is unavailable, named on the button itself. */
+function undeliverableLabel(missing: readonly DestinationKey[]): string {
+  if (missing.includes('group') && missing.includes('night_out')) {
+    return 'Choose a group, and turn Night Out off';
+  }
+  return missing[0] === 'group' ? 'Choose a group to share to' : 'Turn Night Out off to share';
 }
 
 function audienceLabel(

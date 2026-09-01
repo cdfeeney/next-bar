@@ -300,18 +300,58 @@ export function missingDestinations(
 }
 
 /**
- * V8-R-CMP-007 / -008 — the Group row is not a destination until it names a group.
+ * V8-R-CMP-008 — every selected destination that the CTA could not actually
+ * deliver to, in canonical order.
  *
  * "The CTA writes to EVERY selected destination", so a selection the CTA cannot
- * deliver is refused BEFORE publishing rather than reported afterwards as a
- * partial. Group on with no group chosen is exactly that: `sendGroupMessage`
- * takes one group id, so an empty list reaches no thread at all. The Story
- * audience already fails closed the same way (`storyAudienceLapsed`); this is
- * the missing half for the Group DESTINATION.
+ * honour is refused BEFORE publishing rather than reported afterwards as a
+ * partial. Two destinations can be selected and yet have no target:
+ *
+ *   - GROUP with no group chosen. `sendGroupMessage` takes one group id, so an
+ *     empty list reaches no thread at all.
+ *   - NIGHT OUT whose night out has gone away since it was selected. The row
+ *     disables itself but stays ON, and `addNightOutMedia` needs an id — so
+ *     without this the composer would send `night_out` with `nightOutId:null`.
+ *
+ * The Story audience fails closed by its own route (`storyAudienceLapsed`),
+ * because it reopens the sheet rather than merely disabling the CTA.
  */
-export function groupTargetsMissing(input: {
+export function undeliverableDestinations(input: {
   destinations: readonly DestinationKey[];
   groupIds: readonly string[];
-}): boolean {
-  return input.destinations.includes('group') && input.groupIds.length === 0;
+  hasNightOut: boolean;
+}): readonly DestinationKey[] {
+  const missing: DestinationKey[] = [];
+  if (input.destinations.includes('group') && input.groupIds.length === 0) {
+    missing.push('group');
+  }
+  if (input.destinations.includes('night_out') && !input.hasNightOut) {
+    missing.push('night_out');
+  }
+  return missing;
+}
+
+/**
+ * V8-R-CMP-005 — tagging somebody the story will not reach.
+ *
+ * The inherited Story backend refuses it outright: `publish_story` raises 42501
+ * with "everyone you tag must be in a custom story's audience"
+ * (`0066_media_boundary.sql`), and a narrowed composer audience reaches that RPC
+ * as a custom one. So tagging Alex while narrowing the story to a set without
+ * Alex cannot land, and the composer must not offer it.
+ *
+ * It FAILS CLOSED rather than quietly adding the tagged person to the audience:
+ * widening a narrowing to make a tag work is exactly what D-C-37 forbids.
+ * `friends` needs no check — an unnarrowed story reaches every mutual friend,
+ * and only a mutual friend can be tagged.
+ */
+export function taggedOutsideStoryAudience(input: {
+  destinations: readonly DestinationKey[];
+  storyAudience: StoryAudienceChoice;
+  storyAudienceIds: readonly string[];
+  tagIds: readonly string[];
+}): readonly string[] {
+  if (!input.destinations.includes('story')) return [];
+  if (input.storyAudience === 'friends') return [];
+  return input.tagIds.filter((id) => !input.storyAudienceIds.includes(id));
 }

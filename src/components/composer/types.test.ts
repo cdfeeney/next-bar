@@ -6,12 +6,13 @@ import {
   COMPOSER_DESTINATIONS,
   MAX_COMPOSER_CAPTION,
   ctaLabel,
-  groupTargetsMissing,
   missingDestinations,
   receiptFor,
   resolveStoryRecipients,
   storyAudienceLapsed,
   summaryLines,
+  taggedOutsideStoryAudience,
+  undeliverableDestinations,
 } from './types';
 
 /**
@@ -198,17 +199,99 @@ describe('V8-R-CMP-008 — the CTA names its effect', () => {
   });
 });
 
-describe('V8-R-CMP-007 / -008 — Group is not a destination until it names a group', () => {
-  test('Group selected with no group chosen cannot be delivered', () => {
-    expect(groupTargetsMissing({ destinations: ['group'], groupIds: [] })).toBe(true);
+describe('V8-R-CMP-008 — a selected destination with no target is refused, not sent', () => {
+  const anywhere = { groupIds: ['uni'], hasNightOut: true };
+
+  test('Group selected with no group chosen has nowhere to go', () => {
+    expect(
+      undeliverableDestinations({ ...anywhere, destinations: ['group'], groupIds: [] }),
+    ).toEqual(['group']);
   });
 
-  test('Group with a chosen group can', () => {
-    expect(groupTargetsMissing({ destinations: ['group'], groupIds: ['uni'] })).toBe(false);
+  test('Night Out selected after tonight has gone away has nowhere to go', () => {
+    expect(
+      undeliverableDestinations({ ...anywhere, destinations: ['night_out'], hasNightOut: false }),
+    ).toEqual(['night_out']);
   });
 
-  test('an unselected Group row is not a missing target', () => {
-    expect(groupTargetsMissing({ destinations: ['feed'], groupIds: [] })).toBe(false);
+  test('both at once are both named, in canonical order', () => {
+    expect(
+      undeliverableDestinations({
+        destinations: ['group', 'night_out'],
+        groupIds: [],
+        hasNightOut: false,
+      }),
+    ).toEqual(['group', 'night_out']);
+  });
+
+  test('a complete selection has nothing undeliverable', () => {
+    expect(
+      undeliverableDestinations({ ...anywhere, destinations: ['feed', 'group', 'night_out'] }),
+    ).toEqual([]);
+  });
+
+  test('an UNSELECTED row is never a missing target, however empty', () => {
+    expect(
+      undeliverableDestinations({
+        destinations: ['feed'],
+        groupIds: [],
+        hasNightOut: false,
+      }),
+    ).toEqual([]);
+  });
+});
+
+/**
+ * The inherited Story backend refuses this outright — `publish_story` raises
+ * 42501, "everyone you tag must be in a custom story's audience"
+ * (`0066_media_boundary.sql`). The composer must not offer a combination the
+ * server will reject.
+ */
+describe('V8-R-CMP-005 — a tag the story will not reach', () => {
+  const base = { destinations: ['story'] as const, tagIds: ['alex'] };
+
+  test('is refused when the narrowed audience excludes the tagged person', () => {
+    expect(
+      taggedOutsideStoryAudience({
+        ...base,
+        destinations: ['story'],
+        storyAudience: 'custom',
+        storyAudienceIds: ['blake'],
+      }),
+    ).toEqual(['alex']);
+  });
+
+  test('is fine when the narrowed audience includes them', () => {
+    expect(
+      taggedOutsideStoryAudience({
+        ...base,
+        destinations: ['story'],
+        storyAudience: 'group',
+        storyAudienceIds: ['alex', 'blake'],
+      }),
+    ).toEqual([]);
+  });
+
+  test('never fires for an unnarrowed story — only a mutual friend can be tagged', () => {
+    expect(
+      taggedOutsideStoryAudience({
+        ...base,
+        destinations: ['story'],
+        storyAudience: 'friends',
+        storyAudienceIds: [],
+      }),
+    ).toEqual([]);
+  });
+
+  test('never fires when Story is not a destination', () => {
+    expect(
+      taggedOutsideStoryAudience({
+        ...base,
+        destinations: ['feed'],
+        storyAudience: 'custom',
+        storyAudienceIds: [],
+      }),
+    ).toEqual([]);
   });
 });
 

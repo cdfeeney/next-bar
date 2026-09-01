@@ -44,10 +44,11 @@ beforeEach(() => {
   exits = 0;
 });
 
-function mount(
-  overrides: Partial<React.ComponentProps<typeof GlobalComposer>> = {},
-): void {
-  render(
+type ComposerProps = Partial<React.ComponentProps<typeof GlobalComposer>>;
+
+/** The element under test, so a test can re-render it with changed props. */
+function element(overrides: ComposerProps = {}): JSX.Element {
+  return (
     <GlobalComposer
       photo={PHOTO}
       main="data:image/jpeg;base64,aaa"
@@ -66,8 +67,12 @@ function mount(
       onViewPost={vi.fn()}
       onViewStory={vi.fn()}
       {...overrides}
-    />,
+    />
   );
+}
+
+function mount(overrides: ComposerProps = {}): ReturnType<typeof render> {
+  return render(element(overrides));
 }
 
 /** Compose → Destinations. The only route between the two steps. */
@@ -235,6 +240,70 @@ describe('V8-R-CMP-003 — Story alone never implies Feed; one media object', ()
     expect([...published[1].destinations]).toEqual(['story']);
   });
 
+  /**
+   * Deselecting what landed stops the REFLEX retry. It does not stop a
+   * deliberate one, and CMP-003 is absolute: one media object reaches one
+   * destination at most once.
+   */
+  test('a destination that already has this capture cannot be selected again at all', async () => {
+    const user = userEvent.setup();
+    publishResult = { ok: false, message: 'Story did not send.', delivered: ['feed'] };
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-destinations-failed');
+
+    const feed = screen.getByTestId('composer-destination-feed') as HTMLButtonElement;
+    expect(feed.disabled).toBe(true);
+    expect(feed.textContent).toContain('Already shared here');
+
+    // Tapping it is inert — it does not come back on, and the next publish
+    // still carries only Story.
+    await user.click(feed);
+    expect(feed.getAttribute('aria-pressed')).toBe('false');
+
+    publishResult = { ok: true, publishId: 'p2', delivered: ['story'] };
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-receipt');
+    expect([...published[1].destinations]).toEqual(['story']);
+  });
+
+  /**
+   * A THROWN error carries no `delivered`, so the composer cannot know what
+   * landed. Assuming "nowhere" is what let a host that committed Feed and then
+   * threw leave the whole selection armed for a duplicate retry.
+   */
+  test('a rejected publish is treated as indeterminate, never as landed-nowhere', async () => {
+    const user = userEvent.setup();
+    mount({
+      onPublish: async (input) => {
+        published.push(input);
+        throw new Error('threw after Feed landed');
+      },
+    });
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-share'));
+
+    const compose = await screen.findByTestId('composer-compose');
+    expect(within(compose).getByTestId('composer-publish-failed').textContent).toContain(
+      'some places may already have it',
+    );
+
+    // The selection is cleared, so returning to Destinations cannot re-send the
+    // original set by reflex — the CTA has nothing selected to send.
+    await user.click(screen.getByTestId('composer-next'));
+    await screen.findByTestId('composer-destinations');
+    expect(screen.getByTestId('composer-destination-feed').getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect((screen.getByTestId('composer-share') as HTMLButtonElement).disabled).toBe(true);
+    expect(published).toHaveLength(1);
+  });
+
   test('a rejected publish returns to Compose with the draft rather than wedging on "Sharing…"', async () => {
     const user = userEvent.setup();
     mount({
@@ -391,6 +460,73 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     await screen.findByTestId('composer-receipt');
     expect([...published[0].storyAudienceIds]).toEqual(['alex']);
     expect(published[0].storyAudienceGroupId).toBe('crew');
+  });
+
+  /**
+   * D-C-37 does not care whether the narrowing lapsed BEFORE or AFTER it was
+   * committed: an audience of one must not become everyone without the author
+   * choosing it. Dismissing means "never mind", never "widen it".
+   */
+  test('a committed narrowing that LATER lapses is kept, not widened to Friends', async () => {
+    const user = userEvent.setup();
+    const { rerender } = mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-story-audience'));
+    const sheet = await screen.findByTestId('composer-audience-sheet');
+    await user.click(within(sheet).getByText('A group'));
+    await user.click(await within(sheet).findByText('Bar Crew'));
+    // Committed while it still resolved: Bar Crew narrowed to alex.
+    await user.click(screen.getByTestId('composer-audience-done'));
+    expect(screen.getByTestId('composer-story-audience-value').textContent).toBe(
+      'Group · 1 person',
+    );
+
+    // NOW the circle changes underneath it — alex is no longer a mutual friend,
+    // so the committed narrowing resolves to nobody and has lapsed.
+    rerender(element({ friends: [SAM] }));
+    expect(screen.getByTestId('composer-story-audience-value').textContent).toBe(
+      'Group · 0 people',
+    );
+
+    // Share fails closed and reopens the sheet. Dismissing it must NOT resolve
+    // the lapsed narrowing to Friends — that would turn an audience of one into
+    // everyone without the author choosing it.
+    await user.click(screen.getByTestId('composer-share'));
+    const reopened = await screen.findByTestId('composer-audience-sheet');
+    expect(published).toHaveLength(0);
+    await user.click(within(reopened).getByLabelText('Close story audience'));
+
+    expect(screen.getByTestId('composer-story-audience-value').textContent).toBe(
+      'Group · 0 people',
+    );
+    // And it still cannot publish — fail-closed, not widened.
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-audience-sheet');
+    expect(published).toHaveLength(0);
+  });
+
+  test('tagging someone the narrowed story will not reach is refused, not widened', async () => {
+    const user = userEvent.setup();
+    mount();
+    // Tag Sam, then narrow the story to Bar Crew — which resolves to Alex only.
+    await user.click(screen.getByTestId('composer-people'));
+    await user.click(await screen.findByText('Sam Poe'));
+    await user.keyboard('{Escape}');
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-story-audience'));
+    const sheet = await screen.findByTestId('composer-audience-sheet');
+    await user.click(within(sheet).getByText('A group'));
+    await user.click(await within(sheet).findByText('Bar Crew'));
+    await user.click(screen.getByTestId('composer-audience-done'));
+    await user.click(screen.getByTestId('composer-share'));
+
+    // publish_story would raise 42501 for exactly this, so nothing is sent and
+    // the audience is NOT quietly widened to include Sam.
+    expect(published).toHaveLength(0);
+    const failed = await screen.findByTestId('composer-destinations-failed');
+    expect(failed.textContent).toContain('Sam Poe');
   });
 
   test('Escape inside the audience sheet closes the sheet, never the composer', async () => {
@@ -690,6 +826,29 @@ describe('V8-R-CMP-011 — the three receipts and Undo', () => {
     const user = userEvent.setup();
     undoResult = { ok: false, message: 'That could not be undone.' };
     mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-feed'));
+    await user.click(screen.getByTestId('composer-share'));
+    await screen.findByTestId('composer-receipt');
+    await user.click(screen.getByTestId('composer-receipt-undo'));
+
+    const failure = await screen.findByTestId('composer-undo-failed');
+    expect(failure.textContent).toContain('It is still live.');
+    expect(exits).toBe(0);
+  });
+
+  /**
+   * A REJECTED Undo is a failed Undo. Saying nothing is worse than reporting
+   * success: the author is left to assume the post was withdrawn when it is
+   * still live.
+   */
+  test('an Undo that never reaches the server says so rather than nothing', async () => {
+    const user = userEvent.setup();
+    mount({
+      onUndo: async () => {
+        throw new Error('network down');
+      },
+    });
     await toDestinations(user);
     await user.click(screen.getByTestId('composer-destination-feed'));
     await user.click(screen.getByTestId('composer-share'));

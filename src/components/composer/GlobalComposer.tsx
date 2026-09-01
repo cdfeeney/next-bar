@@ -11,9 +11,10 @@ import SharedReceipt from './SharedReceipt';
 import StoryAudienceSheet from './StoryAudienceSheet';
 import {
   DESTINATION_LABELS,
-  groupTargetsMissing,
   resolveStoryRecipients,
   storyAudienceLapsed,
+  taggedOutsideStoryAudience,
+  undeliverableDestinations,
   type ComposerGroup,
   type ComposerNightOut,
   type DestinationKey,
@@ -94,6 +95,13 @@ export default function GlobalComposer({
   const [customIds, setCustomIds] = useState<readonly string[]>([]);
   const [audienceOpen, setAudienceOpen] = useState(false);
   const [audienceLapsed, setAudienceLapsed] = useState(false);
+  /**
+   * Destinations this capture is already live on, from a partial failure the
+   * host could not give an Undo handle for. They can never be re-selected
+   * (V8-R-CMP-003) — the composer publishes one media object to each
+   * destination at most once.
+   */
+  const [landed, setLanded] = useState<readonly DestinationKey[]>([]);
   const [busy, setBusy] = useState(false);
   const [composeFailure, setComposeFailure] = useState<string | null>(null);
   const [destinationFailure, setDestinationFailure] = useState<string | null>(null);
@@ -123,6 +131,12 @@ export default function GlobalComposer({
   const storyRecipientCount = storyAudience === 'friends' ? null : storyRecipients.length;
 
   const toggleDestination = (key: DestinationKey): void => {
+    // V8-R-CMP-003. A destination that already has this capture can never be
+    // selected again: dropping it from the selection after a partial failure
+    // stops the reflex retry, but nothing stopped the author tapping it back on
+    // and sending the same media twice. One capture reaches one destination at
+    // most once, for the life of this composer.
+    if (landed.includes(key)) return;
     setDestinationFailure(null);
     setDestinations((current) =>
       current.includes(key)
@@ -154,12 +168,19 @@ export default function GlobalComposer({
   const publish = async (): Promise<void> => {
     if (busy || destinations.length === 0) return;
 
-    // FAIL CLOSED (V8-R-CMP-007/-008). Group selected with no group chosen
-    // reaches no thread, so it is refused here rather than published and then
-    // reported as a partial. The CTA is already unavailable; this is the guard
-    // behind it, so no caller can publish an undeliverable selection.
-    if (groupTargetsMissing({ destinations, groupIds: selectedGroupIds })) {
-      setDestinationFailure('Choose a group first, or turn the Group row off.');
+    // FAIL CLOSED (V8-R-CMP-008). A selected destination with no target reaches
+    // nothing, so it is refused here rather than sent and then reported as a
+    // partial. The CTA is already unavailable; this is the guard behind it, so
+    // no caller can publish an undeliverable selection.
+    const undeliverable = undeliverableDestinations({
+      destinations,
+      groupIds: selectedGroupIds,
+      hasNightOut: nightOut !== null,
+    });
+    if (undeliverable.length > 0) {
+      setDestinationFailure(
+        `${undeliverable.map((key) => DESTINATION_LABELS[key]).join(' and ')} has nowhere to go. Choose a target or turn it off.`,
+      );
       return;
     }
 
@@ -177,6 +198,28 @@ export default function GlobalComposer({
     ) {
       setAudienceLapsed(true);
       setAudienceOpen(true);
+      return;
+    }
+
+    // FAIL CLOSED on a tag the story will not reach. `publish_story` refuses it
+    // outright (42501, "everyone you tag must be in a custom story's audience"),
+    // so publishing would lose the Story destination at the server. Refused here
+    // rather than silently ADDING the tagged person to the audience, because
+    // widening a narrowing to make a tag work is what D-C-37 forbids.
+    const strandedTags = taggedOutsideStoryAudience({
+      destinations,
+      storyAudience,
+      storyAudienceIds: storyRecipients,
+      tagIds: people.map((person) => person.id),
+    });
+    if (strandedTags.length > 0) {
+      const names = people
+        .filter((person) => strandedTags.includes(person.id))
+        .map((person) => person.name)
+        .join(', ');
+      setDestinationFailure(
+        `${names} cannot be tagged in a story they will not see. Add them to the story audience, or untag them.`,
+      );
       return;
     }
 
@@ -198,12 +241,21 @@ export default function GlobalComposer({
         nightOutId: destinations.includes('night_out') ? (nightOut?.id ?? null) : null,
       });
     } catch {
-      // A REJECTED promise is a publish that landed nowhere, not a state to sit
-      // in. Without this the composer keeps `busy` forever: the CTA stays
-      // disabled reading "Sharing…" and the draft can neither be published nor
-      // recovered. Treated exactly like `{ok:false}` with nothing delivered.
-      setBusy(false);
-      setComposeFailure('That did not send.');
+      // A REJECTED promise is INDETERMINATE, and the first version of this
+      // handler got that wrong: it reported "landed nowhere" and returned to
+      // Compose with the whole selection intact, so a host that had already
+      // committed Feed and then threw while publishing Story left the obvious
+      // retry re-sending Feed. A thrown error carries no `delivered`, so the
+      // composer cannot know what landed — and unlike `{ok:false}` it is the
+      // uncontrolled path, so it must not be ASSUMED empty.
+      //
+      // So it fails safe rather than fails closed: the draft is kept, the
+      // selection is CLEARED so nothing can be re-sent by reflex, and the
+      // author is told the publish may have partly gone through and to check.
+      setDestinations([]);
+      setComposeFailure(
+        'That did not finish, and some places may already have it. Check before sharing again.',
+      );
       setStep('compose');
       return;
     } finally {
@@ -240,11 +292,13 @@ export default function GlobalComposer({
         return;
       }
       // With no publishId there is nothing to Undo, so the least this can do is
-      // make the retry safe: drop what already landed from the selection, so a
-      // second tap re-sends only what is genuinely still missing.
+      // make the retry safe: drop what already landed from the selection AND
+      // remember it, so neither a second tap nor a deliberate re-selection can
+      // send this capture to the same destination twice.
+      setLanded((current) => ORDER.filter((key) => landed.includes(key) || current.includes(key)));
       setDestinations((current) => current.filter((key) => !landed.includes(key)));
       setDestinationFailure(
-        `${result.message} ${landed.map((key) => DESTINATION_LABELS[key]).join(' and ')} already went through, so ${landed.length === 1 ? 'it is' : 'they are'} no longer selected.`,
+        `${result.message} ${landed.map((key) => DESTINATION_LABELS[key]).join(' and ')} already went through, so ${landed.length === 1 ? 'it is' : 'they are'} no longer available.`,
       );
       return;
     }
@@ -276,10 +330,18 @@ export default function GlobalComposer({
           // Undo DELETES on the server. Closing regardless would leave live
           // posts the author was told had been withdrawn.
           setUndoFailure(null);
-          void onUndo(published.publishId).then((result) => {
-            if (result.ok) onExit();
-            else setUndoFailure(result.message);
-          });
+          void onUndo(published.publishId).then(
+            (result) => {
+              if (result.ok) onExit();
+              else setUndoFailure(result.message);
+            },
+            // A REJECTED Undo is a failed Undo. Without this the rejection went
+            // unhandled, `undoFailure` stayed null, and the screen said nothing
+            // at all — while the post was still live. V8-R-CMP-011: "a failed
+            // Undo must not report success", and saying nothing is worse than
+            // reporting success, because the author is left to assume it worked.
+            () => setUndoFailure('That did not reach the server.'),
+          );
         }}
       />
     );
@@ -300,6 +362,7 @@ export default function GlobalComposer({
           barName={bar?.name ?? null}
           busy={busy}
           failure={destinationFailure}
+          landed={landed}
           sheetOpen={audienceOpen}
           onToggleDestination={toggleDestination}
           onToggleGroupsOpen={() => setGroupsOpen((open) => !open)}
@@ -348,31 +411,24 @@ export default function GlobalComposer({
               setAudienceOpen(false);
             }}
             onClose={() => {
-              // Dismissing DISCARDS what was being browsed and restores the
-              // last committed audience. It must not resolve a half-made choice
-              // to Friends: an author who had already committed "Bar Crew" and
-              // then tapped Custom to look would have had their narrowing
-              // widened to everyone by a gesture that means "never mind".
+              // Dismissing DISCARDS what was being browsed and restores the last
+              // committed audience, whatever it is. It NEVER resolves anything to
+              // Friends: an author who committed "Bar Crew" and then tapped
+              // Custom to look would otherwise have had their narrowing widened
+              // to everyone by a gesture that means "never mind".
               //
-              // Only when the RESTORED choice is itself unpublishable — nothing
-              // has ever been committed and the Account default cannot resolve —
-              // does it fall back to Friends, which is the original fail-closed
-              // intent and never widens a decision the author actually made.
-              const restoredRecipients = resolveStoryRecipients({
-                choice: committedAudience.choice,
-                mutualIds,
-                groupMemberIds:
-                  groups.find((group) => group.id === committedAudience.groupId)?.memberIds ?? [],
-                customIds: committedAudience.customIds,
-              });
-              const restoredLapses = storyAudienceLapsed({
-                choice: committedAudience.choice,
-                mutualsReady: friendsReady,
-                resolved: restoredRecipients,
-              });
-              setStoryAudience(restoredLapses ? 'friends' : committedAudience.choice);
-              setAudienceGroupId(restoredLapses ? null : committedAudience.groupId);
-              setCustomIds(restoredLapses ? [] : committedAudience.customIds);
+              // An earlier version kept a Friends fallback for the case where the
+              // restored choice ITSELF lapses — a circle that changed after the
+              // commit, or an Account default that never resolved. That is still
+              // a widening, and D-C-37 does not care whether the narrowing lapsed
+              // after it was made: the audience on screen would grow from one
+              // person to everyone without the author choosing it. So the lapsed
+              // narrowing is KEPT. `publish()` refuses it and reopens this sheet,
+              // which is a fail-closed dead end with two one-tap exits — pick a
+              // different audience, or turn Story off.
+              setStoryAudience(committedAudience.choice);
+              setAudienceGroupId(committedAudience.groupId);
+              setCustomIds(committedAudience.customIds);
               setAudienceLapsed(false);
               setAudienceOpen(false);
             }}
