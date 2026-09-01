@@ -19,15 +19,49 @@ import { describe, expect, it } from 'vitest';
  * archived review note names that as the same defect wearing the repair.
  */
 
-const SQL = readFileSync(
-  path.join(__dirname, '..', '..', 'supabase', 'migrations', '0069_feed_and_comments.sql'),
-  'utf8',
-).replace(/\r\n/g, '\n');
+/**
+ * THE SUBJECT IS THE EFFECTIVE SQL, NOT ONE FILE — and that changed on
+ * 2026-08-31, not because the guards got weaker.
+ *
+ * Phase C applied 0069 to production while this lane was still in review, so its
+ * bytes are fenced by `public.schema_migrations` and the round-9 consolidation
+ * could no longer be delivered by editing it. 0076 states the same work forward.
+ * A test that kept reading 0069 alone would now be pinning a shape the database
+ * does not have — green for text nothing runs — so it reads the pair, in the
+ * order Postgres applies them, and resolves each object to its LAST definition.
+ *
+ * `appliedMigrationIdentity.test.ts` is the other half of this: it asserts 0069's
+ * checksum still equals the value the ledger recorded, so "the effective text
+ * changed" can only ever mean 0076 changed.
+ */
+const FILES = [
+  '0069_feed_and_comments.sql',
+  '0076_feed_access_consolidation_and_group_read_window.sql',
+] as const;
+
+const SQL = FILES
+  .map((file) => readFileSync(path.join(__dirname, '..', '..', 'supabase', 'migrations', file), 'utf8'))
+  .join('\n')
+  .replace(/\r\n/g, '\n');
+
+/**
+ * The same text with `--` comments removed.
+ *
+ * Every "is this statement still here, and is it the LAST one" check reads THIS,
+ * not SQL. A statement commented out is a statement gone, and over the raw string
+ * the drop of `is_feed_post_recipient` could be commented out with every case in
+ * this file still green — a guard satisfied by the text of its own explanation.
+ * Whitespace is left alone so exact statement text still matches.
+ */
+const CODE = SQL.replace(/--[^\n]*/g, ' ');
 
 /** The text of one `create policy` statement, by name. */
 function policyBody(name: string): string {
-  const start = SQL.indexOf(`create policy "${name}"`);
-  expect(start, `policy ${name} is not defined in 0069`).toBeGreaterThan(-1);
+  // lastIndexOf, because a policy redefined by 0076 is dropped and re-created:
+  // the FIRST occurrence is 0069's superseded text, and asserting over it would
+  // pass while the live policy said something else.
+  const start = SQL.lastIndexOf(`create policy "${name}"`);
+  expect(start, `policy ${name} is not defined by the effective migration set`).toBeGreaterThan(-1);
   const end = SQL.indexOf(';\n', start);
   expect(end, `policy ${name} is unterminated`).toBeGreaterThan(start);
   return SQL.slice(start, end);
@@ -68,11 +102,42 @@ function expectTerminalSelect(body: string, expected: string, what: string): voi
 
 /** The body of one `create or replace function`, by qualified name. */
 function functionBody(signature: string): string {
-  const start = SQL.indexOf(`create or replace function ${signature}`);
-  expect(start, `${signature} is not defined in 0069`).toBeGreaterThan(-1);
+  // lastIndexOf, for the same reason as policyBody: `create or replace` means the
+  // last statement is the one the database ends up holding.
+  const start = SQL.lastIndexOf(`create or replace function ${signature}`);
+  expect(start, `${signature} is not defined by the effective migration set`).toBeGreaterThan(-1);
   const end = SQL.indexOf('\n$$;', start);
   expect(end, `${signature} is unterminated`).toBeGreaterThan(start);
   return SQL.slice(start, end);
+}
+
+/**
+ * The body of the REPORTING implementation, wherever it currently lives.
+ *
+ * 0075 renamed the implementation aside to `report_content_before_0075` and put a
+ * repeat short-circuit in front of it under the old name, so the visibility checks
+ * these cases pin are in the renamed function and 0076 corrects them there.
+ * Resolving the name here rather than in each case keeps one answer: pinning the
+ * wrapper would assert over a body that contains no visibility check at all, and
+ * every case below would go green for the wrong reason.
+ */
+function reportImplBody(): string {
+  return SQL.includes('create or replace function public.report_content_before_0075(')
+    ? functionBody('public.report_content_before_0075(')
+    : functionBody('public.report_content(');
+}
+
+/**
+ * Is `signature` executable by `authenticated` after the whole set has run?
+ *
+ * LAST STATEMENT WINS, which is the only reading that survives a forward
+ * migration: 0069 granted `can_view_feed_comment` and 0076 revokes it, so a
+ * `not.toContain` over the concatenated text would fail on 0069's superseded
+ * grant and report that the oracle was still open.
+ */
+function grantedToAuthenticated(signature: string): boolean {
+  return CODE.lastIndexOf(`grant execute on function ${signature} to authenticated;`)
+    > CODE.lastIndexOf(`revoke all on function ${signature} from public, anon`);
 }
 
 describe('0069 — a block is judged between the READER and the COMMENTER', () => {
@@ -129,13 +194,16 @@ describe('0069 — one definition of the Feed audience gate', () => {
   });
 
   it('the hide is added by can_view_feed_post, on top of the same gate', () => {
-    // The two-argument form is defined first, so this signature resolves to it.
+    // NAMED BY ITS FIRST PARAMETER, because the resolver takes the LAST definition
+    // and the caller-scoped one-argument overload is written after this one. A bare
+    // `can_view_feed_post(` would resolve to that overload and this case would then
+    // assert the wrong function's tail.
     // TERMINAL, for the reason on `expectTerminalSelect`: these two are the same
     // satisfiable shape the party guard was found in, over the gate that ADDS the
     // hide. Fixing only the assertion the finding named would leave the identical
     // hole one screen above it.
     expectTerminalSelect(
-      sqlShape(functionBody('public.can_view_feed_post(')),
+      sqlShape(functionBody('public.can_view_feed_post(\n  p_viewer uuid,')),
       'select public.feed_post_visible_to(p_viewer, p_post_id)'
       + ' and not public.feed_post_reported_by(p_viewer, p_post_id);',
       'the hide-adding gate',
@@ -194,9 +262,10 @@ describe('0069 — one definition of the Feed audience gate', () => {
       expect(SQL, `${signature} is not revoked from authenticated`).toContain(
         `revoke all on function ${signature} from public, anon, authenticated;`,
       );
-      expect(SQL, `${signature} is granted to authenticated, making it an oracle`).not.toContain(
-        `grant execute on function ${signature} to authenticated;`,
-      );
+      expect(
+        grantedToAuthenticated(signature),
+        `${signature} is granted to authenticated, making it an oracle`,
+      ).toBe(false);
     }
   });
 
@@ -237,11 +306,13 @@ describe('0069 — one definition of the Feed audience gate', () => {
     expect(SQL).toContain(
       'revoke all on function public.can_view_feed_comment(uuid) from public, anon, authenticated;',
     );
-    expect(SQL, 'can_view_feed_comment is granted to an application role again')
-      .not.toContain('grant execute on function public.can_view_feed_comment(uuid) to authenticated;');
+    expect(
+      grantedToAuthenticated('public.can_view_feed_comment(uuid)'),
+      'can_view_feed_comment is granted to an application role again',
+    ).toBe(false);
     // And the two definer verbs ask the INTERNAL rule, not the granted wrapper —
     // routing them through a grantable entry point is what forced its guard wide.
-    expect(sqlShape(functionBody('public.report_content(')), 'report_content asks the granted wrapper again')
+    expect(sqlShape(reportImplBody()), 'report_content asks the granted wrapper again')
       .not.toContain('public.feed_post_visible_to_party(');
     expect(sqlShape(functionBody('public.can_view_feed_comment(')), 'can_view_feed_comment asks the granted wrapper again')
       .not.toContain('public.feed_post_visible_to_party(');
@@ -253,13 +324,22 @@ describe('0069 — one definition of the Feed audience gate', () => {
     // still read their audience membership after unfollowing, being blocked,
     // reporting the post, or the author deleting it. Its job moved inside the gate,
     // so the function itself is dropped: what does not exist cannot be granted back.
-    expect(SQL).toContain('drop function if exists public.is_feed_post_recipient(uuid, uuid);');
-    expect(SQL, 'the retired audience oracle has been redefined').not.toContain(
-      'create or replace function public.is_feed_post_recipient(',
-    );
-    expect(SQL, 'the retired audience oracle has been granted again').not.toContain(
-      'grant execute on function public.is_feed_post_recipient',
-    );
+    // ORDER, not absence. 0069 still CREATES it — those bytes are applied and
+    // frozen — so the requirement is that the drop is the LAST word on the name.
+    // CODE, never SQL. Commenting the drop out leaves its text in the file, and
+    // over the raw string this case stayed GREEN with the oracle un-dropped — the
+    // same guard-passes-on-its-own-explanation shape `code()` was added to
+    // groups.server.test.ts to close. Verified by mutation, not by inspection.
+    const dropped = CODE.lastIndexOf('drop function if exists public.is_feed_post_recipient(uuid, uuid);');
+    expect(dropped, 'the drop is gone or commented out').toBeGreaterThan(-1);
+    expect(
+      CODE.lastIndexOf('create or replace function public.is_feed_post_recipient('),
+      'the retired audience oracle is redefined after it is dropped',
+    ).toBeLessThan(dropped);
+    expect(
+      CODE.lastIndexOf('grant execute on function public.is_feed_post_recipient'),
+      'the retired audience oracle is granted after it is dropped',
+    ).toBeLessThan(dropped);
   });
 });
 
@@ -684,7 +764,7 @@ describe('0069 — a write carries its own authorization, not an older snapshot'
     // deleted (the post arm's message satisfied the toContain on its own), and it
     // stayed green when both re-checks were moved ABOVE the write, which is the
     // whole point of the fix. Order and both arms, therefore.
-    const body = sqlShape(functionBody('public.report_content('));
+    const body = sqlShape(reportImplBody());
     const wrote = body.indexOf('v_id := public.record_content_report(p_subject_kind, v_ref, p_reason);');
     const postArm = body.indexOf('that post stopped being yours to report');
     const commentArm = body.indexOf('that comment stopped being yours to report');
@@ -737,7 +817,7 @@ describe('0069 — a write carries its own authorization, not an older snapshot'
     // transaction just inserted — every first feed_post report would roll back. The
     // party spelling is hide-free for exactly this reason, and the pre-write check
     // asks it too so that a REPEAT report stays idempotent.
-    const body = sqlShape(functionBody('public.report_content('));
+    const body = sqlShape(reportImplBody());
     expect(
       body,
       'the report path asks the hide-carrying gate, so a report undoes itself',
@@ -747,7 +827,7 @@ describe('0069 — a write carries its own authorization, not an older snapshot'
 });
 
 describe('0069 — you may only report what you can still see', () => {
-  const body = functionBody('public.report_content(');
+  const body = reportImplBody();
 
   it('a caller who hid the POST cannot then file a durable report on its comments', () => {
     // Round 3 (MEDIUM, codex): the comments read policy vetoes on
