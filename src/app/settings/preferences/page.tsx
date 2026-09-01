@@ -73,7 +73,16 @@ export default function SettingsHomePage(): JSX.Element {
           ratingsCount={ratings.length}
         />
 
+        {/* KEYED BY IDENTITY. `useOperationalLoad` keeps its loader in a ref
+            and re-runs only on an attempt bump, which is what stops an inline
+            closure re-fetching on every render — and also means a NEW loader
+            for a different account is never called, while the retained
+            `value` from the previous one keeps rendering. Remounting on the
+            identity is the whole fix: it discards the retained count with the
+            account it belonged to, and needs no change to the shared hook's
+            deliberate ref contract. */}
         <ConnectionsGroup
+          key={auth.status === 'signed-in' ? auth.user.id : 'signed-out'}
           friendCount={mutuals.length}
           pendingCount={requests.length}
           signedIn={auth.status === 'signed-in'}

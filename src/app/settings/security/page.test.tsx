@@ -166,17 +166,27 @@ describe('V8-R-ACC-012 — the deletion result says only what is known', () => {
     );
   };
 
-  it('reports a server refusal as nothing removed, which is what happened', async () => {
+  it('reports a refusal as a fact about the ATTEMPT, not about the account', async () => {
+    // "Nothing was removed" was a claim about the account's whole history, and
+    // the classifier cannot support it: `rate_limited` and `unavailable` are
+    // returned BEFORE the route looks the user up, so a throttled retry after
+    // a lost successful deletion printed that sentence over an account that
+    // was already gone. What the response proves is that THIS request changed
+    // nothing, which is true on every path that reaches here.
     deletionOutcome = 'refused';
 
     await armAndDelete();
 
     await waitFor(() =>
-      expect(screen.getByText(/nothing was removed/i)).toBeTruthy(),
+      expect(
+        screen.getByText(/that attempt was refused and removed nothing/i),
+      ).toBeTruthy(),
     );
+    // Specifically NOT the old sentence, which asserted the account survived.
+    expect(screen.queryByText(/nothing was removed\./i)).toBeNull();
   });
 
-  it('refuses to claim "nothing was removed" when the answer was lost', async () => {
+  it('refuses to claim anything about the account when the answer was lost', async () => {
     deletionOutcome = 'unknown';
 
     await armAndDelete();
@@ -187,7 +197,9 @@ describe('V8-R-ACC-012 — the deletion result says only what is known', () => {
       ).toBeTruthy(),
     );
     // The exact false assurance the old single-boolean path printed here.
-    expect(screen.queryByText(/nothing was removed/i)).toBeNull();
+    expect(
+      screen.queryByText(/that attempt was refused and removed nothing/i),
+    ).toBeNull();
   });
 
   it('tells an unknown outcome how to find out, rather than to just retry', async () => {
@@ -244,7 +256,9 @@ describe('V8-R-ACC-012 — the deletion result says only what is known', () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText(/nothing was removed/i)).toBeTruthy(),
+      expect(
+        screen.getByText(/that attempt was refused and removed nothing/i),
+      ).toBeTruthy(),
     );
   });
 });

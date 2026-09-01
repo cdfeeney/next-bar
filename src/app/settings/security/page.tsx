@@ -328,8 +328,9 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
     setState('deleting');
     const outcome = await performAccountDeletion(auth);
     // 'deleted' has already navigated away. The other two both stay here and
-    // say only what they know: a refusal is the honest "nothing was removed",
-    // a lost answer is not allowed to borrow that sentence.
+    // say only what they know: a refusal proves THIS ATTEMPT changed nothing,
+    // a lost answer proves nothing at all, and neither is licensed to make a
+    // claim about whether the account still exists.
     if (outcome === 'refused') setState('failed');
     if (outcome === 'unknown') setState('unknown');
   };
@@ -414,10 +415,22 @@ function DeleteConfirm({
         onChange={(e) => onConfirmTextChange(e.target.value)}
         className="w-full bg-bg border border-red-400 rounded-2xl px-4 py-3 text-base text-text placeholder:text-muted focus:outline-none min-h-[44px]"
       />
+      {/* A CLAIM ABOUT THE ATTEMPT, NOT ABOUT THE ACCOUNT.
+          "Nothing was removed" was a statement about the account's whole
+          history, and the classifier cannot support it: `rate_limited` and
+          `unavailable` are returned BEFORE the route ever looks the user up,
+          so a throttled retry after a lost successful deletion printed that
+          sentence over an account that was already gone.
+          Reclassifying those as `unknown` would be wrong in the other
+          direction — an ordinary first-attempt throttle would tell someone
+          whose account demonstrably still exists that it "may already be
+          gone". What the response actually proves is that THIS request
+          changed nothing, which is true on every path that reaches here, so
+          that is what it says. */}
       {state === 'failed' ? (
         <p className="text-red-400 text-xs" role="status">
-          Couldn&apos;t delete your account — nothing was removed. Try again in a
-          moment, or email hi@next-bar.app.
+          That attempt was refused and removed nothing. Try again in a moment,
+          or email hi@next-bar.app.
         </p>
       ) : null}
       {/* The honest sentence for a lost answer. It must NOT say "nothing was

@@ -23,10 +23,13 @@ import { SILENT_AUTO_RETRY_CAP } from '@/components/states/useOperationalLoad';
 let authStatus: 'signed-in' | 'signed-out' = 'signed-in';
 let blocked: { ok: boolean; value?: string[] } = { ok: true, value: ['a', 'b'] };
 
+/** Mutable so a test can put a DIFFERENT account behind the same mounted
+ *  page — the case where a retained count would leak between owners. */
+let userId = 'me';
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => ({
     status: authStatus,
-    user: { id: 'me', email: 'me@example.com' },
+    user: { id: userId, email: 'me@example.com' },
     signOut: vi.fn(),
   }),
 }));
@@ -83,6 +86,7 @@ beforeEach(() => {
   blocked = { ok: true, value: ['a', 'b'] };
   blockedReads = 0;
   privacySaveOk = true;
+  userId = 'me';
 });
 
 const section = (name: string): HTMLElement =>
@@ -318,6 +322,28 @@ describe('the blocked-list read follows the shared retry policy', () => {
     );
     // 1 initial attempt + SILENT_AUTO_RETRY_CAP retries, then it stops.
     expect(blockedReads).toBe(SILENT_AUTO_RETRY_CAP + 1);
+  });
+
+  it('does not show one account the count it loaded for another', async () => {
+    // `useOperationalLoad` keeps its loader in a ref and re-runs only on an
+    // attempt bump — which is what stops an inline closure re-fetching every
+    // render, and also means a NEW loader for a different account is never
+    // called while the previous account's `value` keeps rendering. The group
+    // is keyed by identity so it remounts instead.
+    const view = render(<SettingsHomePage />);
+    await waitFor(() =>
+      expect(within(section('Connections')).getByText('2')).toBeInTheDocument(),
+    );
+
+    // A different account signs in while this page stays mounted.
+    userId = 'other';
+    blocked = { ok: true, value: ['x'] };
+    view.rerender(<SettingsHomePage />);
+
+    await waitFor(() =>
+      expect(within(section('Connections')).getByText('1')).toBeInTheDocument(),
+    );
+    expect(within(section('Connections')).queryByText('2')).toBeNull();
   });
 
   it('a manual retry that works clears the failure and shows the count', async () => {

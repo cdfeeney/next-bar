@@ -121,20 +121,28 @@ describe('POST /api/account/delete', () => {
     expect(deleteUserMock).not.toHaveBeenCalled();
   });
 
-  it('401 for a REVOKED session on a live user, which is not the same thing', async () => {
-    // `session_not_found` is deliberately not treated as gone: a signed-out
-    // token must never report a living account as deleted.
-    getUserMock.mockResolvedValue({
-      data: { user: null },
-      error: { code: 'session_not_found', message: 'Session from session_id claim in JWT does not exist' },
-    });
+  it.each([
+    // The typed code, as `error-codes` declares it.
+    { code: 'session_not_found', message: 'Session from session_id claim in JWT does not exist' },
+    // …and the shape auth-js 2.105.4 ACTUALLY returns for a missing session:
+    // an AuthSessionMissingError with no `code` at all (round-5 Claude lane
+    // checked the installed package rather than the docs). Both must be 401,
+    // and asserting only the tidy one would have tested a fixture rather than
+    // the library.
+    { message: 'Auth session missing!' },
+  ])(
+    '401 for a REVOKED session on a live user (%o), which is not the same thing',
+    async (error) => {
+      // A signed-out token must never report a living account as deleted.
+      getUserMock.mockResolvedValue({ data: { user: null }, error });
 
-    const res = await POST(makeRequest({ token: 'revoked' }));
+      const res = await POST(makeRequest({ token: 'revoked' }));
 
-    expect(res.status).toBe(401);
-    expect(await res.json()).toEqual({ ok: false, error: 'unauthorized' });
-    expect(deleteUserMock).not.toHaveBeenCalled();
-  });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ ok: false, error: 'unauthorized' });
+      expect(deleteUserMock).not.toHaveBeenCalled();
+    },
+  );
 
   it('401 when getUser fails with no code at all', async () => {
     // Fail closed on anything unrecognised: only the one code that MEANS
