@@ -1,7 +1,8 @@
 /**
  * follow-requests.spec.ts
  *
- * B3b follow requests + privacy toggle — signed-in /friends and /settings
+ * B3b follow requests + privacy toggle — signed-in /friends and
+ * /settings/preferences
  * against stubbed Supabase RPCs (same cookie + route-stub pattern as
  * friends-real.spec.ts; no real accounts or database rows are involved).
  *
@@ -105,7 +106,7 @@ type StubOptions = {
   acceptResult?: boolean;
   declineResult?: boolean;
   cancelResult?: boolean;
-  /** Own profile row for /settings (select on profiles). */
+  /** Own profile row for /settings/preferences (select on profiles). */
   ownProfile?: {
     handle: string | null;
     display_name: string | null;
@@ -370,7 +371,7 @@ test.describe('/friends — follow requests (B3b)', () => {
   });
 });
 
-test.describe('/settings — privacy toggle (B3b)', () => {
+test.describe('/settings/preferences — privacy toggle (B3b)', () => {
   test.beforeEach(async ({ page }) => {
     test.skip(
       SUPABASE_URL === null,
@@ -385,7 +386,9 @@ test.describe('/settings — privacy toggle (B3b)', () => {
     await stubSupabase(page, {
       ownProfile: { handle: 'connor_f', display_name: null, is_private: false },
     });
-    await page.goto('/settings');
+    // WP8 moved the switch out of the old Settings page and into the
+    // Privacy & sharing group of the Settings stack at /settings/preferences.
+    await page.goto('/settings/preferences');
 
     const toggle = page.getByRole('switch', { name: /private account/i });
     await expect(toggle).toBeVisible();

@@ -3,7 +3,15 @@
  *
  * Coverage for the TikTok-style identity onboarding (PR #6): the
  * OnboardingGate redirect, the /onboarding name+username form, and the
- * Settings identity header (name + @handle, email never rendered).
+ * Account identity header (name + @handle, email never rendered).
+ *
+ * WP8 put THREE SCREENS IN FRONT OF THE IDENTITY FORM. `/onboarding` is now
+ * both the door into a sequence and its last step (src/app/onboarding/
+ * _sequence.ts): a bare visit replaces itself with age → location → quiz, and
+ * only a visit carrying `seq=done` renders the name+username form. Nothing the
+ * form asserts was dropped, so nothing below is deleted — the gate test walks
+ * the three new steps, and the tests that only exercise the form address it
+ * directly at its marked URL.
  *
  * Same stubbed-Supabase pattern as claim-handle.spec.ts — every REST/RPC
  * endpoint is intercepted so no real accounts or database rows are
@@ -147,6 +155,47 @@ const usernameInput = (page: Page) => page.getByPlaceholder('username');
 const submitButton = (page: Page) =>
   page.getByRole('button', { name: /let's go/i });
 
+/**
+ * The identity step's own URL — `seq=done` is what tells `/onboarding` it is
+ * being visited as the LAST step of the sequence rather than as the door into
+ * it (SEQUENCE_DONE_PARAM). Without the marker the route replaces itself with
+ * /onboarding/age and the form never renders.
+ */
+const IDENTITY_STEP = '/onboarding?seq=done';
+
+/**
+ * Walk the three screens WP8 added in front of the identity form, from the
+ * age step through to the form itself. Each step is asserted on the way past,
+ * so a step that stops handing off fails here rather than silently skipping
+ * the rest of the sequence.
+ */
+async function walkSequenceToIdentity(page: Page): Promise<void> {
+  // The 21+ answer is pre-seeded for every spec by playwright.config.ts's
+  // storageState, so the age step opens on its ALREADY-CONFIRMED branch and
+  // its forward control is Continue rather than "I'm 21 or older". The
+  // question itself is covered by app-store-pack.spec.ts, which clears that
+  // state on purpose.
+  await expect(
+    page.getByRole('heading', { name: /this app is for bars and nightlife/i }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/already confirmed you.re 21 or older/i),
+  ).toBeVisible();
+  await page.getByRole('button', { name: /^Continue$/ }).click();
+
+  await page.waitForURL(/\/onboarding\/location\?next=/);
+  await expect(
+    page.getByRole('heading', { name: /find bars near you tonight/i }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: /^Not now$/ }).click();
+
+  await page.waitForURL(/\/onboarding\/quiz\?next=/);
+  await expect(
+    page.getByRole('heading', { name: /^Tune my picks$/ }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: /show me bars/i }).click();
+}
+
 test.describe('identity onboarding (signed in)', () => {
   test.beforeEach(async ({ page }) => {
     test.skip(
@@ -162,16 +211,28 @@ test.describe('identity onboarding (signed in)', () => {
     await stubSupabase(page, { profileHandle: null });
     await page.goto('/settings');
 
-    // The gate now carries the route it interrupted as ?next= (criterion 1), so
-    // the URL is no longer a bare /onboarding — a glob of '**/onboarding' stops
-    // matching the moment a query string exists. Assert the pathname and the
-    // carried value separately, which pins the behaviour instead of the shape.
-    await page.waitForURL(/\/onboarding\?next=/);
+    // The gate carries the route it interrupted as ?next= (criterion 1), and
+    // `/onboarding` hands that value straight on to the first step of the
+    // sequence — so the first URL that settles is the age step. Assert the
+    // pathname and the carried value separately, which pins the behaviour
+    // instead of the shape.
+    await page.waitForURL(/\/onboarding\/age\?next=/);
     const gateUrl = new URL(page.url());
-    expect(gateUrl.pathname).toBe('/onboarding');
+    expect(gateUrl.pathname).toBe('/onboarding/age');
     expect(
       gateUrl.searchParams.get('next'),
       'the gate must carry the interrupted route so onboarding can return to it',
+    ).toBe('/settings');
+
+    // …and the sequence ends on the identity form, still carrying the route
+    // the gate interrupted.
+    await walkSequenceToIdentity(page);
+    await page.waitForURL(/\/onboarding\?next=/);
+    const identityUrl = new URL(page.url());
+    expect(identityUrl.pathname).toBe('/onboarding');
+    expect(
+      identityUrl.searchParams.get('next'),
+      'the interrupted route must survive every step of the sequence',
     ).toBe('/settings');
     await expect(
       page.getByRole('heading', { name: /pick how friends see you/i }),
@@ -206,7 +267,7 @@ test.describe('identity onboarding (signed in)', () => {
       claimResult: 'connor_f',
       patchBodies,
     });
-    await page.goto('/onboarding');
+    await page.goto(IDENTITY_STEP);
 
     await typeInto(nameInput(page), 'Conor F');
     await typeInto(usernameInput(page), 'connor_f');
@@ -226,7 +287,7 @@ test.describe('identity onboarding (signed in)', () => {
     page,
   }) => {
     await stubSupabase(page, { profileHandle: null, claimResult: null });
-    await page.goto('/onboarding');
+    await page.goto(IDENTITY_STEP);
 
     await typeInto(nameInput(page), 'Conor F');
     await typeInto(usernameInput(page), 'connor_f');
@@ -242,7 +303,7 @@ test.describe('identity onboarding (signed in)', () => {
     page,
   }) => {
     await stubSupabase(page, { profileHandle: null });
-    await page.goto('/onboarding');
+    await page.goto(IDENTITY_STEP);
 
     await page.getByRole('button', { name: /skip for now/i }).click();
     await page.waitForURL((url) => new URL(url).pathname === '/');

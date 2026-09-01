@@ -92,7 +92,7 @@ async function stubForSettings(
   );
 }
 
-test.describe('/settings — delete account (H2)', () => {
+test.describe('/settings/security — delete account (H2)', () => {
   test.beforeEach(async ({ page }) => {
     test.skip(
       SUPABASE_URL === null,
@@ -110,7 +110,7 @@ test.describe('/settings — delete account (H2)', () => {
     await stubForSettings(page, {
       deleteResult: { status: 200, body: { ok: true } },
     });
-    await page.goto('/settings');
+    await page.goto('/settings/security');
 
     await page.getByRole('button', { name: /^Delete account$/ }).click();
 
@@ -121,9 +121,17 @@ test.describe('/settings — delete account (H2)', () => {
 
     const input = page.getByLabel(/type/i);
     await input.click();
-    await input.pressSequentially('del');
+    // The confirmation is EXACT — the screen asks for DELETE and the check is
+    // neither trimmed nor case-folded, so the lowercase word must NOT arm it.
+    await input.pressSequentially('delete');
     await expect(confirmButton).toBeDisabled();
-    await input.pressSequentially('ete');
+    // Real key events, not fill(): React's controlled input needs them on
+    // WebKit (same rule as claim-handle.spec.ts).
+    for (let i = 0; i < 'delete'.length; i += 1) await input.press('Backspace');
+    await expect(input).toHaveValue('');
+    await input.pressSequentially('DEL');
+    await expect(confirmButton).toBeDisabled();
+    await input.pressSequentially('ETE');
     await expect(confirmButton).toBeEnabled();
 
     const deleteCall = page.waitForRequest(
@@ -138,7 +146,7 @@ test.describe('/settings — delete account (H2)', () => {
     await expect(page).toHaveURL(/\/$/);
   });
 
-  test('a failed deletion reports honestly and stays on settings', async ({
+  test('a failed deletion reports honestly and stays on the security screen', async ({
     page,
   }) => {
     await stubForSettings(page, {
@@ -147,18 +155,22 @@ test.describe('/settings — delete account (H2)', () => {
         body: { ok: false, error: 'unavailable' },
       },
     });
-    await page.goto('/settings');
+    await page.goto('/settings/security');
 
     await page.getByRole('button', { name: /^Delete account$/ }).click();
     const input = page.getByLabel(/type/i);
     await input.click();
-    await input.pressSequentially('delete');
+    await input.pressSequentially('DELETE');
     await page.getByRole('button', { name: /permanently delete/i }).click();
 
+    // `unavailable` is one of the three route errors emitted BEFORE any
+    // delete is attempted (see settings/security/_deleteRequest.ts), so the
+    // screen may claim this ATTEMPT removed nothing — and no longer claims
+    // anything about the account as a whole.
     await expect(
-      page.getByText(/couldn.t delete your account — nothing was removed/i),
+      page.getByText(/that attempt was refused and removed nothing/i),
     ).toBeVisible();
-    await expect(page).toHaveURL(/\/settings$/);
+    await expect(page).toHaveURL(/\/settings\/security$/);
     // Still armed for a retry.
     await expect(
       page.getByRole('button', { name: /permanently delete/i }),
@@ -173,7 +185,7 @@ test.describe('/settings — delete account (H2)', () => {
     page.on('request', (req) => {
       if (req.url().includes('/api/account/delete')) deleteCalled = true;
     });
-    await page.goto('/settings');
+    await page.goto('/settings/security');
 
     await page.getByRole('button', { name: /^Delete account$/ }).click();
     await page.getByRole('button', { name: /^Cancel$/ }).click();
