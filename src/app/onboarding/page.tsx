@@ -27,7 +27,14 @@ import {
   setOwnDisplayName,
 } from '@/lib/profile.server';
 import { useHandleAvailability } from '@/hooks/useHandleAvailability';
-import { isSafeReturnPath, setPromptedFlag } from '@/components/OnboardingGate';
+import { setPromptedFlag } from '@/components/OnboardingGate';
+import {
+  AGE_STEP,
+  HOME,
+  hasCompletedSequence,
+  returnDestination as destinationFrom,
+  stepHref,
+} from './_sequence';
 
 const CHARSET_HINT = '3–20 characters: letters, numbers, underscores.';
 
@@ -41,9 +48,8 @@ const CHARSET_HINT = '3–20 characters: letters, numbers, underscores.';
  * boundary for a value used exactly at navigation time.
  */
 function returnDestination(): string {
-  if (typeof window === 'undefined') return '/';
-  const next = new URLSearchParams(window.location.search).get('next');
-  return isSafeReturnPath(next) ? (next as string) : '/';
+  if (typeof window === 'undefined') return HOME;
+  return destinationFrom(window.location.search);
 }
 
 type SubmitStatus =
@@ -77,6 +83,15 @@ export default function OnboardingPage(): JSX.Element {
       if (cancelled || getCacheEpoch() !== epoch) return;
       if (profile !== null && profile.handle !== null) {
         router.replace(returnDestination());
+        return;
+      }
+      // THE DOOR INTO THE SEQUENCE (see ./_sequence). This route is both the
+      // entry point OnboardingGate redirects to and the sequence's last step,
+      // and the marker is what tells those two visits apart. Without this the
+      // age, location and quiz screens are unreachable except by typed URL.
+      // `replace`, not `push`: the door is not a place to come back to.
+      if (!hasCompletedSequence(window.location.search)) {
+        router.replace(stepHref(AGE_STEP, returnDestination()));
         return;
       }
       // Prefill a previously saved name (e.g. an earlier partial attempt).

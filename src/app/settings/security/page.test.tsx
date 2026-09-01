@@ -80,12 +80,34 @@ describe('V8-R-ACC-012 — deletion requires typing DELETE in full', () => {
     const confirm = screen.getByRole('button', { name: /permanently delete/i });
     expect(confirm).toBeDisabled();
 
-    await userEvent.type(screen.getByLabelText(/type/i), 'delet');
+    await userEvent.type(screen.getByLabelText(/type/i), 'DELET');
     expect(confirm).toBeDisabled();
 
-    await userEvent.type(screen.getByLabelText(/type/i), 'e');
+    await userEvent.type(screen.getByLabelText(/type/i), 'E');
     expect(confirm).toBeEnabled();
   });
+
+  /**
+   * The gate is EXACTLY the word the label prints. The previous check was
+   * `trim().toLowerCase()`, so "delete" and " DELETE " both armed an
+   * irreversible, all-or-nothing action the screen said required DELETE.
+   * These are the two inputs that used to pass and must not.
+   */
+  it.each(['delete', 'Delete', ' DELETE ', 'DELETE '])(
+    'refuses %p, which is not the word the label asks for',
+    async (typed) => {
+      render(<SecurityAccountPage />);
+
+      await userEvent.click(
+        screen.getByRole('button', { name: /^Delete account$/i }),
+      );
+      await userEvent.type(screen.getByLabelText(/type/i), typed);
+
+      expect(
+        screen.getByRole('button', { name: /permanently delete/i }),
+      ).toBeDisabled();
+    },
+  );
 
   it('makes Cancel the larger of the two buttons', async () => {
     // "Cancel is the larger, more prominent of the two" is a stated

@@ -30,21 +30,28 @@
  * `/auth`): the hook would force this page under a Suspense boundary for
  * nothing.
  *
- * The under-21 exit writes NOTHING and clears nothing: the sequence keeps
- * every answer in React state until a step has something worth persisting. It
- * deliberately does not clear the existing ack either — that is a device
- * statement made by whoever was at the keyboard before.
+ * The under-21 exit persists no ANSWERS — the sequence keeps those in React
+ * state until a step has something worth storing — but it does CLEAR the
+ * device ack. An earlier version kept the ack on the reasoning that it was a
+ * statement made by whoever was at the keyboard before; that left a device
+ * which confirmed 21+ at the overlay able to answer "under 21" here and then
+ * walk back into the app, since the overlay stays down for an acknowledged
+ * device. The most recent answer is the one that counts, and it is a NO.
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
-import { readAgeAck, writeAgeAck } from '../_ageAck';
+import { clearAgeAck, readAgeAck, writeAgeAck } from '../_ageAck';
+import { LOCATION_STEP, returnDestination, stepHref } from '../_sequence';
 
 /** Where an under-21 visitor is sent: the marketing landing, not the app. */
 const EXIT_PATH = '/install';
 
-const NEXT_STEP = '/onboarding/location';
+/** The next step, carrying the destination the sequence must end on. */
+function nextStep(): string {
+  return stepHref(LOCATION_STEP, returnDestination(window.location.search));
+}
 
 /** The one address the rest of the app already gives people. */
 const SUPPORT_EMAIL = 'hi@next-bar.app';
@@ -104,7 +111,7 @@ export default function OnboardingAgePage(): JSX.Element | null {
 
   const confirm = (): void => {
     writeAgeAck();
-    router.push(NEXT_STEP);
+    router.push(nextStep());
   };
 
   const attemptSignOut = (): void => {
@@ -128,6 +135,13 @@ export default function OnboardingAgePage(): JSX.Element | null {
    */
   const exit = (): void => {
     setView('exited');
+    // WITHDRAW THE DEVICE ACK. Without this, a device that confirmed 21+
+    // earlier — through the global AgeGate overlay on `/` — could answer
+    // "under 21" here and then reach the app anyway, because the overlay stays
+    // down for an acknowledged device. The sign-out is the other half of the
+    // exit and it can fail (see below); this half cannot, so it is what keeps
+    // the answer binding.
+    clearAgeAck();
     // 'loading' counts as "attempt it": the status may not have settled by the
     // time the tap lands, signing out a session that is not there is a no-op,
     // and leaving a real one alive is the failure this branch exists to avoid.
@@ -239,7 +253,7 @@ export default function OnboardingAgePage(): JSX.Element | null {
           </p>
           <button
             type="button"
-            onClick={() => router.push(NEXT_STEP)}
+            onClick={() => router.push(nextStep())}
             className="w-full bg-accent hover:bg-accentDim transition-colors text-bg font-display text-base py-3 rounded-full min-h-[44px] touch-manipulation"
           >
             Continue

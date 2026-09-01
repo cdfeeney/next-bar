@@ -26,6 +26,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { displayTag } from '@/lib/tagDisplay';
 import { loadProfile, saveProfile } from '@/lib/storedProfile';
 import type { VibeProfile, VibeTag } from '@/types';
+import { identityHref, returnDestination } from '../_sequence';
 
 /**
  * Illustrative only — the real questions live in VibeQuiz. These are genuine
@@ -34,25 +35,25 @@ import type { VibeProfile, VibeTag } from '@/types';
  */
 const SAMPLE_TAGS: VibeTag[] = ['dive', 'cocktail', 'live'];
 
-/** The approved Next Bar? home. There is no second home. */
-const HOME = '/';
-
 /**
  * The identity step (display name + @username) is still required of every
  * account and is NOT part of this canvas. A signed-in account that has no
  * handle yet is sent through it on the way home, because otherwise
  * OnboardingGate yanks it off the home it just landed on, one render later.
- * `/onboarding` bounces straight to HOME when the handle already exists, so
- * this costs an onboarded account nothing.
+ * `/onboarding` bounces straight to the destination when the handle already
+ * exists, so this costs an onboarded account nothing.
  *
- * `?next=` names HOME explicitly rather than leaning on `returnDestination()`
- * defaulting to `/`. The destination is stated by the step that owns where the
- * sequence ends, on the same parameter OnboardingGate uses, instead of being
- * an implicit fallback in another file that a future edit could change without
- * touching this one.
+ * The destination is whatever entered the sequence — an invite link's plan for
+ * a brand-new account, the home otherwise — carried on `?next=` through all
+ * four screens. `identityHref` also stamps the sequence marker, without which
+ * `/onboarding` would send this visit straight back to the age step and loop.
+ *
+ * A signed-out visitor has no identity step to take and goes to the
+ * destination directly.
  */
-function completionPath(isSignedIn: boolean): string {
-  return isSignedIn ? `/onboarding?next=${encodeURIComponent(HOME)}` : HOME;
+function completionPath(isSignedIn: boolean, search: string): string {
+  const destination = returnDestination(search);
+  return isSignedIn ? identityHref(destination) : destination;
 }
 
 export default function OnboardingQuizPage(): JSX.Element {
@@ -70,7 +71,9 @@ export default function OnboardingQuizPage(): JSX.Element {
   }, [started]);
 
   const finish = (): void => {
-    router.push(completionPath(auth.status === 'signed-in'));
+    router.push(
+      completionPath(auth.status === 'signed-in', window.location.search),
+    );
   };
 
   const complete = (profile: VibeProfile): void => {

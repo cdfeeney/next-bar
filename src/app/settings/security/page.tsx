@@ -268,13 +268,28 @@ function SignedOutAccount({
 // 'failed' shows an inline error and returns to armed.
 type DeleteState = 'idle' | 'armed' | 'deleting' | 'failed';
 
+/**
+ * The confirmation is EXACT — not trimmed, not case-folded.
+ *
+ * The label tells the user the precise word, and this action is irreversible
+ * and all-or-nothing, so the check has to be the one the screen advertises.
+ * `trim().toLowerCase()` accepted "delete" and " DELETE ", which is a weaker
+ * gate than the sentence above the field claims. The input carries
+ * autoCapitalize="characters" so a phone keyboard helps rather than fights it.
+ */
+const DELETE_CONFIRMATION = 'DELETE';
+
+function isDeleteConfirmed(text: string): boolean {
+  return text === DELETE_CONFIRMATION;
+}
+
 function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
   const [state, setState] = useState<DeleteState>('idle');
   const [confirmText, setConfirmText] = useState('');
 
   const handleDelete = async () => {
     if (state === 'deleting') return;
-    if (confirmText.trim().toLowerCase() !== 'delete') return;
+    if (!isDeleteConfirmed(confirmText)) return;
     setState('deleting');
     const ok = await performAccountDeletion(auth);
     // Nothing was deleted (the route is all-or-nothing) — say so and let the
@@ -351,7 +366,9 @@ function DeleteConfirm({
         type="text"
         inputMode="text"
         autoComplete="off"
-        autoCapitalize="none"
+        // The confirmation is case-sensitive, so the phone keyboard should
+        // offer capitals rather than suppress them.
+        autoCapitalize="characters"
         spellCheck={false}
         // Arming unmounts the trigger button — move focus here so
         // keyboard/screen-reader users aren't dropped to <body>.
@@ -378,9 +395,7 @@ function DeleteConfirm({
       <button
         type="button"
         onClick={onDelete}
-        disabled={
-          confirmText.trim().toLowerCase() !== 'delete' || state === 'deleting'
-        }
+        disabled={!isDeleteConfirmed(confirmText) || state === 'deleting'}
         className="w-full min-h-[44px] rounded-full border border-red-400 text-red-400 font-display text-sm touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed"
       >
         {state === 'deleting' ? 'Deleting…' : 'Permanently delete'}

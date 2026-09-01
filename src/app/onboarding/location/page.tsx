@@ -32,8 +32,12 @@ import { useGeolocation } from '@/hooks/useGeolocation';
 import { deriveArchetype } from '@/lib/quiz';
 import { loadProfile, saveProfile } from '@/lib/storedProfile';
 import type { ManhattanNeighborhood } from '@/types';
+import { QUIZ_STEP, returnDestination, stepHref } from '../_sequence';
 
-const NEXT_STEP = '/onboarding/quiz';
+/** The next step, carrying the destination the sequence must end on. */
+function nextStep(): string {
+  return stepHref(QUIZ_STEP, returnDestination(window.location.search));
+}
 
 /** Show the picker on top of whatever the permission state is. */
 type View = 'auto' | 'picker';
@@ -52,7 +56,7 @@ export default function OnboardingLocationPage(): JSX.Element {
   // browser permission is what persists; nothing is written here.
   useEffect(() => {
     if (state.status === 'granted_precise' || state.status === 'granted_snapped') {
-      router.push(NEXT_STEP);
+      router.push(nextStep());
     }
   }, [state.status, router]);
 
@@ -83,7 +87,7 @@ export default function OnboardingLocationPage(): JSX.Element {
       archetype: prev?.archetype ?? deriveArchetype([]),
       preferredNeighborhoods: [picked],
     });
-    router.push(NEXT_STEP);
+    router.push(nextStep());
   };
 
   if (screen === 'picker') {
@@ -104,7 +108,7 @@ export default function OnboardingLocationPage(): JSX.Element {
           <div className="mt-8 text-center">
             <button
               type="button"
-              onClick={() => router.push(NEXT_STEP)}
+              onClick={() => router.push(nextStep())}
               className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
             >
               Show anywhere
@@ -149,7 +153,7 @@ export default function OnboardingLocationPage(): JSX.Element {
           </button>
           <button
             type="button"
-            onClick={() => router.push(NEXT_STEP)}
+            onClick={() => router.push(nextStep())}
             className="block mx-auto mt-4 text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
           >
             Show anywhere
@@ -204,7 +208,7 @@ export default function OnboardingLocationPage(): JSX.Element {
         </button>
         <button
           type="button"
-          onClick={() => router.push(NEXT_STEP)}
+          onClick={() => router.push(nextStep())}
           className="block mx-auto mt-4 text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
         >
           Not now

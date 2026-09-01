@@ -49,6 +49,7 @@ import OnboardingQuizPage from './page';
 beforeEach(() => {
   pushed.length = 0;
   authStatus = 'signed-out';
+  window.history.replaceState({}, '', '/onboarding/quiz');
 });
 
 describe('the end of the onboarding sequence', () => {
@@ -62,10 +63,15 @@ describe('the end of the onboarding sequence', () => {
     // The identity step is required of every account and is not part of this
     // canvas; what the requirement needs is that the sequence ends on `/`
     // rather than wherever that step happens to default to.
+    //
+    // `seq=done` is the marker that stops `/onboarding` sending this visit
+    // back to the age step — the door and the last step are the same route.
     authStatus = 'signed-in';
     render(<OnboardingQuizPage />);
     await userEvent.click(screen.getByRole('button', { name: /show me bars/i }));
-    expect(pushed).toEqual([`/onboarding?next=${encodeURIComponent('/')}`]);
+    expect(pushed).toEqual([
+      `/onboarding?next=${encodeURIComponent('/')}&seq=done`,
+    ]);
   });
 
   test('COMPLETING the quiz ends in the same place as skipping it', async () => {
@@ -76,8 +82,41 @@ describe('the end of the onboarding sequence', () => {
       await screen.findByRole('button', { name: /finish the quiz/i }),
     );
     await waitFor(() =>
-      expect(pushed).toEqual([`/onboarding?next=${encodeURIComponent('/')}`]),
+      expect(pushed).toEqual([
+        `/onboarding?next=${encodeURIComponent('/')}&seq=done`,
+      ]),
     );
+  });
+
+  /**
+   * The destination an invite-link signup entered on has to survive all four
+   * screens. OnboardingGate records it as `?next=`; if the sequence dropped it,
+   * a brand-new account would land on the home instead of the plan it was
+   * invited to — the regression this carry-through exists to prevent.
+   */
+  test('carries an invite destination through to the identity step', async () => {
+    authStatus = 'signed-in';
+    window.history.replaceState(
+      {},
+      '',
+      `/onboarding/quiz?next=${encodeURIComponent('/plan/abc')}`,
+    );
+    render(<OnboardingQuizPage />);
+    await userEvent.click(screen.getByRole('button', { name: /show me bars/i }));
+    expect(pushed).toEqual([
+      `/onboarding?next=${encodeURIComponent('/plan/abc')}&seq=done`,
+    ]);
+  });
+
+  test('a signed-out visitor goes to that destination directly', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/onboarding/quiz?next=${encodeURIComponent('/plan/abc')}`,
+    );
+    render(<OnboardingQuizPage />);
+    await userEvent.click(screen.getByRole('button', { name: /show me bars/i }));
+    expect(pushed).toEqual(['/plan/abc']);
   });
 
   test('starting the quiz moves focus off the button it unmounted', async () => {

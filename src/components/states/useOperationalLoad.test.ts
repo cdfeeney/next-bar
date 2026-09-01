@@ -93,6 +93,46 @@ describe('saved data is never blanked', () => {
   });
 });
 
+/**
+ * V8-R-OPS-007: stale content "refreshes in the background on reconnect".
+ * Without the listener the silent budget is spent while the network is down
+ * and the degraded card then sits there after connectivity returns, waiting
+ * for a tap the user has no reason to know is needed.
+ */
+describe('reconnect', () => {
+  it('re-attempts on the browser online event once the silent budget is spent', async () => {
+    let online = false;
+    const load = vi.fn(async () => (online ? 'fresh' : null));
+    const { result } = renderHook(() => useOperationalLoad(load));
+
+    await waitFor(() => expect(result.current.needsManualRetry).toBe(true));
+    const spentAttempts = load.mock.calls.length;
+
+    online = true;
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+
+    await waitFor(() => expect(result.current.value).toBe('fresh'));
+    expect(result.current.state).toBeNull();
+    expect(load.mock.calls.length).toBeGreaterThan(spentAttempts);
+  });
+
+  it('does not re-fetch a healthy surface on a passing network blip', async () => {
+    const load = vi.fn(async () => 'loaded');
+    const { result } = renderHook(() => useOperationalLoad(load));
+
+    await waitFor(() => expect(result.current.state).toBeNull());
+    expect(load).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      window.dispatchEvent(new Event('online'));
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('a load that works', () => {
   it('reports no operational state at all', async () => {
     const load = vi.fn(async () => ['a', 'b']);

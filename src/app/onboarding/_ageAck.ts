@@ -44,3 +44,24 @@ export function writeAgeAck(): void {
     // Non-fatal: nothing here is account data.
   }
 }
+
+/**
+ * Withdraw the confirmation.
+ *
+ * Called when someone answers "I'm under 21". Leaving the ack in place is what
+ * let a device that had confirmed 21+ earlier — through the global AgeGate
+ * overlay on `/` — declare itself under 21 here and then walk straight back
+ * into the app, because the overlay reads this key and stays down for an
+ * acknowledged device. The most recent answer from the person at the keyboard
+ * is the one that counts, and it is a NO.
+ *
+ * A storage failure fails toward asking: `readAgeAck` already treats an
+ * unreadable store as unacknowledged.
+ */
+export function clearAgeAck(): void {
+  try {
+    window.localStorage.removeItem(AGE_ACK_KEY);
+  } catch {
+    // Non-fatal: an unreadable store already reads as NOT acknowledged.
+  }
+}

@@ -128,6 +128,23 @@ describe('Badges and Persona are deferred to V9', () => {
 const PERSISTENCE_CLAIM =
   /archive|history|past night|previous night|all your nights|every night/i;
 
+/**
+ * V8-R-ACC-002 — the Account root is where the saved archive is reached from.
+ * `/nights` (owner-only, `get_saved_nights`) ships in this candidate's base and
+ * each of its cards opens an archived recap; before this link the Account root
+ * was the one surface that could not reach it.
+ */
+describe('Saved Nights Out is reachable from the Account root', () => {
+  it('links to the saved-nights archive', () => {
+    profile = { handle: 'connor_f', displayName: 'Connor Feeney' };
+    render(<AccountPage />);
+
+    expect(
+      screen.getByRole('link', { name: /saved nights out/i }).getAttribute('href'),
+    ).toBe('/nights');
+  });
+});
+
 describe('Nights Out copy claims no persistent history', () => {
   it('the empty state offers tonight only, and promises no archive', () => {
     profile = { handle: 'connor_f', displayName: 'Connor Feeney' };

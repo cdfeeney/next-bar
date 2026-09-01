@@ -26,6 +26,7 @@ let authStatus: 'signed-in' | 'signed-out' | 'unavailable' | 'loading' =
   'signed-in';
 let signOut: () => Promise<void> = async () => {};
 let acked = false;
+let ackCleared = 0;
 
 // One STABLE router object, the way next/navigation's really behaves: the
 // page's mount effect depends on it, so handing back a fresh object per render
@@ -51,6 +52,9 @@ vi.mock('../_ageAck', () => ({
   AGE_ACK_KEY: 'next-bar:age-ack:v1',
   readAgeAck: () => acked,
   writeAgeAck: vi.fn(),
+  clearAgeAck: () => {
+    ackCleared += 1;
+  },
 }));
 
 import OnboardingAgePage from './page';
@@ -72,6 +76,7 @@ beforeEach(() => {
   authStatus = 'signed-in';
   signOut = async () => {};
   acked = false;
+  ackCleared = 0;
   window.history.replaceState({}, '', '/onboarding/age');
 });
 
@@ -209,5 +214,40 @@ describe('the under-21 exit', () => {
     await takeTheExit();
     expect(replaced).toEqual([]);
     expect(pushed).toEqual([]);
+  });
+
+  /**
+   * The device ack is WITHDRAWN by the exit.
+   *
+   * The gap this closes: the global AgeGate overlay on `/` writes the same
+   * key and stays down for an acknowledged device. A device that confirmed
+   * 21+ there, then answered "under 21" here, kept its ack and could reach the
+   * app again — and the sign-out cannot be relied on to stop it, because
+   * `useAuth().signOut()` returns `Promise<void>` and swallows the provider
+   * error. Clearing the ack is the half of the exit that cannot fail.
+   */
+  test('withdraws the device 21+ acknowledgement', async () => {
+    await takeTheExit();
+    expect(ackCleared).toBe(1);
+  });
+
+  test('withdraws it on the deep-linked exit too', async () => {
+    // The overlay hands its answer here via ?under21=1, and that path must not
+    // be the one that leaves the ack standing.
+    window.history.replaceState({}, '', '/onboarding/age?under21=1');
+    render(<OnboardingAgePage />);
+    await screen.findByRole('heading', { name: /next bar is for ages 21\+/i });
+    expect(ackCleared).toBe(1);
+  });
+
+  test('withdraws it even when the sign-out fails', async () => {
+    signOut = async () => {
+      throw new Error('network');
+    };
+    await takeTheExit();
+    await waitFor(() =>
+      expect(screen.getByText(/still signed in on this device/i)).toBeTruthy(),
+    );
+    expect(ackCleared).toBe(1);
   });
 });

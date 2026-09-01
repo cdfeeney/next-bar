@@ -68,6 +68,10 @@ export function useOperationalLoad<T>(
   // ATTEMPT instead, which is the thing that actually means "load again".
   const loader = useRef(load);
   loader.current = load;
+  // Mirrors `failures` for the reconnect listener, which is bound once and so
+  // cannot close over the state value.
+  const failuresNow = useRef(failures);
+  failuresNow.current = failures;
 
   useEffect(() => {
     let cancelled = false;
@@ -106,6 +110,31 @@ export function useOperationalLoad<T>(
   const retry = useCallback(() => {
     setFailures(0);
     setAttempt((n) => n + 1);
+  }, []);
+
+  /**
+   * V8-R-OPS-007's other half: stale content "refreshes in the background on
+   * reconnect". Without this the silent budget is spent while the network is
+   * down and the degraded card then sits there after connectivity returns,
+   * waiting for a tap the user has no reason to know is needed.
+   *
+   * It fires only when something has actually failed, so a healthy surface is
+   * never re-fetched by a passing network blip, and it performs exactly the
+   * `retry` transition rather than a second, subtly different one.
+   */
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const onReconnect = (): void => {
+      // `failuresNow` rather than a `setFailures` updater that also schedules
+      // work: React double-invokes updaters in development, and one that bumps
+      // `attempt` would burn two loads for one reconnect — the same trap the
+      // silent-budget effect above is written to avoid.
+      if (failuresNow.current === 0) return;
+      setFailures(0);
+      setAttempt((n) => n + 1);
+    };
+    window.addEventListener('online', onReconnect);
+    return () => window.removeEventListener('online', onReconnect);
   }, []);
 
   const needsManualRetry = failures > 0 && !shouldAutoRetry(failures - 1);

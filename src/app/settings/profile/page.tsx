@@ -6,7 +6,7 @@ import DisplayNameEditor from '@/components/DisplayNameEditor';
 import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
 import { clearProfile, loadProfile } from '@/lib/storedProfile';
-import { Group, LinkRow, SlotRow, StackHeader } from '../_ui';
+import { Group, LinkRow, SlotRow, StackHeader, StatusRow } from '../_ui';
 import { useOwnProfile } from '../_useOwnProfile';
 
 // Dismissal flag for the claim-your-username nudge. UI preference only —
@@ -17,7 +17,21 @@ const HANDLE_NUDGE_DISMISSED_KEY = 'next-bar:handle-nudge-dismissed:v1';
 /**
  * Edit profile (approved/next-bar-account-a-settings.png, screen 3).
  *
- * V8-R-ACC-006: only display name and @username are hand-editable.
+ * V8-R-ACC-006, quoted in full: "Only photo, display name and @username are
+ * hand-editable." Two of those three are editable here. The THIRD is not, and
+ * the row below says so rather than the comment quietly dropping the clause —
+ * an earlier version of this header paraphrased the requirement as "only
+ * display name and @username", which hid the gap from the next reader.
+ *
+ * WHY PHOTO IS A STATUS ROW, not a control. There is no photo or avatar column
+ * on `profiles` anywhere in `supabase/migrations`, no storage bucket for one,
+ * and this lane mints no migration. Every avatar in the app is generated from
+ * a seed (`src/components/Avatar.tsx`). An upload control with nowhere to
+ * persist would be a fallback presented as a success, which V8-R-OPS-001
+ * forbids outright — the same reason ACC-007, ACC-008 and ACC-010 are stated
+ * rather than offered. It becomes a control in the change that adds its
+ * storage, not before.
+ *
  * V8-R-ACC-004: the vibe profile is quiz-derived — this screen links out to
  * the quiz rather than offering a text field that would let someone contradict
  * their own answers.
@@ -36,6 +50,14 @@ export default function EditProfilePage(): JSX.Element {
       <div className="max-w-md mx-auto px-4 py-5 space-y-6 pb-[max(2rem,env(safe-area-inset-bottom))]">
         {auth.status === 'signed-in' ? (
           <>
+            <Group label="Photo">
+              <StatusRow
+                label="Profile photo"
+                value="Not on this build"
+                description="Next Bar doesn't store profile photos yet — your avatar is generated from your username. Uploading arrives with the storage that keeps it."
+              />
+            </Group>
+
             <Group label="Display name">
               <SlotRow>
                 {profile.known ? (

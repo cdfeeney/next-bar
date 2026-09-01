@@ -95,6 +95,7 @@ export default function AccountPage(): JSX.Element {
             Nights Out
           </h2>
           <NightsPanel nights={nights} />
+          <SavedNightsLink />
         </section>
       </div>
     </main>
@@ -181,6 +182,35 @@ function CountStat({
         {label}
       </dt>
     </div>
+  );
+}
+
+/**
+ * The way into the saved archive (V8-R-ACC-002).
+ *
+ * `NightsPanel` above is the DEVICE's current-or-previous night, composed from
+ * localStorage — it is tonight's route, not a history, which is why its cards
+ * are not tappable and its copy promises no archive.
+ *
+ * The durable archive is a different surface and it exists in this candidate's
+ * base: `/nights` reads `get_saved_nights` (owner-only, filtered on auth.uid()
+ * in the function body) and each card opens that night's archived recap at
+ * `/nights/[id]`. Without this row the Account root was the one place the
+ * archive could not be reached from, which is exactly where the requirement
+ * puts its entry point. `/nights` owns its own loading, signed-out, empty and
+ * failed states, so this is a link and nothing more.
+ */
+function SavedNightsLink(): JSX.Element {
+  return (
+    <Link
+      href="/nights"
+      className="w-full flex items-center gap-3 px-4 min-h-[48px] py-3 bg-surface border border-border rounded-2xl touch-manipulation"
+    >
+      <span className="text-sm flex-1 min-w-0">Saved nights out</span>
+      <span aria-hidden="true" className="text-muted shrink-0">
+        →
+      </span>
+    </Link>
   );
 }
 
