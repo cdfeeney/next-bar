@@ -1069,16 +1069,31 @@ begin
             -- every application role, which is fine here — this function is
             -- SECURITY DEFINER too, and 0068 calls it exactly this way.
             --
-            -- LIVENESS ONLY, NOT VISIBILITY. Whether THIS caller is a member of
-            -- that Night Out is still 0068's question, not this file's, and the
-            -- residual above still stands the veto down for a night that is
-            -- genuinely open. This clause only stops a CLOSED one from counting.
+            -- AND MEMBERSHIP, NOT LIVENESS ALONE. ROUND-3 PANEL, CODEX, MEDIUM.
+            -- This clause first carried only the window check, on the stated
+            -- ground that "whether THIS caller is a member is 0068's question,
+            -- not this file's". That ground was wrong in the same way the
+            -- 'group' one was: the question is not unanswerable here, and 0068
+            -- answers it in this very function with `night_out_role(n.id) is not
+            -- null`, one line above its own window check. `night_out_role`
+            -- returns a role only for an ACCEPTED member, so a member who
+            -- DECLINED after the photo was attached reads null.
+            --
+            -- Without this term, that declined member's own upload stayed
+            -- signable after they reported their own Feed post standing on the
+            -- same bytes: the night was still open, so the destination counted,
+            -- so the veto never ran — while 0068's night_out branch had already
+            -- refused them and fallen through to the owner-prefix grant. A
+            -- destination the caller has been shut out of is not "somewhere the
+            -- photo still lives" for them, which is the only thing this term is
+            -- asking. Both halves of 0068's own pair, therefore, in 0068's order.
             and (
               d.kind <> 'night_out'
               or exists (
                 select 1
                   from public.night_outs n2
                  where n2.id::text = d.ref_id
+                   and public.night_out_role(n2.id) is not null
                    and public.night_out_media_window_open(n2.id)
               )
             )

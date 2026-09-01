@@ -591,6 +591,20 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
     );
   });
 
+  it('a night_out the caller has been shut out of does not count either', () => {
+    // Round-3 panel (MEDIUM, codex): the window check alone was not enough. A
+    // member who DECLINED after their photo was attached reads null from
+    // night_out_role, so 0068's own night_out branch refuses them and falls
+    // through to the owner-prefix grant — while the night was still OPEN, so the
+    // destination counted here and the veto never ran. Their self-reported Feed
+    // photo went on signing. Asserted as the whole pair, in 0068's order, so
+    // dropping either half is red.
+    expect(sqlShape(body)).toContain(
+      'and public.night_out_role(n2.id) is not null'
+      + ' and public.night_out_media_window_open(n2.id)',
+    );
+  });
+
   it('an EXPIRED night_out destination does not count as live either', () => {
     // Round-2 panel (HIGH, codex): the same passive-expiry defect the story
     // clause above fixes, a second time for a second kind. 0068 mints a
@@ -603,6 +617,7 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
       "and ( d.kind <> 'night_out'"
       + ' or exists ( select 1 from public.night_outs n2'
       + ' where n2.id::text = d.ref_id'
+      + ' and public.night_out_role(n2.id) is not null'
       + ' and public.night_out_media_window_open(n2.id) ) )',
     );
   });
