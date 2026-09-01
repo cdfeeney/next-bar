@@ -144,15 +144,22 @@ describe('0069 — a block is judged between the READER and the COMMENTER', () =
   // The post gate compares the caller with the post's AUTHOR. A comment adds a
   // third party, so without a second term A could read C's comment on P's post
   // after A blocked C: no predicate on that path ever compared A with C.
+  // ROUND-2 PANEL, CLAUDE/FABLE, MEDIUM: both cases below read the RAW,
+  // comment-inclusive text, so prefixing the guard with `--` in 0076 left them
+  // green while the policy was created without it — the same comment-satisfiable
+  // class this file already closed everywhere else with CODE and sqlShape, and
+  // `feed_comments` was the one policy of the five with no stripped pin. The
+  // read policy is the actual enforcement path, so a green suite would have
+  // certified a schema where A reads C's comment after blocking C.
   it('the feed_comments read policy compares the caller with the comment author', () => {
-    const policy = policyBody('feed_comments: post audience reads');
+    const policy = sqlShape(policyBody('feed_comments: post audience reads'));
     expect(policy).toMatch(
       /not public\.is_blocked_between\(\s*auth\.uid\(\),\s*public\.feed_comments\.author_id\s*\)/,
     );
   });
 
   it('can_view_feed_comment carries the same term, so the report path agrees with the read path', () => {
-    const body = functionBody('public.can_view_feed_comment(p_comment_id uuid)');
+    const body = sqlShape(functionBody('public.can_view_feed_comment(p_comment_id uuid)'));
     expect(body).toMatch(/not public\.is_blocked_between\(\s*auth\.uid\(\),\s*c\.author_id\s*\)/);
   });
 
@@ -581,6 +588,48 @@ describe('0069 — a self-reported Feed photo stops signing', () => {
       + ' where s2.id::text = d.ref_id'
       + ' and s2.deleted_at is null'
       + ' and s2.expires_at > now() ) )',
+    );
+  });
+
+  it('an EXPIRED night_out destination does not count as live either', () => {
+    // Round-2 panel (HIGH, codex): the same passive-expiry defect the story
+    // clause above fixes, a second time for a second kind. 0068 mints a
+    // kind='night_out' spine row and never stamps removed_at when the 24-hour
+    // window closes — its own media_read_window reads the clock instead — so an
+    // expired night stood the veto down forever and a self-reported post went on
+    // signing. 0068's own half-open predicate is called rather than re-spelled:
+    // a hand-rolled `now() < expires_at` drops its not-yet-opened half.
+    expect(sqlShape(body)).toContain(
+      "and ( d.kind <> 'night_out'"
+      + ' or exists ( select 1 from public.night_outs n2'
+      + ' where n2.id::text = d.ref_id'
+      + ' and public.night_out_media_window_open(n2.id) ) )',
+    );
+  });
+
+  it("the caller's own Saved Nights archive stands the veto down", () => {
+    // Round-2 panel (MEDIUM, codex), and the one finding in the OVER-hiding
+    // direction. The veto turns on "readable with a null expiry" because 0066
+    // returns that shape only for the upload-before-publish window; 0068 added a
+    // second source of it, granting `(true, null)` to the owner of a live Saved
+    // Nights archive under V8-R-NO-009's indefinite retention — for any archive
+    // owner, not just the media's owner. Without this term a participant who
+    // saved a photo and later reported a Feed post standing on the same bytes
+    // got a 404 on their own archive.
+    //
+    // CALLER-SCOPED, and it has to stay that way: 'archive' remains excluded
+    // from the generic destination term because someone ELSE's retention hold is
+    // not a surface this caller can see, and counting it there would stand the
+    // veto down wrongly. `sn.owner_id = v_caller` is the whole difference.
+    expect(sqlShape(body)).toContain(
+      'and not exists ( select 1 from public.media_destinations d'
+      + ' join public.media_objects m on m.id = d.media_id'
+      + ' join public.saved_nights sn on sn.id::text = d.ref_id'
+      + " where d.kind = 'archive'"
+      + ' and d.removed_at is null'
+      + ' and m.storage_path = p_name'
+      + ' and m.bytes_removed_at is null'
+      + ' and sn.owner_id = v_caller )',
     );
   });
 

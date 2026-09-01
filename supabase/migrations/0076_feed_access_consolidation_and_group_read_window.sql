@@ -1033,12 +1033,16 @@ begin
             -- blind, is how the veto lost the promise it states.
             and d.kind not in ('feed', 'archive', 'group')
             and d.removed_at is null
-            -- 0066's own liveness rule, copied rather than re-derived: a story
-            -- destination row is never retired, so `removed_at is null` alone
-            -- counts an expired story as somewhere the photo still lives.
-            -- 0066's own liveness rule, copied rather than re-derived: a story
-            -- destination row is never retired, so `removed_at is null` alone
-            -- counts an expired story as somewhere the photo still lives.
+            -- PASSIVE EXPIRY, ONE CLAUSE PER KIND THAT HAS IT. `removed_at is
+            -- null` is not liveness for any destination whose kind expresses
+            -- expiry through a clock instead of stamping the spine row, and the
+            -- generic term counts every such long-dead row as somewhere the
+            -- photo still lives — which stands the veto down and lets a reported
+            -- post go on signing.
+            --
+            -- 'story' (0066): a story destination row is never retired, so the
+            -- rule is copied from `media_live_reference_count` rather than
+            -- re-derived, which is what three earlier attempts did wrong.
             and (
               d.kind <> 'story'
               or exists (
@@ -1049,12 +1053,76 @@ begin
                    and s2.expires_at > now()
               )
             )
+            -- 'night_out' (0068): THE SAME DEFECT, A SECOND TIME, FOUND ON THE
+            -- ROUND-2 PANEL. 0068 mints a kind='night_out' spine row and never
+            -- stamps `removed_at` when the 24-hour window closes — its own
+            -- `media_read_window` branch reads the clock instead, gating on
+            -- `night_out_media_window_open(n.id)`. So an expired Night Out row
+            -- sits live forever and, without this clause, an author who reported
+            -- their own Feed post kept minting signed URLs for the reported bytes
+            -- through a night that ended weeks ago.
+            --
+            -- 0068's own predicate is called rather than re-spelled, for the same
+            -- reason the story clause copies 0066's: it is a half-open interval
+            -- with a not-yet-opened half, and a hand-rolled `now() < expires_at`
+            -- would silently drop that. It is SECURITY DEFINER and revoked from
+            -- every application role, which is fine here — this function is
+            -- SECURITY DEFINER too, and 0068 calls it exactly this way.
+            --
+            -- LIVENESS ONLY, NOT VISIBILITY. Whether THIS caller is a member of
+            -- that Night Out is still 0068's question, not this file's, and the
+            -- residual above still stands the veto down for a night that is
+            -- genuinely open. This clause only stops a CLOSED one from counting.
+            and (
+              d.kind <> 'night_out'
+              or exists (
+                select 1
+                  from public.night_outs n2
+                 where n2.id::text = d.ref_id
+                   and public.night_out_media_window_open(n2.id)
+              )
+            )
+       )
+       -- AND THE CALLER'S OWN SAVED NIGHTS ARCHIVE STANDS THE VETO DOWN.
+       -- ROUND-2 PANEL, CODEX, MEDIUM. The discriminator this veto turns on —
+       -- "readable, with a null expiry" — was chosen because 0066 returns that
+       -- shape for exactly one thing: the owner's upload-before-publish window.
+       -- 0068 added a SECOND source of it. Its first branch returns
+       -- `(true, null)` to the owner of a live Saved Nights archive, because
+       -- V8-R-NO-009 makes that retention indefinite, and it does so for ANY
+       -- archive owner rather than only the media's owner. Read through the
+       -- discriminator alone, that grant looks identical to an upload window.
+       --
+       -- So: a participant who saved a photo into their own Saved Nights, whose
+       -- Night Out destination has since been removed, and who then reports a
+       -- live Feed post standing on the same bytes, had their own archive
+       -- blanked — a 404 on a photo 0068 promises them indefinitely. That is the
+       -- veto reaching onto a surface it does not own, in the over-hiding
+       -- direction.
+       --
+       -- The generic term above cannot carry this, and 'archive' must stay
+       -- excluded from it: an archive hold belonging to SOMEONE ELSE is exactly
+       -- what 0066 calls "a retention HOLD, not a destination a user can see or
+       -- remove", and counting it would stand the veto down for a surface this
+       -- caller genuinely cannot see. The term is therefore CALLER-SCOPED, and it
+       -- is 0068's own archive branch copied predicate for predicate.
+       and not exists (
+         select 1
+           from public.media_destinations d
+           join public.media_objects m on m.id = d.media_id
+           join public.saved_nights sn on sn.id::text = d.ref_id
+          where d.kind = 'archive'
+            and d.removed_at is null
+            and m.storage_path = p_name
+            and m.bytes_removed_at is null
+            and sn.owner_id = v_caller
        )
        -- A GROUP MESSAGE THIS CALLER CAN SEE IS NOT A DESTINATION THIS VETO OWNS.
-       -- The destination term above stands the veto down for a live `group` row in
-       -- `media_destinations`, but a group message references the media registry
-       -- directly and need not have minted a destination row at all. Asking the
-       -- group answer itself is the term that cannot be walked around, and it keeps
+       -- This is the ONLY term that decides the group case: 'group' is excluded
+       -- from the generic destination term above precisely so that this one is
+       -- reachable. It is also the only one that could decide it, because a group
+       -- message references the media registry directly and need not have minted a
+       -- destination row at all. Asking the group answer itself keeps
        -- the veto's stated promise: it may blank the owner's own upload window over
        -- a post they reported, never a surface they can still legitimately see.
        and not v_group_readable
