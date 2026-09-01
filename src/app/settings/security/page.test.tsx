@@ -68,8 +68,10 @@ beforeEach(() => {
   seenAfterUnknown.length = 0;
   // The uncertainty latch is now STORED, so it outlives a test that does not
   // clear it — which is the whole point of the change, and exactly why the
-  // suite has to reset it between cases.
+  // suite has to reset it between cases. Both stores: the latch falls back to
+  // sessionStorage when localStorage refuses.
   window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 const dangerZone = (): HTMLElement =>
@@ -308,6 +310,67 @@ describe('V8-R-ACC-012 — the deletion result says only what is known', () => {
 
     await waitFor(() => expect(seenAfterUnknown).toEqual([true]));
     expect(screen.queryByText(/nothing was removed/i)).toBeNull();
+  });
+
+  it('falls back to sessionStorage when localStorage refuses the write', async () => {
+    // The latch was back to mount-scoped whenever localStorage threw — a full
+    // or blocked store — and the unknown message tells the user to RELOAD,
+    // which is exactly what a mount-scoped fact does not survive.
+    // sessionStorage has its own quota and survives that reload.
+    //
+    // The patch is an OWN property on the localStorage instance and is
+    // DELETED afterwards, not reassigned: leaving an own `setItem` behind
+    // shadows `Storage.prototype`, which is how the next test patches both
+    // stores at once — and a restore that quietly disarms a later test is
+    // worse than no restore at all.
+    Object.defineProperty(window.localStorage, 'setItem', {
+      configurable: true,
+      value: () => {
+        throw new DOMException('QuotaExceededError');
+      },
+    });
+    try {
+      deletionOutcome = 'unknown';
+      await armAndDelete();
+      await waitFor(() => expect(seenAfterUnknown).toEqual([false]));
+
+      expect(
+        window.sessionStorage.getItem('next-bar:account:deletion-uncertain:v1'),
+      ).toBe('me');
+      // And the screen does NOT claim it could not remember, because it could.
+      expect(screen.queryByText(/wouldn.t let us remember/i)).toBeNull();
+    } finally {
+      delete (window.localStorage as unknown as Record<string, unknown>).setItem;
+      window.sessionStorage.clear();
+    }
+  });
+
+  it('says plainly when NO store would keep the uncertainty', async () => {
+    // Both stores refusing is the one case nothing on the client can survive a
+    // reload. The screen's own advice outlives the record, so it must not let
+    // the next visit sound certain — it says the record was not kept.
+    // Patched on the PROTOTYPE, which both stores share, so neither can take
+    // the write. This only bites because the test above deletes its own-property
+    // patch rather than reassigning it.
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = () => {
+      throw new DOMException('QuotaExceededError');
+    };
+    try {
+      deletionOutcome = 'unknown';
+      await armAndDelete();
+
+      await waitFor(() =>
+        expect(screen.getByText(/wouldn.t let us remember/i)).toBeTruthy(),
+      );
+      // The primary honest sentence is still there; this only adds to it.
+      expect(
+        screen.getByText(/couldn.t confirm whether your account was deleted/i),
+      ).toBeTruthy();
+      expect(screen.queryByText(/nothing was removed/i)).toBeNull();
+    } finally {
+      Storage.prototype.setItem = original;
+    }
   });
 
   it('does not make a DIFFERENT account cautious — the latch names its user', async () => {

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import InstallPrompt from '@/components/InstallPrompt';
+import { OperationalState } from '@/components/states/OperationalState';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollowRequests } from '@/hooks/useFollowRequests';
 import { useFollows } from '@/hooks/useFollows';
@@ -183,27 +184,38 @@ function ConnectionsGroup({
   signedIn: boolean;
 }): JSX.Element {
   const [blockedCount, setBlockedCount] = useState<number | null>(null);
+  /**
+   * The read did not work. Distinct from "not signed in" and from "still
+   * loading", because only this one owes the user an explanation.
+   *
+   * The em dash alone was the defect: it said the count is unknown and left it
+   * there forever, with nothing naming the failure and nothing to tap. Not
+   * printing 0 was right — "you have blocked nobody" is a claim a broken
+   * lookup is no evidence for — but an unexplained dash is a dead end of the
+   * same family V8-R-OPS-007 forbids.
+   */
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!signedIn) {
       setBlockedCount(null);
+      setFailed(false);
       return;
     }
     let cancelled = false;
     const epoch = getCacheEpoch();
     void listBlockedProfiles(getBrowserSupabase()).then((result) => {
       if (cancelled || getCacheEpoch() !== epoch) return;
-      // A failed read leaves the count unknown rather than printing 0 — "you
-      // have blocked nobody" is a claim, and a broken lookup is not evidence
-      // for it (V8-R-OPS-001: never present a fallback as a success).
       setBlockedCount(result.ok ? result.value.length : null);
+      setFailed(!result.ok);
     });
     return () => {
       cancelled = true;
     };
-  }, [signedIn]);
+  }, [signedIn, attempt]);
 
-  return (
+  const rows = (
     <Group label="Connections">
       <LinkRow
         href="/friends"
@@ -216,6 +228,19 @@ function ConnectionsGroup({
         value={blockedCount === null ? '—' : `${blockedCount}`}
       />
     </Group>
+  );
+
+  if (!failed) return rows;
+  // The rows stay — the Friends count is still true, and the destination is
+  // still reachable. Only the failed READ is reported, with one recovery.
+  return (
+    <OperationalState
+      kind="failed"
+      message="We couldn't load your blocked list, so that count is missing."
+      recovery={{ label: 'Retry', onAction: () => setAttempt((n) => n + 1) }}
+    >
+      {rows}
+    </OperationalState>
   );
 }
 
@@ -240,6 +265,17 @@ function PrivacyGroup({
   userId: string | null;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
+  /**
+   * The last write was rejected by the server.
+   *
+   * The revert alone was the defect: the switch flipped back on its own and
+   * said nothing, so the only signal that a SETTING DID NOT SAVE was a control
+   * moving by itself — which reads as a UI glitch, not as a refusal, and
+   * leaves the user believing whichever position they last saw. A silent
+   * revert is a fallback presented as a success, which V8-R-OPS-001 forbids by
+   * name.
+   */
+  const [saveFailed, setSaveFailed] = useState(false);
 
   const handleToggle = useCallback(async () => {
     if (busy || userId === null || profile.isPrivate === null) return;
@@ -252,10 +288,14 @@ function PrivacyGroup({
     const epoch = getCacheEpoch();
     profile.setIsPrivate(next);
     setBusy(true);
+    setSaveFailed(false);
     const ok = await setOwnPrivacy(supabase, userId, next);
     if (getCacheEpoch() !== epoch) return;
     setBusy(false);
-    if (!ok) profile.setIsPrivate(!next);
+    if (!ok) {
+      profile.setIsPrivate(!next);
+      setSaveFailed(true);
+    }
   }, [busy, profile, userId]);
 
   const canTogglePrivacy =
@@ -278,6 +318,26 @@ function PrivacyGroup({
           busy={busy}
           onChange={() => void handleToggle()}
         />
+      ) : null}
+      {/* The switch has already flipped back by the time this renders. Say
+          WHY, so the revert reads as the server's refusal it is rather than a
+          glitch — and offer the same action again, which is the one recovery
+          there is. */}
+      {saveFailed ? (
+        <SlotRow>
+          <p className="text-red-400 text-xs leading-relaxed" role="status">
+            We couldn&apos;t save that change, so your account is still{' '}
+            {profile.isPrivate ? 'private' : 'public'}.
+          </p>
+          <button
+            type="button"
+            onClick={() => void handleToggle()}
+            disabled={busy}
+            className="w-full min-h-[44px] rounded-full bg-surface border border-border text-text font-display text-sm touch-manipulation disabled:opacity-40"
+          >
+            Try again
+          </button>
+        </SlotRow>
       ) : null}
       <StatusRow
         label="Default story audience"

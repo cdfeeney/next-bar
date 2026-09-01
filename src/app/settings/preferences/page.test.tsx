@@ -1,4 +1,5 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -42,7 +43,12 @@ vi.mock('@/lib/demo', () => ({
 }));
 vi.mock('@/lib/storedProfile', () => ({ loadProfile: () => null }));
 vi.mock('@/lib/supabase/client', () => ({ getBrowserSupabase: () => ({}) }));
-vi.mock('@/lib/profile.server', () => ({ setOwnPrivacy: vi.fn(async () => true) }));
+/** Mutable so the REJECTED write — the branch where the switch flips back on
+ *  its own — is rendered by a test rather than only by users. */
+let privacySaveOk = true;
+vi.mock('@/lib/profile.server', () => ({
+  setOwnPrivacy: vi.fn(async () => privacySaveOk),
+}));
 vi.mock('@/lib/accountCache', () => ({ getCacheEpoch: () => 1 }));
 vi.mock('@/lib/moderation/blocks', () => ({
   listBlockedProfiles: async () => blocked,
@@ -67,6 +73,7 @@ import SettingsHomePage from './page';
 beforeEach(() => {
   authStatus = 'signed-in';
   blocked = { ok: true, value: ['a', 'b'] };
+  privacySaveOk = true;
 });
 
 const section = (name: string): HTMLElement =>
@@ -140,6 +147,35 @@ describe('V8-R-ACC-009 — Connections carries both rows, with their counts', ()
     expect(within(connections).queryByText('0')).toBeNull();
   });
 
+  it('NAMES the failed read and offers a retry, instead of an unexplained dash', async () => {
+    // Not printing 0 was right and not enough: the dash said the count is
+    // unknown and left it there forever, with nothing naming the failure and
+    // nothing to tap — the dead end V8-R-OPS-007 forbids, reached through a
+    // row rather than a screen.
+    blocked = { ok: false };
+    render(<SettingsHomePage />);
+
+    const state = await screen.findByTestId('operational-state');
+    expect(state.getAttribute('data-state')).toBe('failed');
+    expect(screen.getByText(/couldn't load your blocked list/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+
+    // The rows are RETAINED: the friend count is still true and the
+    // destination is still reachable. Only the failed read is reported.
+    expect(
+      within(section('Connections')).getByText('Blocked & muted'),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing about a failure when the blocked read works', async () => {
+    render(<SettingsHomePage />);
+
+    await waitFor(() =>
+      expect(within(section('Connections')).getByText('2')).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId('operational-state')).toBeNull();
+  });
+
   it('puts Blocked & muted under Connections, not under Privacy & sharing', () => {
     render(<SettingsHomePage />);
 
@@ -189,5 +225,47 @@ describe('V8-R-ACC-010 — the three notification categories', () => {
     const notifications = section('Notifications');
     expect(within(notifications).getAllByText('Not delivered yet')).toHaveLength(3);
     expect(within(notifications).queryByRole('switch')).toBeNull();
+  });
+});
+
+/**
+ * V8-R-OPS-001 — a setting that did not save must SAY so.
+ *
+ * The revert alone was the defect: the switch flipped back on its own and said
+ * nothing, so the only signal that the server refused was a control moving by
+ * itself, which reads as a glitch rather than a refusal and leaves the user
+ * believing whichever position they last saw. A silent revert is a fallback
+ * presented as a success.
+ */
+describe('a private-account change the server rejects', () => {
+  const privacySwitch = (): HTMLElement =>
+    screen.getByRole('switch', { name: 'Private account' });
+
+  it('says the change was not saved, names the state that stands, and offers a retry', async () => {
+    privacySaveOk = false;
+    render(<SettingsHomePage />);
+
+    await userEvent.click(privacySwitch());
+
+    await waitFor(() =>
+      expect(screen.getByText(/couldn't save that change/i)).toBeInTheDocument(),
+    );
+    // The account is still PUBLIC — the mocked profile starts isPrivate:false
+    // and the optimistic flip was reverted. Naming it is the point: the user
+    // must not be left guessing which side the switch settled on.
+    expect(screen.getByText(/still public/i)).toBeInTheDocument();
+    expect(privacySwitch().getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it('says nothing when the change saves', async () => {
+    render(<SettingsHomePage />);
+
+    await userEvent.click(privacySwitch());
+
+    await waitFor(() =>
+      expect(screen.queryByText(/couldn't save that change/i)).toBeNull(),
+    );
+    expect(screen.queryByRole('button', { name: /try again/i })).toBeNull();
   });
 });

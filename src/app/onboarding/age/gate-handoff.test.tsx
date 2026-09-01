@@ -280,6 +280,58 @@ describe('a recorded under-21 answer', () => {
     outside.remove();
   });
 
+  test('holds focus when its CONTENT is swapped under the same shell', async () => {
+    // The hole the round-2 trap left, and the reason the listeners moved to
+    // `document`. Both states render the same element type at the same
+    // position, so React reuses the instance: a mount-only effect does not
+    // re-run, the focused button is unmounted, and activeElement falls to
+    // <body> — from where the next Tab is not a keydown inside the dialog at
+    // all and sequential navigation resumes in the page underneath.
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+
+    answer = null;
+    pathname = '/auth';
+    render(<AgeGate />);
+    expect((gate() as HTMLElement).contains(document.activeElement)).toBe(true);
+
+    // Another tab records the refusal: same shell, different children.
+    answer = 'no';
+    await act(async () => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: 'next-bar:age-ack:v1' }),
+      );
+    });
+
+    const swapped = closed() as HTMLElement;
+    expect(swapped).toBeTruthy();
+    expect(swapped.contains(document.activeElement)).toBe(true);
+
+    await userEvent.tab();
+    expect(swapped.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(outside);
+    outside.remove();
+  });
+
+  test('pulls back a Tab that starts OUTSIDE the dialog', async () => {
+    // The document-level half. A handler bound to the dialog never sees this
+    // keypress, which is exactly why the escape branches it claimed to have
+    // were unreachable.
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+
+    answer = 'no';
+    pathname = '/auth';
+    render(<AgeGate />);
+
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+
+    await userEvent.tab();
+    expect((closed() as HTMLElement).contains(document.activeElement)).toBe(true);
+    outside.remove();
+  });
+
   test('a mistap has a remedy, and the remedy is to be ASKED again', async () => {
     // Not "admitted again". A control on the refusal that let the device
     // straight in would be the refusal undoing itself; this one returns the

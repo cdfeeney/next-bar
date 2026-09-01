@@ -411,6 +411,59 @@ describe('the under-21 exit', () => {
     ).toBeTruthy();
   });
 
+  test('stops saying "still signed in" once the session actually ends', async () => {
+    // 'failed' and 'done' used to latch while only 'pending' watched the
+    // status, so a sign-out completed in ANOTHER tab (or an expiry) left the
+    // failure sentence standing over a session that had ended. Every sentence
+    // on this screen has to be true WHILE IT IS ON SCREEN, not merely true
+    // when it was written.
+    answer = 'no';
+    authStatus = 'signed-in';
+    const view = render(<OnboardingAgePage />);
+    await waitFor(() =>
+      expect(screen.getByText(/still signed in on this device/i)).toBeTruthy(),
+    );
+
+    authStatus = 'signed-out';
+    view.rerender(<OnboardingAgePage />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/signed you out of this device/i)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/still signed in on this device/i)).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: /try signing out again/i }),
+    ).toBeNull();
+  });
+
+  test('stops claiming a sign-out once a session is live again', async () => {
+    // The mirror image, driven through 'done' rather than around it: signing
+    // in again in another tab left "we've signed you out of this device" on
+    // screen beside a live session. Both directions have to track the status,
+    // or the screen is only honest about the transition it happened to watch.
+    answer = 'no';
+    authStatus = 'signed-in';
+    const view = render(<OnboardingAgePage />);
+    await waitFor(() =>
+      expect(screen.getByText(/still signed in on this device/i)).toBeTruthy(),
+    );
+
+    authStatus = 'signed-out';
+    view.rerender(<OnboardingAgePage />);
+    await waitFor(() =>
+      expect(screen.getByText(/signed you out of this device/i)).toBeTruthy(),
+    );
+
+    // …and back, which is what a sign-in in another tab looks like here.
+    authStatus = 'signed-in';
+    view.rerender(<OnboardingAgePage />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/still signed in on this device/i)).toBeTruthy(),
+    );
+    expect(screen.queryByText(/signed you out of this device/i)).toBeNull();
+  });
+
   test('a restored exit with no session says nothing about one', async () => {
     // The negative half. Someone who was never signed in must not be told a
     // sign-out failed — there was nothing to sign out of.

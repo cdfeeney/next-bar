@@ -131,11 +131,28 @@ export default function OnboardingAgePage(): JSX.Element | null {
    * is what surfaces "Try signing out again".
    */
   useEffect(() => {
-    if (signOutState !== 'pending') return;
+    if (signOutState === 'none') return;
+    /**
+     * EVERY SETTLED CLAIM TRACKS THE LIVE STATUS, not just `pending`.
+     *
+     * `failed` and `done` used to latch, and only `pending` watched the
+     * session — so a sign-out completed in ANOTHER tab (or an expiry, or the
+     * retry succeeding elsewhere) left "you're still signed in on this
+     * device" on screen over a session that had ended, and the mirror case
+     * left "we've signed you out" over one that had come back. Both are
+     * exactly the false statement about the session that this screen exists
+     * to avoid; a sentence that was true when it was written is not the same
+     * as a sentence that is true now.
+     */
     if (auth.status === 'signed-out' || auth.status === 'unavailable') {
       setSignOutState('done');
       return;
     }
+    if (signOutState === 'done' && auth.status === 'signed-in') {
+      setSignOutState('failed');
+      return;
+    }
+    if (signOutState !== 'pending') return;
     if (!signOutSettled || auth.status !== 'signed-in') return;
     const timer = setTimeout(() => setSignOutState('failed'), SIGN_OUT_SETTLE_MS);
     return () => clearTimeout(timer);

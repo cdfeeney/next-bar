@@ -325,6 +325,16 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
    * make, on this screen, right now.
    */
   const [unknownThisMount, setUnknownThisMount] = useState(false);
+  /**
+   * No store would take the latch, so the uncertainty does not survive this
+   * page. The screen's own advice is to RELOAD and try signing in — and after
+   * that reload nothing on the client can know an attempt was ever made, so a
+   * later refusal would sound certain again.
+   *
+   * The honest response is to say so here, once, rather than to let the next
+   * screen speak with a confidence nothing supports.
+   */
+  const [unrecorded, setUnrecorded] = useState(false);
 
   const handleDelete = async () => {
     if (state === 'deleting') return;
@@ -355,8 +365,8 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
     if (outcome === 'refused') setState('failed');
     if (outcome === 'unknown') {
       // Storage FIRST: it is the real record. The flag below is only what
-      // keeps this mount honest when storage is unavailable.
-      latchDeletionUnknown(auth.user.id);
+      // keeps this mount honest when no store would take it.
+      setUnrecorded(!latchDeletionUnknown(auth.user.id));
       setUnknownThisMount(true);
       setState('unknown');
     }
@@ -393,6 +403,7 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
         ) : (
           <DeleteConfirm
             state={state}
+            unrecorded={unrecorded}
             confirmText={confirmText}
             onConfirmTextChange={setConfirmText}
             onCancel={() => {
@@ -409,12 +420,15 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
 
 function DeleteConfirm({
   state,
+  unrecorded,
   confirmText,
   onConfirmTextChange,
   onCancel,
   onDelete,
 }: {
   state: DeleteState;
+  /** No store accepted the uncertainty, so it will not survive a reload. */
+  unrecorded: boolean;
   confirmText: string;
   onConfirmTextChange: (value: string) => void;
   onCancel: () => void;
@@ -459,6 +473,18 @@ function DeleteConfirm({
           We couldn&apos;t confirm whether your account was deleted — it may
           already be gone. Reload this page and try to sign in to check before
           trying again, or email hi@next-bar.app.
+        </p>
+      ) : null}
+      {/* Storage refused the record, so the advice above outlives the only
+          note that this attempt was ever uncertain. Say that plainly: after
+          the reload, this screen will have forgotten, and signing in is then
+          the ONLY way to find out. Silence here would let the next visit
+          sound certain on the strength of a fact nobody kept. */}
+      {state === 'unknown' && unrecorded ? (
+        <p className="text-red-400 text-xs" role="status">
+          This browser wouldn&apos;t let us remember that, so after a reload
+          this page won&apos;t know either — signing in is the only way to
+          check.
         </p>
       ) : null}
       {/* Cancel is the larger, more prominent of the two. */}

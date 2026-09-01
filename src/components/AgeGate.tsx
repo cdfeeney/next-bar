@@ -91,42 +91,80 @@ const FOCUSABLE =
 function GateDialog({ children }: { children: ReactNode }): JSX.Element {
   const panel = useRef<HTMLDivElement>(null);
 
+  /**
+   * Take focus when this dialog appears — and again whenever its CONTENT is
+   * replaced under a shell React keeps mounted.
+   *
+   * A mount-only effect was not enough, and the way it failed is the reason
+   * both listeners below are on `document` rather than on the dialog. The two
+   * states render the same element type at the same position, so swapping
+   * between them (the retraction, or a storage event from another tab) reuses
+   * the instance: the effect does not re-run, the focused button is unmounted,
+   * and `document.activeElement` falls back to `<body>`. From `<body>` the
+   * next Tab is not a keydown inside the dialog at all — it never reached a
+   * handler bound here — and sequential navigation resumes in the page
+   * underneath, which `layout.tsx` renders BEFORE this overlay.
+   *
+   * `children` as the dependency is deliberate: React gives a new element
+   * object per render, so this re-runs on every content change without the
+   * caller having to remember a key.
+   */
   useEffect(() => {
-    // Take focus off whatever the page underneath had. `preventScroll` so an
-    // input the user was typing in is not scrolled into view behind the
-    // backdrop.
     const first = panel.current?.querySelector<HTMLElement>(FOCUSABLE);
+    // `preventScroll` so an input the user was typing in is not scrolled into
+    // view behind the backdrop.
     (first ?? panel.current)?.focus({ preventScroll: true });
-  }, []);
+  }, [children]);
 
-  const keepFocusInside = (event: React.KeyboardEvent): void => {
-    if (event.key !== 'Tab') return;
-    const focusable = Array.from(
-      panel.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [],
-    );
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    const active = document.activeElement;
-    // Wrap at both ends. Anything else — including focus having escaped
-    // already — is pulled back to the first control rather than allowed out.
-    if (event.shiftKey && (active === first || !panel.current?.contains(active))) {
-      event.preventDefault();
-      last.focus();
-      return;
-    }
-    if (!event.shiftKey && (active === last || !panel.current?.contains(active))) {
-      event.preventDefault();
-      first.focus();
-    }
-  };
+  /**
+   * The trap, on `document` for the reason above: a keypress that starts
+   * outside the dialog is exactly the one that must not be allowed through,
+   * and a handler on the dialog cannot see it.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Tab') return;
+      const container = panel.current;
+      if (container === null) return;
+      const focusable = Array.from(
+        container.querySelectorAll<HTMLElement>(FOCUSABLE),
+      );
+      // Nothing to hold focus with: still refuse to hand Tab to the page.
+      if (focusable.length === 0) {
+        event.preventDefault();
+        container.focus({ preventScroll: true });
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      const inside = container.contains(active);
+      // Wrap at both ends, and treat focus that is already outside — including
+      // `<body>` after a content swap — as "pull it back".
+      if (!inside) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+        return;
+      }
+      if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, []);
 
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-labelledby="age-gate-title"
-      onKeyDown={keepFocusInside}
       // z-[2000]: above BottomNav's z-[1000] — the gate must cover the nav
       // too, or an unacked user can browse right under it (caught by the
       // app-store-pack e2e blocking test).
