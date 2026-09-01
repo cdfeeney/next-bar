@@ -282,6 +282,34 @@ describe('V8-R-ACC-012 — the deletion result says only what is known', () => {
     expect(screen.queryByText(/nothing was removed/i)).toBeNull();
   });
 
+  it('sees an unknown outcome recorded by ANOTHER TAB after this one mounted', async () => {
+    // A seed taken at mount is correct for exactly one instant. Two tabs on
+    // the same account: tab A's attempt ends unknown, tab B was already open
+    // and still holds the seed it read before that happened, so B's retry gets
+    // asked as a first attempt and the deleted user's 401 reprints "nothing
+    // was removed". The fix is to read the fact at the moment of the attempt,
+    // which has no staleness window at all.
+    render(<SecurityAccountPage />);
+
+    // Tab A, elsewhere, ends unknown for this same user.
+    window.localStorage.setItem(
+      'next-bar:account:deletion-uncertain:v1',
+      'me',
+    );
+
+    deletionOutcome = 'refused';
+    await userEvent.click(
+      screen.getByRole('button', { name: /^Delete account$/i }),
+    );
+    await userEvent.type(screen.getByLabelText(/type/i), 'DELETE');
+    await userEvent.click(
+      screen.getByRole('button', { name: /permanently delete/i }),
+    );
+
+    await waitFor(() => expect(seenAfterUnknown).toEqual([true]));
+    expect(screen.queryByText(/nothing was removed/i)).toBeNull();
+  });
+
   it('does not make a DIFFERENT account cautious — the latch names its user', async () => {
     // The negative half of "keyed to the user id". A latch that outlived its
     // session must not silently downgrade the next owner of this device to

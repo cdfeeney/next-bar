@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
@@ -194,6 +194,49 @@ describe('a recorded under-21 answer', () => {
       expect(gate()).toBeNull();
       unmount();
     }
+  });
+
+  test('reaches a tab that was already open when another tab answered', async () => {
+    // THE GATE IS PER TAB; THE ANSWER IS PER DEVICE. Two tabs on an unanswered
+    // device: B answers 21+ and its /auth becomes reachable, then A answers
+    // "I'm under 21". B never navigates, so a gate that only re-reads on
+    // pathname change kept the acked state it computed before the refusal
+    // existed — and its sign-up form stayed usable, which is precisely what
+    // the recorded refusal is supposed to stop.
+    answer = 'yes';
+    pathname = '/auth';
+    render(<AgeGate />);
+    expect(gate()).toBeNull();
+    expect(closed()).toBeNull();
+
+    // The other tab records the refusal. `storage` is what this tab hears.
+    answer = 'no';
+    await act(async () => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: 'next-bar:age-ack:v1' }),
+      );
+    });
+
+    expect(closed()).toBeTruthy();
+  });
+
+  test('ignores a write to an unrelated key', async () => {
+    // The listener is not an excuse to re-render on every storage event in the
+    // app; it is scoped to the one key that holds this answer.
+    answer = 'no';
+    pathname = '/map';
+    render(<AgeGate />);
+    expect(closed()).toBeTruthy();
+
+    answer = 'yes';
+    await act(async () => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: 'next-bar:ratings:v1' }),
+      );
+    });
+
+    // Unchanged: the gate did not re-read, because that key is not its key.
+    expect(closed()).toBeTruthy();
   });
 
   test('a mistap has a remedy, and the remedy is to be ASKED again', async () => {

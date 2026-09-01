@@ -45,7 +45,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { signOutAndRevokePush } from '@/app/settings/_signOut';
 import {
   AGE_EXIT_PATH,
-  readAgeAck,
+  readAgeAnswer,
   writeAgeAck,
   writeAgeDenial,
 } from '../_ageAck';
@@ -206,7 +206,22 @@ export default function OnboardingAgePage(): JSX.Element | null {
       exit();
       return;
     }
-    setView(readAgeAck() ? 'confirmed' : 'ask');
+    /**
+     * READ THE ANSWER, NOT THE 21+ BOOLEAN. Seeding from `readAgeAck()` asked
+     * the question again whenever the stored value was anything other than
+     * `'1'` — and a recorded `'under21'` is exactly that. Since the overlay
+     * stands down on this route by design, a device that had just declined
+     * could reach this screen (Close lands on `/install`, then hardware Back)
+     * and find "I'm 21 or older" one tap away, bypassing the explicit
+     * retraction that is supposed to be the only way back. The screen's own
+     * "NEVER ASKED TWICE" rule held for yes and leaked for no.
+     *
+     * A recorded refusal renders the exit screen it produced. No sign-out is
+     * re-attempted: this is the record of an answer already given, not a new
+     * one, and `exit()` is what performs the exit's side effects.
+     */
+    const answer = readAgeAnswer();
+    setView(answer === 'yes' ? 'confirmed' : answer === 'no' ? 'exited' : 'ask');
     // `exit` is recreated every render and this must run once per mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);

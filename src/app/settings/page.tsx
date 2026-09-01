@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import Avatar from '@/components/Avatar';
+import { OperationalState } from '@/components/states/OperationalState';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollowRequests } from '@/hooks/useFollowRequests';
 import { useFollows } from '@/hooks/useFollows';
@@ -79,6 +80,8 @@ export default function AccountPage(): JSX.Element {
           handle={profile.handle}
           seed={seed}
           authStatus={auth.status}
+          failed={profile.failed}
+          onRetry={profile.retry}
         />
 
         <dl className="grid grid-cols-3 border-y border-border py-4 text-center">
@@ -102,38 +105,83 @@ export default function AccountPage(): JSX.Element {
   );
 }
 
+/**
+ * The identity row.
+ *
+ * `failed` is the difference between "still loading" and "we gave up". The
+ * ellipsis below is honest only in the first case; after the silent retry
+ * budget is spent it was a dot-dot-dot that never resolved, with nothing said
+ * and nothing to tap — the dead end V8-R-OPS-001 and V8-R-OPS-007 forbid.
+ * When the read has failed the row is RETAINED (a generated avatar is still a
+ * real avatar) and the shared operational state is rendered under it with the
+ * single Retry, which is that component's contract.
+ */
 function IdentityHeader({
   displayName,
   handle,
   seed,
   authStatus,
+  failed,
+  onRetry,
 }: {
   displayName: string | null;
   handle: string | null;
   seed: string;
   authStatus: ReturnType<typeof useAuth>['status'];
+  failed: boolean;
+  onRetry: () => void;
 }): JSX.Element {
-  if (authStatus === 'signed-in') {
-    // Identity convention: display name on top, grey @handle under it. A
-    // handle-only profile has no display name, so the handle IS the top line
-    // and the secondary line is dropped — it was printing @handle twice.
-    const primary = displayName ?? (handle !== null ? `@${handle}` : null);
-    const showHandleLine = displayName !== null && handle !== null;
+  if (authStatus === 'signed-in' && failed) {
     return (
-      <div className="flex items-center gap-4">
-        <span className="rounded-full border-2 border-accent p-0.5">
-          <Avatar initials={initialsFor(primary ?? '?')} seed={seed} size="lg" />
-        </span>
-        <div className="min-w-0">
-          <p className="font-display text-2xl truncate">{primary ?? '…'}</p>
-          {showHandleLine ? (
-            <p className="text-muted text-sm truncate">@{handle}</p>
-          ) : null}
-        </div>
-      </div>
+      <OperationalState
+        kind="failed"
+        message="We couldn't load your profile. Check your connection and try again."
+        recovery={{ label: 'Retry', onAction: onRetry }}
+      >
+        <IdentityRow displayName={displayName} handle={handle} seed={seed} />
+      </OperationalState>
     );
   }
+  if (authStatus === 'signed-in') {
+    return <IdentityRow displayName={displayName} handle={handle} seed={seed} />;
+  }
+  return <SignedOutIdentity authStatus={authStatus} />;
+}
 
+function IdentityRow({
+  displayName,
+  handle,
+  seed,
+}: {
+  displayName: string | null;
+  handle: string | null;
+  seed: string;
+}): JSX.Element {
+  // Identity convention: display name on top, grey @handle under it. A
+  // handle-only profile has no display name, so the handle IS the top line
+  // and the secondary line is dropped — it was printing @handle twice.
+  const primary = displayName ?? (handle !== null ? `@${handle}` : null);
+  const showHandleLine = displayName !== null && handle !== null;
+  return (
+    <div className="flex items-center gap-4">
+      <span className="rounded-full border-2 border-accent p-0.5">
+        <Avatar initials={initialsFor(primary ?? '?')} seed={seed} size="lg" />
+      </span>
+      <div className="min-w-0">
+        <p className="font-display text-2xl truncate">{primary ?? '…'}</p>
+        {showHandleLine ? (
+          <p className="text-muted text-sm truncate">@{handle}</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function SignedOutIdentity({
+  authStatus,
+}: {
+  authStatus: ReturnType<typeof useAuth>['status'];
+}): JSX.Element {
   return (
     <div className="flex items-center gap-4">
       <span className="rounded-full border-2 border-border p-0.5">

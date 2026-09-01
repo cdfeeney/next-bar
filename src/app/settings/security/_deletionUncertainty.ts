@@ -25,15 +25,24 @@ import { DELETION_UNCERTAIN_KEY } from '@/lib/accountCache';
  * A latch left behind by a previous owner therefore reads as absent for the
  * next one instead of making their screen mysteriously cautious.
  *
- * The key is registered in `accountCache`'s `ALL_KEYS`, so a confirmed
- * deletion and a sign-out seal both clear it — an unregistered key is one no
- * wipe ever reaches.
+ * The key is registered in `accountCache`'s `ALL_KEYS` (the confirmed-deletion
+ * and foreign-sign-in wipes) AND removed explicitly by
+ * `clearResidualAccountCache` (the ordinary sign-out seal). Both are needed:
+ * that function clears by explicit list, so registration alone left the latch
+ * outliving every sign-out — an account that demonstrably survived stayed
+ * permanently uncertain. An unregistered key is one no wipe ever reaches; a
+ * registered one that no list names is barely better.
  *
  * Storage failing (private mode, quota) is NON-FATAL and deliberately fails
  * toward the in-memory latch the caller also keeps: within one mount the
  * screen still behaves correctly, and the honest outcome of an unreadable
  * store is that a NEW mount asks the server again rather than inventing
  * certainty it does not have.
+ *
+ * `sawDeletionUnknown` is called AT THE MOMENT OF EACH ATTEMPT, never cached
+ * into component state on mount. A snapshot taken when the screen was built
+ * cannot see an attempt another tab made afterwards, and a second tab on the
+ * same account is exactly where the false "nothing was removed" came back.
  */
 
 /** Has an attempt for `userId` already ended `unknown` on this device? */

@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 /**
@@ -37,13 +38,17 @@ vi.mock('@/hooks/useFollowRequests', () => ({
 // per render changes the nights effect's deps every pass and spins forever.
 const NO_BARS: never[] = [];
 vi.mock('@/lib/useBars', () => ({ useBars: () => NO_BARS }));
+/** Mutable so the FAILED identity read — the branch a real network fault
+ *  lands on — is rendered by a test rather than only by users. */
+const ownProfileRetry = vi.fn();
+let ownProfileFailed = false;
 vi.mock('./_useOwnProfile', () => ({
   useOwnProfile: () => ({
     ...profile,
     isPrivate: false,
-    known: true,
-    failed: false,
-    retry: vi.fn(),
+    known: !ownProfileFailed,
+    failed: ownProfileFailed,
+    retry: ownProfileRetry,
     consentLive: true,
     setHandle: vi.fn(),
     setDisplayName: vi.fn(),
@@ -155,5 +160,55 @@ describe('Nights Out copy claims no persistent history', () => {
     // No night is seeded, so the empty state is what renders.
     expect(screen.getByText(/No nights out yet/i)).toBeInTheDocument();
     expect(document.body.textContent ?? '').not.toMatch(PERSISTENCE_CLAIM);
+  });
+});
+
+/**
+ * V8-R-OPS-001 / -007 on the Account ROOT, not only on Edit profile.
+ *
+ * The gap: the identity read gained `failed` and `retry`, and only the Settings
+ * stack used them. Here the header kept rendering its placeholder ellipsis
+ * forever — a dot-dot-dot that never resolves, with nothing said and nothing to
+ * tap, which is exactly the dead end the requirement forbids.
+ */
+describe('a failed identity read on the Account root', () => {
+  it('names the failure and offers one retry instead of an endless ellipsis', async () => {
+    profile = { handle: null, displayName: null };
+    ownProfileFailed = true;
+    try {
+      render(<AccountPage />);
+
+      const state = screen.getByTestId('operational-state');
+      expect(state.getAttribute('data-state')).toBe('failed');
+      expect(screen.getByText(/couldn't load your profile/i)).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: /retry/i }));
+      expect(ownProfileRetry).toHaveBeenCalled();
+    } finally {
+      ownProfileFailed = false;
+      ownProfileRetry.mockClear();
+    }
+  });
+
+  it('keeps the surrounding row rather than blanking the header', () => {
+    // V8-R-OPS-007's retention rule: a degraded state never wipes the context
+    // it is reporting on. The generated avatar is still a real avatar.
+    profile = { handle: 'connor_f', displayName: 'Connor Feeney' };
+    ownProfileFailed = true;
+    try {
+      render(<AccountPage />);
+
+      expect(screen.getByText('Connor Feeney')).toBeInTheDocument();
+    } finally {
+      ownProfileFailed = false;
+    }
+  });
+
+  it('says nothing about a failure while the read is still in flight', () => {
+    profile = { handle: 'connor_f', displayName: 'Connor Feeney' };
+    render(<AccountPage />);
+
+    expect(screen.queryByTestId('operational-state')).toBeNull();
+    expect(screen.queryByRole('button', { name: /retry/i })).toBeNull();
   });
 });

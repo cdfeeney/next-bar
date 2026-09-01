@@ -28,6 +28,7 @@ import {
 } from '@/lib/profile.server';
 import { useHandleAvailability } from '@/hooks/useHandleAvailability';
 import { setPromptedFlag } from '@/components/OnboardingGate';
+import { OperationalState } from '@/components/states/OperationalState';
 import {
   AGE_STEP,
   HOME,
@@ -66,6 +67,32 @@ export default function OnboardingPage(): JSX.Element {
   // Only render the form once the profile fetch confirms handle IS NULL —
   // an already-onboarded visitor (back nav, old link) is bounced home.
   const [ready, setReady] = useState(false);
+  /**
+   * The profile read did not work. NOT the same as "no handle yet".
+   *
+   * `fetchOwnProfile` returns null for a read error as well as for a missing
+   * row, and this page used to treat both as "this account needs to be set
+   * up". Every auth user has a `profiles` row — 0001's `handle_new_user`
+   * trigger creates it and 0004 backfilled the rest — so for a signed-in
+   * visitor a null is a FAILED READ, and acting on it showed an already-
+   * onboarded account a blank identity form. Submitting it overwrote a real
+   * display name before `claim_handle` refused the username, which is a
+   * destructive edit made on the strength of an error.
+   */
+  const [readFailed, setReadFailed] = useState(false);
+  /** Bumped by Retry to re-run the read. */
+  const [attempt, setAttempt] = useState(0);
+  /**
+   * Clearing `readFailed` belongs to the RETRY, not to the top of the effect.
+   * The effect's identity depends on `router`, and clearing there made the
+   * screen flicker back to "Loading…" on any re-render that produced a new
+   * router — a failure that erases itself is the dead end this state exists to
+   * replace.
+   */
+  const retryRead = (): void => {
+    setReadFailed(false);
+    setAttempt((n) => n + 1);
+  };
   const availability = useHandleAvailability(desired);
 
   useEffect(() => {
@@ -81,7 +108,14 @@ export default function OnboardingPage(): JSX.Element {
     const epoch = getCacheEpoch();
     fetchOwnProfile(supabase).then((profile) => {
       if (cancelled || getCacheEpoch() !== epoch) return;
-      if (profile !== null && profile.handle !== null) {
+      // A null profile for a signed-in account is a failed read, not an
+      // account without a handle — see `readFailed` above. Stop here rather
+      // than offering a form that would overwrite identity we could not read.
+      if (profile === null) {
+        setReadFailed(true);
+        return;
+      }
+      if (profile.handle !== null) {
         router.replace(returnDestination());
         return;
       }
@@ -95,13 +129,13 @@ export default function OnboardingPage(): JSX.Element {
         return;
       }
       // Prefill a previously saved name (e.g. an earlier partial attempt).
-      if (profile?.displayName) setName(profile.displayName);
+      if (profile.displayName) setName(profile.displayName);
       setReady(true);
     });
     return () => {
       cancelled = true;
     };
-  }, [auth.status, router]);
+  }, [auth.status, router, attempt]);
 
   const skip = (): void => {
     setPromptedFlag();
@@ -186,6 +220,14 @@ export default function OnboardingPage(): JSX.Element {
                 Back home
               </Link>
             </p>
+          ) : readFailed ? (
+            /* Says what went wrong and offers the one recovery, instead of a
+               blank form built on a read that failed (V8-R-OPS-007). */
+            <OperationalState
+              kind="failed"
+              message="We couldn't load your profile, so we can't set up your username yet. Check your connection and try again."
+              recovery={{ label: 'Retry', onAction: retryRead }}
+            />
           ) : !ready ? (
             <p className="text-muted text-sm">Loading…</p>
           ) : (

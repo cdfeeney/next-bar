@@ -250,6 +250,45 @@ describe('cache ownership is separate from the import latch', () => {
     expect(window.localStorage.getItem('next-bar:lists:v1')).toBeNull();
   });
 
+  it('sign-out seal: clears the deletion-uncertainty latch', () => {
+    // Cycle-5 panel, both lanes. The latch was registered in ALL_KEYS and its
+    // three doc comments said the seal cleared it — but this function clears
+    // by EXPLICIT LIST, and only clearAccountCache iterates ALL_KEYS. So the
+    // latch survived every ordinary sign-out and an account that demonstrably
+    // came back stayed permanently uncertain, printing "may already be gone"
+    // over refusals that were certain.
+    //
+    // Clearing here is right, not merely convenient: the latch protects the
+    // signed-in danger zone, and reaching that screen again needs a real
+    // sign-in, which proves the account exists.
+    window.localStorage.setItem(
+      'next-bar:account:deletion-uncertain:v1',
+      'user-a',
+    );
+    writeCacheOwner('user-a');
+    sealAccountCacheOnSignOut();
+    expect(
+      window.localStorage.getItem('next-bar:account:deletion-uncertain:v1'),
+    ).toBeNull();
+  });
+
+  it('sign-out seal: clears the latch even when pending rows defer the rest', () => {
+    // The unconditional removals must not be hostage to the ratings/pairwise
+    // pending checks — an unsynced rating has nothing to do with whether a
+    // deletion attempt was left open.
+    window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
+    window.localStorage.setItem(
+      'next-bar:account:deletion-uncertain:v1',
+      'user-a',
+    );
+    writeCacheOwner('user-a');
+    sealAccountCacheOnSignOut();
+    expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
+    expect(
+      window.localStorage.getItem('next-bar:account:deletion-uncertain:v1'),
+    ).toBeNull();
+  });
+
   it('sign-out seal: keeps rows whose import never completed', () => {
     // Round-3 (Claude high): explicit sign-out destroyed local rows that had
     // never reached the server. Sealed instead: kept under the latched owner.

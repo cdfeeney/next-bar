@@ -25,7 +25,13 @@ const pushed: string[] = [];
 let authStatus: 'signed-in' | 'signed-out' | 'unavailable' | 'loading' =
   'signed-in';
 let signOut: () => Promise<void> = async () => {};
-let acked = false;
+/**
+ * THE STORED ANSWER, three-valued — this screen now seeds its view from the
+ * ANSWER rather than from the 21+ boolean. A `'no'` used to land on `'ask'`,
+ * which put "I'm 21 or older" one tap in front of a device that had just
+ * declined.
+ */
+let answer: 'yes' | 'no' | null = null;
 /**
  * How many times the exit RECORDED the refusal. It counted `clearAgeAck` until
  * the 2026-09-01 ruling moved the age check ahead of account creation:
@@ -60,7 +66,8 @@ vi.mock('@/hooks/useAuth', () => ({
 
 vi.mock('../_ageAck', () => ({
   AGE_ACK_KEY: 'next-bar:age-ack:v1',
-  readAgeAck: () => acked,
+  readAgeAnswer: () => answer,
+  readAgeAck: () => answer === 'yes',
   writeAgeAck: vi.fn(),
   clearAgeAck: () => {
     ackCleared += 1;
@@ -118,7 +125,7 @@ beforeEach(() => {
   pushed.length = 0;
   authStatus = 'signed-in';
   signOut = async () => {};
-  acked = false;
+  answer = null;
   ackCleared = 0;
   denialsRecorded = 0;
   window.history.replaceState({}, '', '/onboarding/age');
@@ -131,7 +138,7 @@ describe('the 21+ confirmation', () => {
     // gets a single Continue instead. This is also the drift guard on the two
     // copies of the key: point `../_ageAck` at a different one and the real
     // module stops seeing the overlay's ack.
-    acked = true;
+    answer = 'yes';
     render(<OnboardingAgePage />);
     expect(
       await screen.findByRole('button', { name: /^Continue$/i }),
@@ -361,5 +368,43 @@ describe('the under-21 exit', () => {
     );
     expect(denialsRecorded).toBe(1);
     expect(ackCleared).toBe(0);
+  });
+
+  /**
+   * AND THE RECORDED ANSWER IS HONOURED ON A RETURN VISIT.
+   *
+   * The hole: this screen seeded its view from the 21+ boolean, so a stored
+   * `'under21'` was not `'1'` and landed on `'ask'` — with "I'm 21 or older"
+   * one tap away. The global overlay stands down on this route by design, so
+   * nothing else was covering it, and the trip is ordinary navigation: Close
+   * lands on /install, hardware Back returns here. The sanctioned retraction
+   * is supposed to be the only way back from a refusal.
+   */
+  test('shows the exit, not the question, to a device that already answered "under 21"', async () => {
+    answer = 'no';
+    render(<OnboardingAgePage />);
+
+    expect(
+      await screen.findByRole('heading', { name: /next bar is for ages 21\+/i }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: /21 or older/i }),
+    ).toBeNull();
+  });
+
+  test('does not re-attempt a sign-out when it is only re-rendering a past answer', async () => {
+    // The stored answer is a RECORD, not a fresh decision: re-running the
+    // exit's side effects on every visit would sign the user out again — and
+    // would re-record a refusal that is already recorded.
+    let signOuts = 0;
+    signOut = async () => {
+      signOuts += 1;
+    };
+    answer = 'no';
+    render(<OnboardingAgePage />);
+    await screen.findByRole('heading', { name: /next bar is for ages 21\+/i });
+
+    expect(signOuts).toBe(0);
+    expect(denialsRecorded).toBe(0);
   });
 });

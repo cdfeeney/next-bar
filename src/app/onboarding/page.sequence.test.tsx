@@ -1,4 +1,5 @@
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 /**
@@ -20,12 +21,21 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 const replaced: string[] = [];
 let handle: string | null = null;
+/** Make the profile READ fail. `fetchOwnProfile` returns null for a read error
+ *  as well as for a missing row, and this page has to tell them apart. */
+let readFails = false;
+
+// ONE STABLE router object, the way next/navigation's really behaves. A fresh
+// object per call changes the mount effect's dependency identity on every
+// render, so the effect re-runs forever — which is not what the page does in
+// the app, and it hid state transitions behind an endless re-fetch.
+const router = {
+  push: vi.fn(),
+  replace: (href: string) => replaced.push(href),
+};
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: vi.fn(),
-    replace: (href: string) => replaced.push(href),
-  }),
+  useRouter: () => router,
 }));
 
 vi.mock('@/hooks/useAuth', () => ({
@@ -47,7 +57,8 @@ vi.mock('@/hooks/useHandleAvailability', () => ({
 }));
 
 vi.mock('@/lib/profile.server', () => ({
-  fetchOwnProfile: async () => ({ handle, displayName: null, isPrivate: false }),
+  fetchOwnProfile: async () =>
+    readFails ? null : { handle, displayName: null, isPrivate: false },
   claimHandle: vi.fn(),
   setOwnDisplayName: vi.fn(),
   DISPLAY_NAME_MAX: 40,
@@ -60,6 +71,7 @@ import OnboardingPage from './page';
 beforeEach(() => {
   replaced.length = 0;
   handle = null;
+  readFails = false;
   window.history.replaceState({}, '', '/onboarding');
 });
 
@@ -128,5 +140,54 @@ describe('the onboarding sequence is reachable', () => {
     render(<OnboardingPage />);
 
     await waitFor(() => expect(replaced).toEqual(['/plan/abc']));
+  });
+});
+
+/**
+ * A FAILED PROFILE READ IS NOT "THIS ACCOUNT NEEDS SETTING UP".
+ *
+ * `fetchOwnProfile` returns null for a read error as well as for a missing
+ * row, and this page acted on both the same way. Every auth user HAS a
+ * profiles row — 0001's `handle_new_user` trigger creates it and 0004
+ * backfilled the rest — so for a signed-in visitor a null is a failed read.
+ * Treating it as "no handle yet" showed an already-onboarded account a blank
+ * identity form, and submitting it overwrote a real display name (the name
+ * saves before the claim) before `claim_handle` refused the username: a
+ * destructive edit made on the strength of an error.
+ */
+describe('the identity step when the profile read fails', () => {
+  test('says what went wrong and offers a retry instead of a blank form', async () => {
+    readFails = true;
+    window.history.replaceState(
+      {},
+      '',
+      `/onboarding?next=${encodeURIComponent('/')}&seq=done`,
+    );
+    const { findByTestId } = render(<OnboardingPage />);
+
+    const state = await findByTestId('operational-state');
+    expect(state.getAttribute('data-state')).toBe('failed');
+    expect(screen.getByRole('button', { name: /retry/i })).toBeTruthy();
+    // The form that would have overwritten identity is not on screen.
+    expect(screen.queryByLabelText(/username/i)).toBeNull();
+    // And it did not silently send anyone anywhere.
+    expect(replaced).toEqual([]);
+  });
+
+  test('a retry that works renders the form it was blocking', async () => {
+    readFails = true;
+    window.history.replaceState(
+      {},
+      '',
+      `/onboarding?next=${encodeURIComponent('/')}&seq=done`,
+    );
+    render(<OnboardingPage />);
+    await screen.findByTestId('operational-state');
+
+    readFails = false;
+    await userEvent.click(screen.getByRole('button', { name: /retry/i }));
+
+    await screen.findByText(/Pick how friends see you/i);
+    expect(screen.queryByTestId('operational-state')).toBeNull();
   });
 });

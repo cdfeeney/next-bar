@@ -316,43 +316,48 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
   const [state, setState] = useState<DeleteState>('idle');
   const [confirmText, setConfirmText] = useState('');
   /**
-   * Has ANY attempt for THIS ACCOUNT ended `unknown`? Latches true and never
-   * clears.
+   * The in-memory half of "an attempt for this account has ended `unknown`".
+   * It is a FALLBACK, not the source — see `priorUnknown` below.
    *
-   * IT CANNOT BE DERIVED FROM `state`. A first version read `state ===
-   * 'unknown'` at the top of the handler, which is true only while the screen
-   * is still showing that outcome — and Cancel resets `state` to 'idle'. So
-   * the sequence "attempt ends unknown, tap Cancel, re-arm, retry" lost the
-   * fact that the account may already be gone, the dead token produced the
-   * route's `unauthorized`, and the screen printed "nothing was removed" over
-   * a destroyed account.
-   *
-   * AND IT CANNOT LIVE ONLY IN THIS MOUNT. A plain `useState(false)` fixed the
-   * Cancel path and left the same hole one step further out: the header Back,
-   * or the page reload the unknown message itself RECOMMENDS, unmounts the
-   * danger zone, and a cached JWT re-renders it signed-in with the latch back
-   * at false. So the seed is read from storage, keyed to this user, and the
-   * `useState` is now the in-memory half that also covers a browser where
-   * storage cannot be written at all.
+   * It exists only for a browser where storage cannot be written at all
+   * (private mode, quota): there the stored latch silently no-ops and this is
+   * all that is left, which still covers the retry the user is most likely to
+   * make, on this screen, right now.
    */
-  const [sawUnknown, setSawUnknown] = useState(() =>
-    sawDeletionUnknown(auth.user.id),
-  );
+  const [unknownThisMount, setUnknownThisMount] = useState(false);
 
   const handleDelete = async () => {
     if (state === 'deleting') return;
     if (!isDeleteConfirmed(confirmText)) return;
     setState('deleting');
-    const outcome = await performAccountDeletion(auth, sawUnknown);
+    /**
+     * READ THE FACT WHEN IT IS NEEDED, NOT WHEN THE SCREEN WAS BUILT.
+     *
+     * This is the fourth home for this one fact and the first that is not a
+     * cache of it. Each earlier version was a snapshot with a shorter life
+     * than the fact itself: derived from view state that Cancel resets; a
+     * `useState` a remount discards; then a `useState` SEEDED from storage on
+     * mount — which is correct the instant it is read and stale for as long as
+     * the screen stays open. That last one is what the panel caught: two tabs
+     * on the same account, the first ends `unknown`, and the second still
+     * holds the seed it took before any of that happened, so its retry gets
+     * asked as a first attempt and reprints "nothing was removed" over an
+     * account that may be gone.
+     *
+     * A read at the moment of the attempt has no staleness window to close,
+     * needs no `storage` listener, and subsumes the mount seed entirely.
+     */
+    const priorUnknown = unknownThisMount || sawDeletionUnknown(auth.user.id);
+    const outcome = await performAccountDeletion(auth, priorUnknown);
     // 'deleted' has already navigated away. The other two both stay here and
     // say only what they know: a refusal is the honest "nothing was removed",
     // a lost answer is not allowed to borrow that sentence.
     if (outcome === 'refused') setState('failed');
     if (outcome === 'unknown') {
-      // Storage FIRST: the in-memory flag is worthless to the next mount, and
-      // the next mount is the case this exists for.
+      // Storage FIRST: it is the real record. The flag below is only what
+      // keeps this mount honest when storage is unavailable.
       latchDeletionUnknown(auth.user.id);
-      setSawUnknown(true);
+      setUnknownThisMount(true);
       setState('unknown');
     }
   };

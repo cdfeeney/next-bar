@@ -94,7 +94,10 @@ export type DirtyEntry = { barId: string; stamp: string; op: 'u' | 'd' };
  *
  * It is account data: a confirmed deletion (`destroyAccountDataOnDeletion`)
  * and a sign-out seal both clear it, and both are correct. After a successful
- * sign-in the account demonstrably exists, so the uncertainty is over.
+ * sign-in the account demonstrably exists, so the uncertainty is over. Note
+ * that the seal clears it by an EXPLICIT removal in `clearResidualAccountCache`
+ * — `ALL_KEYS` membership alone would not have done it, because that list is
+ * iterated only by `clearAccountCache`.
  *
  * The lane that owns Settings reads and writes it through
  * `src/app/settings/security/_deletionUncertainty.ts`; only the key lives here.
@@ -355,6 +358,18 @@ export function clearResidualAccountCache(): boolean {
     }
     // Follows are server-authoritative demo state — never pending.
     window.localStorage.removeItem(FOLLOWS_KEY);
+    // The deletion-uncertainty latch is unconditional too, and this is the
+    // line that makes its documented lifecycle TRUE (cycle-5 panel, both
+    // lanes): `ALL_KEYS` membership alone does nothing here, because this
+    // function removes by explicit list and only `clearAccountCache` iterates
+    // `ALL_KEYS`. Without it the latch outlived every ordinary sign-out and
+    // an account that demonstrably survived stayed permanently uncertain.
+    //
+    // It is never "pending data that exists nowhere else": it protects the
+    // SIGNED-IN danger zone, and reaching that screen again requires a real
+    // sign-in, which proves the account exists and ends the uncertainty. A
+    // dead session cannot read it, so keeping it buys nothing.
+    window.localStorage.removeItem(DELETION_UNCERTAIN_KEY);
     // The owner marker ALWAYS survives (V8-2 round-3). Ownership is what
     // lets guardAgainstForeignCache() wipe the personal FOREIGN_ONLY_KEYS
     // when a DIFFERENT account signs in next — removing it here made

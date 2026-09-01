@@ -3,11 +3,13 @@
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
+  AGE_ACK_KEY,
   AGE_EXIT_PATH,
   AGE_STEP_PATH,
   clearAgeAck,
   readAgeAnswer,
   writeAgeAck,
+  type AgeAnswer,
 } from '@/app/onboarding/_ageAck';
 
 /**
@@ -58,6 +60,14 @@ import {
 
 type AckState = 'unknown' | 'acked' | 'unacked' | 'declined';
 
+/** One mapping from the stored answer to what this overlay does about it, so
+ *  the two readers below cannot drift. */
+function stateFor(answer: AgeAnswer): AckState {
+  if (answer === 'yes') return 'acked';
+  if (answer === 'no') return 'declined';
+  return 'unacked';
+}
+
 export default function AgeGate(): JSX.Element | null {
   const router = useRouter();
   const pathname = usePathname();
@@ -76,9 +86,33 @@ export default function AgeGate(): JSX.Element | null {
     // device had just answered. Re-reading per route is the cheap half of
     // "one key, one reader": the key is the state, and this is the component
     // that has to keep looking at it.
-    const answer = readAgeAnswer();
-    setState(answer === 'yes' ? 'acked' : answer === 'no' ? 'declined' : 'unacked');
+    setState(stateFor(readAgeAnswer()));
   }, [pathname]);
+
+  /**
+   * AND RE-READ WHEN ANOTHER TAB ANSWERS. Route changes are not the only way
+   * the stored answer moves: this overlay is mounted per tab, and the answer
+   * is a property of the DEVICE.
+   *
+   * The case that made this necessary (cycle-5 panel, Codex): two tabs on an
+   * unanswered device. Tab B answers 21+, so `/auth` is reachable there. Tab A
+   * then answers "I'm under 21", which records the refusal — but B never
+   * navigates, so it keeps the `acked` it computed minutes ago and its sign-up
+   * form stays usable. The newest answer is the one that counts, and B was
+   * showing an older one.
+   *
+   * `storage` fires only in the OTHER tabs, which is exactly the gap; the
+   * writing tab already updates its own state. Filtering on the key keeps an
+   * unrelated write from re-rendering the gate.
+   */
+  useEffect(() => {
+    const onStorage = (event: StorageEvent): void => {
+      if (event.key !== null && event.key !== AGE_ACK_KEY) return;
+      setState(stateFor(readAgeAnswer()));
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   if (state === 'unknown' || state === 'acked') return null;
   // The age step owns this question AND its "no" branch. Never cover it.
