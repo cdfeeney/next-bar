@@ -95,6 +95,41 @@ export async function POST(request: Request): Promise<NextResponse> {
       await admin.auth.getUser(token);
     const userId = userData?.user?.id;
     if (userError || !userId) {
+      /**
+       * A VALID TOKEN WHOSE USER IS GONE IS NOT "UNAUTHORIZED" — IT IS DONE.
+       *
+       * This one branch is why four review rounds chased a client-side memory
+       * of "an attempt ended unknown". The route deletes the auth user and
+       * only then writes its reply, so a lost response leaves a browser that
+       * cannot tell whether it worked — and the retry landed here, where every
+       * `getUser` failure collapsed onto `unauthorized`. The client could not
+       * distinguish "you were never signed in" from "the account you are
+       * asking about no longer exists", so it kept a latch to remember its own
+       * uncertainty, and that latch had to be got right at every scope in
+       * turn: mount, view state, remount, tab, storage refusal, wipe residue.
+       *
+       * The server has never had that problem. GoTrue verifies the JWT's
+       * signature and expiry FIRST and only then loads its `sub`, so the two
+       * cases arrive as different typed codes: `user_not_found` for a validly
+       * signed token whose user is deleted, `bad_jwt` for a forged, foreign,
+       * expired or malformed one. Answering the first as success makes this
+       * endpoint IDEMPOTENT — the caller asked for the account to be gone and
+       * it is gone — and a retry after a lost response gets the truth from the
+       * only party that ever knew it.
+       *
+       * `session_not_found` is deliberately NOT here: a revoked session on a
+       * LIVE user must stay `unauthorized`, or a signed-out token would report
+       * an account as deleted.
+       *
+       * Disclosure: the only fact revealed is "the user this token was minted
+       * for no longer exists", and only to a holder of a validly signed,
+       * unexpired token for that user. The caller cannot choose the `sub`, so
+       * there is no enumeration vector, and an unauthenticated caller still
+       * gets a generic 401.
+       */
+      if (userError?.code === 'user_not_found') {
+        return NextResponse.json({ ok: true });
+      }
       return NextResponse.json(
         { ok: false, error: 'unauthorized' },
         { status: 401 },

@@ -17,6 +17,25 @@
  * this lane's write scope. This is the route's only caller, so the classifier
  * sits next to the screen that has to speak the outcome.
  *
+ * WHY IT NO LONGER TAKES AN `afterUnknown` FLAG — the cycle-5 redesign, after
+ * four rounds of findings against the client-side memory that flag required.
+ *
+ * The ambiguity was never the client's to resolve. A retry after a lost
+ * response used to receive `unauthorized`, which means both "you were never
+ * signed in" and "the account you are asking about is gone" — so the screen
+ * kept a latch recording its own uncertainty, and that latch had to be correct
+ * at every scope in turn: component state, view state that Cancel reset, a
+ * mount that a reload discarded, a second tab, a storage that refused the
+ * write, and the wipes that then had to reach it. Each fix was right and each
+ * one moved the problem.
+ *
+ * `/api/account/delete` now answers `user_not_found` — a validly signed token
+ * whose user no longer exists — with success, because the caller asked for the
+ * account to be gone and it is gone. The endpoint is idempotent, the retry is
+ * authoritative, and the client needs no memory at all: `unauthorized` means
+ * exactly "not a valid token for a live user" again, which is a certain
+ * refusal on every attempt, not just the first.
+ *
  * THE CLASSIFICATION IS THE ROUTE'S OWN CONTRACT, not a guess about status
  * codes. `src/app/api/account/delete/route.ts` — this lane's file — answers
  * with a distinct `error` string per branch, and only three of them are
@@ -27,7 +46,7 @@
  */
 
 export type DeletionOutcome =
-  /** The server confirmed the account is gone. */
+  /** The server confirmed the account is gone — deleted now, or already. */
   | 'deleted'
   /** The server answered before deleting anything. Nothing was removed. */
   | 'refused'
@@ -41,30 +60,8 @@ const REFUSED_BEFORE_DELETING = new Set([
   'unavailable',
 ]);
 
-/**
- * AFTER AN UNKNOWN, NO REFUSAL IS CERTAIN ANY MORE — including this one.
- *
- * "Refused" is a claim about THE ACCOUNT ("nothing was removed"), not about
- * the request. Once one attempt has ended `unknown`, the account may already
- * be gone, and no answer to a LATER request can un-say that. A first pass at
- * this reasoned per-code — `unauthorized` is ambiguous because a deleted
- * user's token produces it, while `rate_limited` and `unavailable` are "not
- * something a deleted account causes" — and that asked the wrong question.
- * What causes the second response is irrelevant: the first request is the one
- * that may have deleted the account, and a rate-limited retry says nothing
- * whatsoever about it. Reporting either as `refused` reprints "nothing was
- * removed" over an account that is gone, which is the exact false assurance
- * the `unknown` state exists to prevent.
- *
- * So the rule is about certainty, not about codes: after an `unknown`, only a
- * CONFIRMED deletion is certain. Everything else stays `unknown`.
- */
-
 export async function requestAccountDeletionOutcome(
   accessToken: string,
-  /** Whether an earlier attempt in this session ended `unknown`, so the
-   *  account may already be gone. */
-  afterUnknown = false,
 ): Promise<DeletionOutcome> {
   let res: Response;
   try {
@@ -86,9 +83,6 @@ export async function requestAccountDeletionOutcome(
   }
 
   if (res.ok && body.ok === true) return 'deleted';
-  // A confirmed deletion is certain on any attempt. A refusal is only certain
-  // while no earlier attempt has left the account's fate open.
-  if (afterUnknown) return 'unknown';
   if (typeof body.error === 'string' && REFUSED_BEFORE_DELETING.has(body.error)) {
     return 'refused';
   }

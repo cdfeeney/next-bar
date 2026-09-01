@@ -84,9 +84,68 @@ describe('POST /api/account/delete', () => {
   it('401 when the token does not verify — deleteUser never fires', async () => {
     getUserMock.mockResolvedValue({
       data: { user: null },
-      error: { message: 'invalid JWT' },
+      error: { code: 'bad_jwt', message: 'invalid JWT' },
     });
     const res = await POST(makeRequest({ token: 'forged' }));
+    expect(res.status).toBe(401);
+    expect(deleteUserMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * IDEMPOTENCE, AND WHY IT IS THE WHOLE POINT.
+   *
+   * This route deletes the auth user and only THEN writes its reply, so a
+   * response lost in between leaves a browser that cannot tell whether it
+   * worked. The retry used to land on the `unauthorized` branch — because the
+   * user it names is gone — and the client could not distinguish that from
+   * "you were never signed in". Four review rounds then chased a client-side
+   * memory of its own uncertainty through every scope it could live in.
+   *
+   * The server always knew. GoTrue verifies the JWT's signature and expiry
+   * BEFORE loading its `sub`, so a validly signed token for a deleted user is
+   * `user_not_found` while a forged, foreign, expired or malformed one is
+   * `bad_jwt`. Answering the first as success makes the endpoint idempotent:
+   * the caller asked for the account to be gone, and it is gone.
+   */
+  it('200 ok when the token is valid but its user is already deleted', async () => {
+    getUserMock.mockResolvedValue({
+      data: { user: null },
+      error: { code: 'user_not_found', message: 'User from sub claim in JWT does not exist' },
+    });
+
+    const res = await POST(makeRequest({ token: 'valid-but-deleted' }));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    // Nothing to delete, and nothing is attempted.
+    expect(deleteUserMock).not.toHaveBeenCalled();
+  });
+
+  it('401 for a REVOKED session on a live user, which is not the same thing', async () => {
+    // `session_not_found` is deliberately not treated as gone: a signed-out
+    // token must never report a living account as deleted.
+    getUserMock.mockResolvedValue({
+      data: { user: null },
+      error: { code: 'session_not_found', message: 'Session from session_id claim in JWT does not exist' },
+    });
+
+    const res = await POST(makeRequest({ token: 'revoked' }));
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ ok: false, error: 'unauthorized' });
+    expect(deleteUserMock).not.toHaveBeenCalled();
+  });
+
+  it('401 when getUser fails with no code at all', async () => {
+    // Fail closed on anything unrecognised: only the one code that MEANS
+    // "already gone" is allowed to answer success.
+    getUserMock.mockResolvedValue({
+      data: { user: null },
+      error: { message: 'network' },
+    });
+
+    const res = await POST(makeRequest({ token: 'valid' }));
+
     expect(res.status).toBe(401);
     expect(deleteUserMock).not.toHaveBeenCalled();
   });

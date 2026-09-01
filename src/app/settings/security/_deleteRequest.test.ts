@@ -85,37 +85,37 @@ describe('requestAccountDeletionOutcome', () => {
   });
 });
 
-describe('retrying after an attempt that ended unknown', () => {
+/**
+ * THE `afterUnknown` ARGUMENT IS GONE, AND SO ARE THE THREE TESTS FOR IT.
+ *
+ * They asserted that a retry after an unknown outcome could no longer trust a
+ * refusal — a correct rule while `unauthorized` meant both "you were never
+ * signed in" and "the account you are asking about is gone". The client kept
+ * a memory of its own uncertainty to tell those apart, and four review rounds
+ * chased that memory through every scope it could live in.
+ *
+ * `/api/account/delete` now answers a validly signed token whose user no
+ * longer exists with success (pinned in `../../api/account/delete/route.test.ts`),
+ * so `unauthorized` means exactly "not a valid token for a live user" again.
+ * A refusal is certain on every attempt, which is what the cases above test,
+ * with no argument and no memory.
+ */
+describe('a refusal needs no history to be certain', () => {
   test.each(['unauthorized', 'rate_limited', 'unavailable'])(
-    'reports %s as unknown, because the FIRST attempt may already have deleted the account',
+    'reports %s as a refusal on any attempt',
     async (error) => {
-      // "Refused" is a claim about the ACCOUNT — "nothing was removed" — not
-      // about this request. Once one attempt has ended unknown, the account
-      // may be gone, and nothing a LATER request answers can un-say that.
-      //
-      // An earlier version of this fix reasoned per-code and kept
-      // rate_limited and unavailable as certain refusals on the grounds that
-      // "a deleted account cannot cause them". True, and beside the point:
-      // what caused the second response says nothing about what the first one
-      // did. That version reprinted "nothing was removed" over a destroyed
-      // account one tap later, which is the failure the unknown state exists
-      // to prevent.
       respond(429, { ok: false, error });
 
-      expect(await requestAccountDeletionOutcome('t', true)).toBe('unknown');
+      expect(await requestAccountDeletionOutcome('t')).toBe('refused');
     },
   );
 
-  test('a confirmed deletion on the retry is still a deletion', async () => {
-    // The one answer that stays certain: the server said it is gone.
+  test('a confirmed deletion is a deletion — including "already gone"', async () => {
+    // The route answers `user_not_found` with `{ ok: true }`, so this one
+    // response covers both "deleted just now" and "deleted by the attempt
+    // whose answer you lost".
     respond(200, { ok: true });
 
-    expect(await requestAccountDeletionOutcome('t', true)).toBe('deleted');
-  });
-
-  test('a first attempt is unaffected — refusals there are still certain', async () => {
-    respond(401, { ok: false, error: 'unauthorized' });
-
-    expect(await requestAccountDeletionOutcome('t', false)).toBe('refused');
+    expect(await requestAccountDeletionOutcome('t')).toBe('deleted');
   });
 });

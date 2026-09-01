@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import InstallPrompt from '@/components/InstallPrompt';
 import { OperationalState } from '@/components/states/OperationalState';
+import { useOperationalLoad } from '@/components/states/useOperationalLoad';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollowRequests } from '@/hooks/useFollowRequests';
 import { useFollows } from '@/hooks/useFollows';
@@ -183,37 +184,34 @@ function ConnectionsGroup({
   pendingCount: number;
   signedIn: boolean;
 }): JSX.Element {
-  const [blockedCount, setBlockedCount] = useState<number | null>(null);
   /**
-   * The read did not work. Distinct from "not signed in" and from "still
-   * loading", because only this one owes the user an explanation.
+   * THE SHARED HOOK, not a hand-rolled copy of half of it.
    *
-   * The em dash alone was the defect: it said the count is unknown and left it
-   * there forever, with nothing naming the failure and nothing to tap. Not
-   * printing 0 was right — "you have blocked nobody" is a claim a broken
-   * lookup is no evidence for — but an unexplained dash is a dead end of the
-   * same family V8-R-OPS-007 forbids.
+   * The first fix for the unexplained em dash added a `failed` flag and a
+   * Retry, which named the failure but skipped the rest of the policy: the
+   * three SILENT auto-retries and the refresh on reconnect that
+   * V8-R-OPS-001 requires. One transient blip therefore asked the user to fix
+   * it. `useOperationalLoad` is this lane's own module and already applies the
+   * whole rule, so using it is both smaller and more correct than the flag it
+   * replaces.
+   *
+   * The loader returns `null` for a failed read, which is the hook's own
+   * convention for "it did not work"; a successful EMPTY list is `[]`, not
+   * null, so "you have blocked nobody" is never inferred from a broken lookup.
+   * The epoch guard stays: an identity change mid-fetch must not repopulate
+   * the next account's view.
    */
-  const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-
-  useEffect(() => {
-    if (!signedIn) {
-      setBlockedCount(null);
-      setFailed(false);
-      return;
-    }
-    let cancelled = false;
+  const load = useCallback(async (): Promise<number | null> => {
+    if (!signedIn) return null;
     const epoch = getCacheEpoch();
-    void listBlockedProfiles(getBrowserSupabase()).then((result) => {
-      if (cancelled || getCacheEpoch() !== epoch) return;
-      setBlockedCount(result.ok ? result.value.length : null);
-      setFailed(!result.ok);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [signedIn, attempt]);
+    const result = await listBlockedProfiles(getBrowserSupabase());
+    if (getCacheEpoch() !== epoch || !result.ok) return null;
+    return result.value.length;
+  }, [signedIn]);
+
+  const blocked = useOperationalLoad(load);
+  const blockedCount = signedIn ? blocked.value : null;
+  const failed = signedIn && blocked.state === 'failed';
 
   const rows = (
     <Group label="Connections">
@@ -232,12 +230,13 @@ function ConnectionsGroup({
 
   if (!failed) return rows;
   // The rows stay — the Friends count is still true, and the destination is
-  // still reachable. Only the failed READ is reported, with one recovery.
+  // still reachable. Only the failed READ is reported, with one recovery, and
+  // only once the hook's silent budget is spent.
   return (
     <OperationalState
       kind="failed"
       message="We couldn't load your blocked list, so that count is missing."
-      recovery={{ label: 'Retry', onAction: () => setAttempt((n) => n + 1) }}
+      recovery={{ label: 'Retry', onAction: blocked.retry }}
     >
       {rows}
     </OperationalState>
@@ -277,6 +276,22 @@ function PrivacyGroup({
    */
   const [saveFailed, setSaveFailed] = useState(false);
 
+  /**
+   * A FAILURE BELONGS TO THE IDENTITY THAT PRODUCED IT.
+   *
+   * Signing out on this same page left the message standing over an account
+   * the screen no longer had: `profile.isPrivate` resets to null, which reads
+   * as "public", so it said "your account is still public" about nobody, with
+   * a Try again that silently no-ops because `userId` is null. The same
+   * missing reset stranded `busy` at true when an identity change landed
+   * mid-write (the epoch guard returns before `setBusy(false)`), leaving the
+   * switch permanently disabled.
+   */
+  useEffect(() => {
+    setSaveFailed(false);
+    setBusy(false);
+  }, [userId]);
+
   const handleToggle = useCallback(async () => {
     if (busy || userId === null || profile.isPrivate === null) return;
     const supabase = getBrowserSupabase();
@@ -307,37 +322,41 @@ function PrivacyGroup({
   return (
     <Group label="Privacy & sharing">
       {canTogglePrivacy ? (
-        <SwitchRow
-          label="Private account"
-          description={
-            profile.isPrivate
-              ? 'New followers must send a request you approve. People who already follow you keep access.'
-              : 'Anyone can follow you and your username appears in search.'
-          }
-          checked={profile.isPrivate === true}
-          busy={busy}
-          onChange={() => void handleToggle()}
-        />
-      ) : null}
-      {/* The switch has already flipped back by the time this renders. Say
-          WHY, so the revert reads as the server's refusal it is rather than a
-          glitch — and offer the same action again, which is the one recovery
-          there is. */}
-      {saveFailed ? (
-        <SlotRow>
-          <p className="text-red-400 text-xs leading-relaxed" role="status">
-            We couldn&apos;t save that change, so your account is still{' '}
-            {profile.isPrivate ? 'private' : 'public'}.
-          </p>
-          <button
-            type="button"
-            onClick={() => void handleToggle()}
-            disabled={busy}
-            className="w-full min-h-[44px] rounded-full bg-surface border border-border text-text font-display text-sm touch-manipulation disabled:opacity-40"
-          >
-            Try again
-          </button>
-        </SlotRow>
+        <>
+          <SwitchRow
+            label="Private account"
+            description={
+              profile.isPrivate
+                ? 'New followers must send a request you approve. People who already follow you keep access.'
+                : 'Anyone can follow you and your username appears in search.'
+            }
+            checked={profile.isPrivate === true}
+            busy={busy}
+            onChange={() => void handleToggle()}
+          />
+          {/* INSIDE the guard, so it cannot outlive the account it is about.
+              The switch has already flipped back by the time this renders:
+              say WHY, so the revert reads as the server's refusal it is
+              rather than a glitch, and offer the same action again — which is
+              reachable here precisely because the guard that renders it is the
+              one that makes `handleToggle` able to do anything. */}
+          {saveFailed ? (
+            <SlotRow>
+              <p className="text-red-400 text-xs leading-relaxed" role="status">
+                We couldn&apos;t save that change, so your account is still{' '}
+                {profile.isPrivate ? 'private' : 'public'}.
+              </p>
+              <button
+                type="button"
+                onClick={() => void handleToggle()}
+                disabled={busy}
+                className="w-full min-h-[44px] rounded-full bg-surface border border-border text-text font-display text-sm touch-manipulation disabled:opacity-40"
+              >
+                Try again
+              </button>
+            </SlotRow>
+          ) : null}
+        </>
       ) : null}
       <StatusRow
         label="Default story audience"

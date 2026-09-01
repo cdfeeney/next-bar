@@ -251,89 +251,23 @@ describe('cache ownership is separate from the import latch', () => {
   });
 
   /**
-   * THE DELETION-UNCERTAINTY LATCH IS DROPPED ONLY WHERE THE SESSION IS GONE.
+   * THE DELETION-UNCERTAINTY LATCH IS GONE, AND SO ARE ITS FOUR TESTS.
    *
-   * Two rounds, two different mistakes, and the pair below pins the boundary
-   * between them. First the key was merely registered in ALL_KEYS, which does
-   * nothing here — this function clears by EXPLICIT LIST and only
-   * clearAccountCache iterates ALL_KEYS — so the latch outlived every sign-out
-   * and an account that demonstrably came back stayed permanently uncertain.
-   * Then it was removed here unconditionally, on the argument that reaching
-   * the danger zone again requires a real sign-in. That argument is false for
-   * the SEAL: useAuth.signOut seals whatever supabase.auth.signOut() returned,
-   * and a failed sign-out resolves with { error } while keeping the session —
-   * so the danger zone stays mounted with the latch deleted, and the next
-   * retry reprints the false "nothing was removed".
+   * `next-bar:account:deletion-uncertain:v1` was a client-side memory of "an
+   * attempt to delete this account ended with no usable answer", invented
+   * because a retry's `unauthorized` meant both "you were never signed in" and
+   * "the account is already gone". Four review rounds moved it through every
+   * scope it could have — component state, view state Cancel reset, a mount a
+   * reload discarded, a second tab, a storage that refused the write — and the
+   * tests here pinned each of those rules in turn.
    *
-   * The rule that survives both: the seal is not evidence of anything, and the
-   * paths that ARE — useAuth's getSession()-empty and SIGNED_OUT handlers,
-   * which call clearResidualAccountCache directly — take the default and clear
-   * it. A successful button sign-out reaches those too.
+   * `/api/account/delete` now answers a validly signed token whose user no
+   * longer exists with success, so the retry is authoritative and the browser
+   * has nothing to remember. The key, its `ALL_KEYS` row, its explicit
+   * removal, the `keepDeletionLatch` parameter, the deferred-seal clause and
+   * the continuity inventory row were all deleted with it. Its contract is now
+   * tested where it actually lives, in `src/app/api/account/delete/route.test.ts`.
    */
-  it('sign-out seal: KEEPS the latch, because the session may still be alive', () => {
-    window.localStorage.setItem(
-      'next-bar:account:deletion-uncertain:v1',
-      'user-a',
-    );
-    writeCacheOwner('user-a');
-    sealAccountCacheOnSignOut();
-    expect(
-      window.localStorage.getItem('next-bar:account:deletion-uncertain:v1'),
-    ).toBe('user-a');
-  });
-
-  it('a residual clear — the no-session path — DOES drop the latch', () => {
-    // This is what useAuth calls when getSession() comes back empty or a
-    // SIGNED_OUT event arrives. There the session is demonstrably gone, and a
-    // later sign-in proves the account exists, so the uncertainty is over.
-    window.localStorage.setItem(
-      'next-bar:account:deletion-uncertain:v1',
-      'user-a',
-    );
-    writeCacheOwner('user-a');
-    clearResidualAccountCache();
-    expect(
-      window.localStorage.getItem('next-bar:account:deletion-uncertain:v1'),
-    ).toBeNull();
-  });
-
-  it('a residual clear COMPLETING a deferred seal keeps the latch', () => {
-    // useRatings calls clearResidualAccountCache when a pending ack lands
-    // after a seal that had to keep rows. That is a continuation of the seal,
-    // carrying the same lack of evidence about whether the session ended — and
-    // it cannot pass a flag, because src/hooks/ is another lane's. Enforcing
-    // it here means every caller is covered by one rule.
-    window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
-    writeCacheOwner('user-a');
-    sealAccountCacheOnSignOut(); // defers: the unsynced row is kept
-    expect(isSealDeferred()).toBe(true);
-
-    window.localStorage.setItem(
-      'next-bar:account:deletion-uncertain:v1',
-      'user-a',
-    );
-    clearResidualAccountCache();
-    expect(
-      window.localStorage.getItem('next-bar:account:deletion-uncertain:v1'),
-    ).toBe('user-a');
-  });
-
-  it('the residual clear drops the latch even when pending rows defer the rest', () => {
-    // The removal must not be hostage to the ratings/pairwise pending checks —
-    // an unsynced rating has nothing to do with whether a deletion attempt was
-    // left open.
-    window.localStorage.setItem(RATINGS_KEY, '[{"barId":"attaboy"}]');
-    window.localStorage.setItem(
-      'next-bar:account:deletion-uncertain:v1',
-      'user-a',
-    );
-    writeCacheOwner('user-a');
-    clearResidualAccountCache();
-    expect(window.localStorage.getItem(RATINGS_KEY)).not.toBeNull();
-    expect(
-      window.localStorage.getItem('next-bar:account:deletion-uncertain:v1'),
-    ).toBeNull();
-  });
 
   it('sign-out seal: keeps rows whose import never completed', () => {
     // Round-3 (Claude high): explicit sign-out destroyed local rows that had

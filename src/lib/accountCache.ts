@@ -72,44 +72,6 @@ const DIRTY_KEY = 'next-bar:dirty:v1';
 
 export type DirtyEntry = { barId: string; stamp: string; op: 'u' | 'd' };
 
-/**
- * DELETION UNCERTAINTY — the one fact that has to outlive the screen that
- * learns it (WP8 cycle-5 ruling, after the same root cause recurred three
- * times).
- *
- * `/api/account/delete` destroys the auth user and only THEN writes its
- * reply, so a response lost in between leaves a deleted account and a browser
- * that cannot tell. Settings calls that outcome `unknown` and, once it has
- * happened, may never again say "nothing was removed" about that account: a
- * later refusal is a fact about the RETRY, not about the account the first
- * attempt may already have destroyed.
- *
- * Every earlier home for that fact was too short-lived — no flag at all, then
- * a flag derived from view state that Cancel resets, then a `useState` latch
- * that a remount (or the reload the screen itself recommends) discards. So it
- * is stored, and it is registered HERE rather than written to a private key,
- * because an unregistered key is one no sign-out or foreign-cache wipe ever
- * clears. The VALUE is the user id it concerns, so a latch that outlives its
- * session still cannot make the next account's screen cautious.
- *
- * It is account data, and it is dropped exactly where the session is
- * demonstrably GONE: a confirmed deletion (`destroyAccountDataOnDeletion`),
- * and the `clearResidualAccountCache` calls `useAuth` makes when `getSession()`
- * comes back empty or a `SIGNED_OUT` event arrives. Both need an EXPLICIT
- * removal — `ALL_KEYS` membership alone would not have done it, because that
- * list is iterated only by `clearAccountCache`.
- *
- * The sign-out SEAL deliberately keeps it. The seal runs after
- * `supabase.auth.signOut()` whatever that returned, and a failed sign-out
- * resolves with `{ error }` while keeping the session — so the seal proves
- * nothing about whether the session ended, and a successful one raises
- * `SIGNED_OUT` anyway.
- *
- * The lane that owns Settings reads and writes it through
- * `src/app/settings/security/_deletionUncertainty.ts`; only the key lives here.
- */
-export const DELETION_UNCERTAIN_KEY = 'next-bar:account:deletion-uncertain:v1';
-
 const ALL_KEYS = [
   RATINGS_KEY,
   RATINGS_MERGED_KEY,
@@ -117,7 +79,6 @@ const ALL_KEYS = [
   PAIRWISE_MERGED_KEY,
   FOLLOWS_KEY,
   DIRTY_KEY,
-  DELETION_UNCERTAIN_KEY,
   OWNER_KEY,
 ] as const;
 
@@ -333,20 +294,8 @@ function hasRows(dataKey: string): boolean {
  * own un-uploaded rows on their own device.
  *
  * Returns true when residue was cleared.
- *
- * `keepDeletionLatch` exists for ONE caller and one reason (cycle-5 round 2,
- * both lanes). The deletion-uncertainty latch may only be dropped where the
- * session is demonstrably GONE. The two call sites in `useAuth` that invoke
- * this function directly are exactly those: `getSession()` came back empty, or
- * a `SIGNED_OUT` event arrived. `sealAccountCacheOnSignOut` is NOT — it runs
- * after `supabase.auth.signOut()` whatever that returned, and supabase-js
- * resolves a failed sign-out with `{ error }` while KEEPING the session. So
- * the seal passes true and the direct calls take the default; a SUCCESSFUL
- * button sign-out still clears the latch, because it also raises `SIGNED_OUT`.
  */
-export function clearResidualAccountCache(
-  { keepDeletionLatch = false }: { keepDeletionLatch?: boolean } = {},
-): boolean {
+export function clearResidualAccountCache(): boolean {
   if (typeof window === 'undefined') return false;
   try {
     const owner = window.localStorage.getItem(OWNER_KEY);
@@ -376,36 +325,6 @@ export function clearResidualAccountCache(
     }
     // Follows are server-authoritative demo state — never pending.
     window.localStorage.removeItem(FOLLOWS_KEY);
-    // The deletion-uncertainty latch, and this is the line that makes its
-    // documented lifecycle true: `ALL_KEYS` membership alone does nothing
-    // here, because this function removes by explicit list and only
-    // `clearAccountCache` iterates `ALL_KEYS`. Without it the latch outlived
-    // every ordinary sign-out and an account that demonstrably came back
-    // stayed permanently uncertain.
-    //
-    // BUT ONLY WHERE THE SESSION IS DEMONSTRABLY GONE, which the seal cannot
-    // promise. A first version dropped it here unconditionally on the argument
-    // that "reaching the danger zone again requires a real sign-in" — false on
-    // the button path: `useAuth.signOut` seals whatever `supabase.auth
-    // .signOut()` returned, and a failed sign-out resolves with `{ error }`
-    // and keeps the session, so the danger zone stays mounted with the latch
-    // deleted and the next retry reprints "nothing was removed".
-    //
-    // `completingDeferredSeal` closes the same hole one caller further out.
-    // `useRatings` calls this function when a pending ack lands after a seal
-    // that had to keep rows — that is a CONTINUATION of the seal, carrying the
-    // same lack of evidence, and it takes no argument this lane could add
-    // because `src/hooks/` is another lane's. The flag it consults is already
-    // here, so the rule is enforced where every caller passes rather than at
-    // each of them.
-    //
-    // Both conditions err the same way: keeping a latch too long only makes
-    // the screen over-cautious, while dropping one too early is the false
-    // assurance the whole design exists to prevent.
-    const completingDeferredSeal = sealDeferredPendingAcks;
-    if (!keepDeletionLatch && !completingDeferredSeal) {
-      window.localStorage.removeItem(DELETION_UNCERTAIN_KEY);
-    }
     // The owner marker ALWAYS survives (V8-2 round-3). Ownership is what
     // lets guardAgainstForeignCache() wipe the personal FOREIGN_ONLY_KEYS
     // when a DIFFERENT account signs in next — removing it here made
@@ -463,13 +382,7 @@ export function sealAccountCacheOnSignOut(): void {
   // is managed inside clearResidualAccountCache so every sign-out flavor
   // (button, expiry, cross-tab) gets identical semantics.
   cacheEpoch += 1;
-  // KEEP the deletion-uncertainty latch. This runs after
-  // `supabase.auth.signOut()` whatever it returned, and a failed sign-out
-  // resolves with `{ error }` while keeping the session — so the seal is not
-  // evidence that the session ended, and the latch must outlive it. A
-  // SUCCESSFUL sign-out also raises `SIGNED_OUT`, whose handler calls
-  // `clearResidualAccountCache()` directly and does clear it.
-  clearResidualAccountCache({ keepDeletionLatch: true });
+  clearResidualAccountCache();
 }
 
 /**

@@ -18,10 +18,6 @@ import {
   requestAccountDeletionOutcome,
   type DeletionOutcome,
 } from './_deleteRequest';
-import {
-  latchDeletionUnknown,
-  sawDeletionUnknown,
-} from './_deletionUncertainty';
 
 /**
  * Security & account (approved/next-bar-account-a-settings.png, screen 5).
@@ -138,14 +134,8 @@ async function clearServerRatings(
  */
 async function performAccountDeletion(
   auth: SignedInAuth,
-  /** Whether an earlier attempt already ended `unknown`, which makes a
-   *  subsequent `unauthorized` ambiguous rather than a certain refusal. */
-  afterUnknown: boolean,
 ): Promise<DeletionOutcome> {
-  const outcome = await requestAccountDeletionOutcome(
-    auth.session.access_token,
-    afterUnknown,
-  );
+  const outcome = await requestAccountDeletionOutcome(auth.session.access_token);
   if (outcome !== 'deleted') return outcome;
   // The auth user is gone server-side. signOut() SEALS the cache — right for
   // an ordinary sign-out, wrong here: this owner can never return. Deletion
@@ -315,61 +305,33 @@ function isDeleteConfirmed(text: string): boolean {
 function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
   const [state, setState] = useState<DeleteState>('idle');
   const [confirmText, setConfirmText] = useState('');
-  /**
-   * The in-memory half of "an attempt for this account has ended `unknown`".
-   * It is a FALLBACK, not the source — see `priorUnknown` below.
-   *
-   * It exists only for a browser where storage cannot be written at all
-   * (private mode, quota): there the stored latch silently no-ops and this is
-   * all that is left, which still covers the retry the user is most likely to
-   * make, on this screen, right now.
-   */
-  const [unknownThisMount, setUnknownThisMount] = useState(false);
-  /**
-   * No store would take the latch, so the uncertainty does not survive this
-   * page. The screen's own advice is to RELOAD and try signing in — and after
-   * that reload nothing on the client can know an attempt was ever made, so a
-   * later refusal would sound certain again.
-   *
-   * The honest response is to say so here, once, rather than to let the next
-   * screen speak with a confidence nothing supports.
-   */
-  const [unrecorded, setUnrecorded] = useState(false);
 
+  /**
+   * NO CLIENT-SIDE MEMORY OF PAST ATTEMPTS — the cycle-5 redesign.
+   *
+   * This screen used to carry a latch recording that an attempt had ended
+   * `unknown`, because a retry's `unauthorized` meant both "you were never
+   * signed in" and "the account is already gone". Four review rounds moved
+   * that latch through every scope it could have — component state, view state
+   * Cancel reset, a mount a reload discarded, a second tab, a storage that
+   * refused the write — and each fix was correct and relocated the problem,
+   * because the browser was being asked to remember something only the server
+   * could know.
+   *
+   * `/api/account/delete` now answers a validly signed token whose user is
+   * gone with success. The retry is authoritative, so `refused` is certain on
+   * every attempt and there is nothing here to keep.
+   */
   const handleDelete = async () => {
     if (state === 'deleting') return;
     if (!isDeleteConfirmed(confirmText)) return;
     setState('deleting');
-    /**
-     * READ THE FACT WHEN IT IS NEEDED, NOT WHEN THE SCREEN WAS BUILT.
-     *
-     * This is the fourth home for this one fact and the first that is not a
-     * cache of it. Each earlier version was a snapshot with a shorter life
-     * than the fact itself: derived from view state that Cancel resets; a
-     * `useState` a remount discards; then a `useState` SEEDED from storage on
-     * mount — which is correct the instant it is read and stale for as long as
-     * the screen stays open. That last one is what the panel caught: two tabs
-     * on the same account, the first ends `unknown`, and the second still
-     * holds the seed it took before any of that happened, so its retry gets
-     * asked as a first attempt and reprints "nothing was removed" over an
-     * account that may be gone.
-     *
-     * A read at the moment of the attempt has no staleness window to close,
-     * needs no `storage` listener, and subsumes the mount seed entirely.
-     */
-    const priorUnknown = unknownThisMount || sawDeletionUnknown(auth.user.id);
-    const outcome = await performAccountDeletion(auth, priorUnknown);
+    const outcome = await performAccountDeletion(auth);
     // 'deleted' has already navigated away. The other two both stay here and
     // say only what they know: a refusal is the honest "nothing was removed",
     // a lost answer is not allowed to borrow that sentence.
     if (outcome === 'refused') setState('failed');
-    if (outcome === 'unknown') {
-      // Storage FIRST: it is the real record. The flag below is only what
-      // keeps this mount honest when no store would take it.
-      setUnrecorded(!latchDeletionUnknown(auth.user.id));
-      setUnknownThisMount(true);
-      setState('unknown');
-    }
+    if (outcome === 'unknown') setState('unknown');
   };
 
   return (
@@ -403,7 +365,6 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
         ) : (
           <DeleteConfirm
             state={state}
-            unrecorded={unrecorded}
             confirmText={confirmText}
             onConfirmTextChange={setConfirmText}
             onCancel={() => {
@@ -420,15 +381,12 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
 
 function DeleteConfirm({
   state,
-  unrecorded,
   confirmText,
   onConfirmTextChange,
   onCancel,
   onDelete,
 }: {
   state: DeleteState;
-  /** No store accepted the uncertainty, so it will not survive a reload. */
-  unrecorded: boolean;
   confirmText: string;
   onConfirmTextChange: (value: string) => void;
   onCancel: () => void;
@@ -473,18 +431,6 @@ function DeleteConfirm({
           We couldn&apos;t confirm whether your account was deleted — it may
           already be gone. Reload this page and try to sign in to check before
           trying again, or email hi@next-bar.app.
-        </p>
-      ) : null}
-      {/* Storage refused the record, so the advice above outlives the only
-          note that this attempt was ever uncertain. Say that plainly: after
-          the reload, this screen will have forgotten, and signing in is then
-          the ONLY way to find out. Silence here would let the next visit
-          sound certain on the strength of a fact nobody kept. */}
-      {state === 'unknown' && unrecorded ? (
-        <p className="text-red-400 text-xs" role="status">
-          This browser wouldn&apos;t let us remember that, so after a reload
-          this page won&apos;t know either — signing in is the only way to
-          check.
         </p>
       ) : null}
       {/* Cancel is the larger, more prominent of the two. */}

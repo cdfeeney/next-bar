@@ -2,6 +2,8 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { SILENT_AUTO_RETRY_CAP } from '@/components/states/useOperationalLoad';
+
 /**
  * Settings home — V8-R-ACC-005's five sections, and the honesty rule that
  * governs the rows inside them.
@@ -50,8 +52,14 @@ vi.mock('@/lib/profile.server', () => ({
   setOwnPrivacy: vi.fn(async () => privacySaveOk),
 }));
 vi.mock('@/lib/accountCache', () => ({ getCacheEpoch: () => 1 }));
+/** Counted, so the SILENT half of the retry policy is asserted rather than
+ *  assumed — a Retry button proves only that the manual half exists. */
+let blockedReads = 0;
 vi.mock('@/lib/moderation/blocks', () => ({
-  listBlockedProfiles: async () => blocked,
+  listBlockedProfiles: async () => {
+    blockedReads += 1;
+    return blocked;
+  },
 }));
 vi.mock('../_useOwnProfile', () => ({
   useOwnProfile: () => ({
@@ -73,6 +81,7 @@ import SettingsHomePage from './page';
 beforeEach(() => {
   authStatus = 'signed-in';
   blocked = { ok: true, value: ['a', 'b'] };
+  blockedReads = 0;
   privacySaveOk = true;
 });
 
@@ -267,5 +276,63 @@ describe('a private-account change the server rejects', () => {
       expect(screen.queryByText(/couldn't save that change/i)).toBeNull(),
     );
     expect(screen.queryByRole('button', { name: /try again/i })).toBeNull();
+  });
+
+  it('does not outlive the account it is about', async () => {
+    // The failure row rendered outside the canTogglePrivacy guard and was
+    // never reset on identity change, so signing out on this same page left
+    // "your account is still public" standing about an account the screen no
+    // longer had — profile.isPrivate resets to null, which reads as public —
+    // beside a Try again that silently no-opped because userId was null.
+    privacySaveOk = false;
+    const view = render(<SettingsHomePage />);
+    await userEvent.click(privacySwitch());
+    await waitFor(() =>
+      expect(screen.getByText(/couldn't save that change/i)).toBeInTheDocument(),
+    );
+
+    authStatus = 'signed-out';
+    view.rerender(<SettingsHomePage />);
+
+    expect(screen.queryByText(/couldn't save that change/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /try again/i })).toBeNull();
+  });
+});
+
+/**
+ * V8-R-OPS-001's retry policy is "capped at 3 silent auto-retries, then
+ * manual" — the WHOLE rule, not just the manual half.
+ *
+ * The first fix for the unexplained em dash added a Retry after ONE failed
+ * request, so a single transient blip asked the user to fix it. The count is
+ * asserted here rather than argued: the shared hook owns the policy, and this
+ * is what using it actually means.
+ */
+describe('the blocked-list read follows the shared retry policy', () => {
+  it('tries silently before asking, and asks only once the budget is spent', async () => {
+    blocked = { ok: false };
+    render(<SettingsHomePage />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('operational-state')).toBeInTheDocument(),
+    );
+    // 1 initial attempt + SILENT_AUTO_RETRY_CAP retries, then it stops.
+    expect(blockedReads).toBe(SILENT_AUTO_RETRY_CAP + 1);
+  });
+
+  it('a manual retry that works clears the failure and shows the count', async () => {
+    blocked = { ok: false };
+    render(<SettingsHomePage />);
+    await waitFor(() =>
+      expect(screen.getByTestId('operational-state')).toBeInTheDocument(),
+    );
+
+    blocked = { ok: true, value: ['a', 'b'] };
+    await userEvent.click(screen.getByRole('button', { name: /retry/i }));
+
+    await waitFor(() =>
+      expect(within(section('Connections')).getByText('2')).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId('operational-state')).toBeNull();
   });
 });

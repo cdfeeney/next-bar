@@ -34,24 +34,15 @@ vi.mock('@/components/SetPassword', () => ({ default: () => null }));
 vi.mock('@/lib/accountCache', () => ({
   abandonInFlightSyncs: vi.fn(),
   destroyAccountDataOnDeletion: vi.fn(),
-  // The real registered key, not a stand-in: the persistence test below is
-  // about the value that actually survives a remount.
-  DELETION_UNCERTAIN_KEY: 'next-bar:account:deletion-uncertain:v1',
 }));
 /**
- * The mock HONOURS `afterUnknown` rather than ignoring it. A mock that drops
- * the argument cannot tell a correct caller from one that forgets the flag,
- * and the cancel-then-retry defect below passed a green suite for exactly
- * that reason.
+ * The classifier takes only a token now. It used to carry an `afterUnknown`
+ * flag — the client's memory of its own uncertainty — which the cycle-5
+ * redesign removed by making `/api/account/delete` answer a validly signed
+ * token whose user is gone with success.
  */
-const seenAfterUnknown: boolean[] = [];
 vi.mock('./_deleteRequest', () => ({
-  requestAccountDeletionOutcome: vi.fn(async (_token: string, afterUnknown = false) => {
-    seenAfterUnknown.push(afterUnknown);
-    // Mirrors the real classifier: once an attempt has ended unknown, nothing
-    // short of a confirmed deletion is certain again.
-    return afterUnknown && deletionOutcome !== 'deleted' ? 'unknown' : deletionOutcome;
-  }),
+  requestAccountDeletionOutcome: vi.fn(async () => deletionOutcome),
 }));
 vi.mock('@/lib/pairwise.server', () => ({
   deleteAllServerComparisons: vi.fn(async () => true),
@@ -65,13 +56,7 @@ import SecurityAccountPage from './page';
 
 beforeEach(() => {
   deletionOutcome = 'deleted';
-  seenAfterUnknown.length = 0;
-  // The uncertainty latch is now STORED, so it outlives a test that does not
-  // clear it — which is the whole point of the change, and exactly why the
-  // suite has to reset it between cases. Both stores: the latch falls back to
-  // sessionStorage when localStorage refuses.
-  window.localStorage.clear();
-  window.sessionStorage.clear();
+  vi.clearAllMocks();
 });
 
 const dangerZone = (): HTMLElement =>
@@ -218,21 +203,37 @@ describe('V8-R-ACC-012 — the deletion result says only what is known', () => {
     expect(screen.getByText(/try to sign in to check/i)).toBeTruthy();
   });
 
-  it('remembers an unknown outcome across Cancel, so a re-armed retry cannot claim a refusal', async () => {
-    // The flag was first derived from the transient view state, which Cancel
-    // resets to 'idle'. So: attempt ends unknown -> Cancel -> re-arm -> retry
-    // asked as if it were a FIRST attempt, the dead token produced the route's
-    // `unauthorized`, and the screen printed "nothing was removed" over an
-    // account the first attempt may already have destroyed. Whether an earlier
-    // attempt left the account's fate open is a fact about the SESSION, not
-    // about what is currently on screen.
+  /**
+   * THE SIX TESTS THAT USED TO FOLLOW ARE GONE WITH THE THING THEY PINNED.
+   *
+   * They asserted that this screen REMEMBERED an unknown outcome — across
+   * Cancel, across a remount, across tabs, into sessionStorage when
+   * localStorage refused, and not into another account's view. Every one was a
+   * correct rule about a client-side latch that existed only because a retry's
+   * `unauthorized` meant both "you were never signed in" and "the account is
+   * already gone".
+   *
+   * `/api/account/delete` now answers a validly signed token whose user is
+   * gone with success (`route.test.ts` pins that), so the retry is
+   * authoritative: `refused` is certain on every attempt, not just the first,
+   * and there is no memory left to test. The case below is what remains, and
+   * it asserts the OPPOSITE of what those six did — which is the point.
+   */
+  it('a refusal is certain on EVERY attempt, including one after an unknown', async () => {
+    // The rule the latch existed to break, now true by construction. A retry
+    // that the server answers before deleting anything is a certain refusal
+    // whatever happened on an earlier attempt, because `unauthorized` no
+    // longer means "possibly already deleted" — that case answers success.
     deletionOutcome = 'unknown';
     await armAndDelete();
-    await waitFor(() => expect(seenAfterUnknown).toEqual([false]));
+    await waitFor(() =>
+      expect(
+        screen.getByText(/couldn.t confirm whether your account was deleted/i),
+      ).toBeTruthy(),
+    );
 
     await userEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
 
-    // Re-arm and retry. The server now refuses outright.
     deletionOutcome = 'refused';
     await userEvent.click(
       screen.getByRole('button', { name: /^Delete account$/i }),
@@ -242,151 +243,9 @@ describe('V8-R-ACC-012 — the deletion result says only what is known', () => {
       screen.getByRole('button', { name: /permanently delete/i }),
     );
 
-    // The retry must be asked as a retry …
-    await waitFor(() => expect(seenAfterUnknown).toEqual([false, true]));
-    // … and the screen must not go back to the confident sentence.
-    expect(screen.queryByText(/nothing was removed/i)).toBeNull();
-  });
-
-  it('remembers an unknown outcome across a REMOUNT — the reload it recommends', async () => {
-    // The same root cause one step further out, and the reason the latch is
-    // now stored rather than held in `useState`. The unknown message tells the
-    // user to RELOAD and try to sign in; a cached JWT then re-renders this
-    // screen signed-in with a fresh mount, and a mount-scoped flag is gone.
-    // The retry's `unauthorized` — which is precisely what a DELETED user's
-    // token produces — then read as a certain refusal and reprinted "nothing
-    // was removed" over an account that no longer exists.
-    deletionOutcome = 'unknown';
-    const first = render(<SecurityAccountPage />);
-    await userEvent.click(
-      screen.getByRole('button', { name: /^Delete account$/i }),
+    await waitFor(() =>
+      expect(screen.getByText(/nothing was removed/i)).toBeTruthy(),
     );
-    await userEvent.type(screen.getByLabelText(/type/i), 'DELETE');
-    await userEvent.click(
-      screen.getByRole('button', { name: /permanently delete/i }),
-    );
-    await waitFor(() => expect(seenAfterUnknown).toEqual([false]));
-
-    // Everything React was holding goes away. Only storage survives.
-    first.unmount();
-
-    deletionOutcome = 'refused';
-    render(<SecurityAccountPage />);
-    await userEvent.click(
-      screen.getByRole('button', { name: /^Delete account$/i }),
-    );
-    await userEvent.type(screen.getByLabelText(/type/i), 'DELETE');
-    await userEvent.click(
-      screen.getByRole('button', { name: /permanently delete/i }),
-    );
-
-    await waitFor(() => expect(seenAfterUnknown).toEqual([false, true]));
-    expect(screen.queryByText(/nothing was removed/i)).toBeNull();
-  });
-
-  it('sees an unknown outcome recorded by ANOTHER TAB after this one mounted', async () => {
-    // A seed taken at mount is correct for exactly one instant. Two tabs on
-    // the same account: tab A's attempt ends unknown, tab B was already open
-    // and still holds the seed it read before that happened, so B's retry gets
-    // asked as a first attempt and the deleted user's 401 reprints "nothing
-    // was removed". The fix is to read the fact at the moment of the attempt,
-    // which has no staleness window at all.
-    render(<SecurityAccountPage />);
-
-    // Tab A, elsewhere, ends unknown for this same user.
-    window.localStorage.setItem(
-      'next-bar:account:deletion-uncertain:v1',
-      'me',
-    );
-
-    deletionOutcome = 'refused';
-    await userEvent.click(
-      screen.getByRole('button', { name: /^Delete account$/i }),
-    );
-    await userEvent.type(screen.getByLabelText(/type/i), 'DELETE');
-    await userEvent.click(
-      screen.getByRole('button', { name: /permanently delete/i }),
-    );
-
-    await waitFor(() => expect(seenAfterUnknown).toEqual([true]));
-    expect(screen.queryByText(/nothing was removed/i)).toBeNull();
-  });
-
-  it('falls back to sessionStorage when localStorage refuses the write', async () => {
-    // The latch was back to mount-scoped whenever localStorage threw — a full
-    // or blocked store — and the unknown message tells the user to RELOAD,
-    // which is exactly what a mount-scoped fact does not survive.
-    // sessionStorage has its own quota and survives that reload.
-    //
-    // The patch is an OWN property on the localStorage instance and is
-    // DELETED afterwards, not reassigned: leaving an own `setItem` behind
-    // shadows `Storage.prototype`, which is how the next test patches both
-    // stores at once — and a restore that quietly disarms a later test is
-    // worse than no restore at all.
-    Object.defineProperty(window.localStorage, 'setItem', {
-      configurable: true,
-      value: () => {
-        throw new DOMException('QuotaExceededError');
-      },
-    });
-    try {
-      deletionOutcome = 'unknown';
-      await armAndDelete();
-      await waitFor(() => expect(seenAfterUnknown).toEqual([false]));
-
-      expect(
-        window.sessionStorage.getItem('next-bar:account:deletion-uncertain:v1'),
-      ).toBe('me');
-      // And the screen does NOT claim it could not remember, because it could.
-      expect(screen.queryByText(/wouldn.t let us remember/i)).toBeNull();
-    } finally {
-      delete (window.localStorage as unknown as Record<string, unknown>).setItem;
-      window.sessionStorage.clear();
-    }
-  });
-
-  it('says plainly when NO store would keep the uncertainty', async () => {
-    // Both stores refusing is the one case nothing on the client can survive a
-    // reload. The screen's own advice outlives the record, so it must not let
-    // the next visit sound certain — it says the record was not kept.
-    // Patched on the PROTOTYPE, which both stores share, so neither can take
-    // the write. This only bites because the test above deletes its own-property
-    // patch rather than reassigning it.
-    const original = Storage.prototype.setItem;
-    Storage.prototype.setItem = () => {
-      throw new DOMException('QuotaExceededError');
-    };
-    try {
-      deletionOutcome = 'unknown';
-      await armAndDelete();
-
-      await waitFor(() =>
-        expect(screen.getByText(/wouldn.t let us remember/i)).toBeTruthy(),
-      );
-      // The primary honest sentence is still there; this only adds to it.
-      expect(
-        screen.getByText(/couldn.t confirm whether your account was deleted/i),
-      ).toBeTruthy();
-      expect(screen.queryByText(/nothing was removed/i)).toBeNull();
-    } finally {
-      Storage.prototype.setItem = original;
-    }
-  });
-
-  it('does not make a DIFFERENT account cautious — the latch names its user', async () => {
-    // The negative half of "keyed to the user id". A latch that outlived its
-    // session must not silently downgrade the next owner of this device to
-    // permanent uncertainty about an account nothing ever tried to delete.
-    window.localStorage.setItem(
-      'next-bar:account:deletion-uncertain:v1',
-      'someone-else',
-    );
-    deletionOutcome = 'refused';
-
-    await armAndDelete();
-
-    await waitFor(() => expect(seenAfterUnknown).toEqual([false]));
-    expect(screen.getByText(/nothing was removed/i)).toBeTruthy();
   });
 });
 
