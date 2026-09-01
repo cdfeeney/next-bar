@@ -250,6 +250,25 @@ describe('cache ownership is separate from the import latch', () => {
     expect(window.localStorage.getItem('next-bar:lists:v1')).toBeNull();
   });
 
+  /**
+   * THE DELETION-UNCERTAINTY LATCH IS GONE, AND SO ARE ITS FOUR TESTS.
+   *
+   * `next-bar:account:deletion-uncertain:v1` was a client-side memory of "an
+   * attempt to delete this account ended with no usable answer", invented
+   * because a retry's `unauthorized` meant both "you were never signed in" and
+   * "the account is already gone". Four review rounds moved it through every
+   * scope it could have — component state, view state Cancel reset, a mount a
+   * reload discarded, a second tab, a storage that refused the write — and the
+   * tests here pinned each of those rules in turn.
+   *
+   * `/api/account/delete` now answers a validly signed token whose user no
+   * longer exists with success, so the retry is authoritative and the browser
+   * has nothing to remember. The key, its `ALL_KEYS` row, its explicit
+   * removal, the `keepDeletionLatch` parameter, the deferred-seal clause and
+   * the continuity inventory row were all deleted with it. Its contract is now
+   * tested where it actually lives, in `src/app/api/account/delete/route.test.ts`.
+   */
+
   it('sign-out seal: keeps rows whose import never completed', () => {
     // Round-3 (Claude high): explicit sign-out destroyed local rows that had
     // never reached the server. Sealed instead: kept under the latched owner.

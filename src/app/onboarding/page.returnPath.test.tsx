@@ -13,9 +13,17 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
  *
  * So these tests assert the destination, through the component, on all three
  * paths that end onboarding: submit, skip, and the already-onboarded bounce.
+ *
+ * `seq=done` on the URLs below: `/onboarding` is visited TWICE — once as the
+ * door into the age/location/quiz sequence, once as its last step, the identity
+ * form — and the marker is what tells those apart (see ./_sequence). These
+ * tests are about the FORM, so they set up the second visit. The entry half is
+ * pinned in ./page.sequence.test.tsx, including that an unmarked visit
+ * redirects rather than rendering the form.
  */
 
 const PLAN_PATH = '/night-out/2f1c9e2a-0000-4000-8000-000000000000';
+const DONE = '&seq=done';
 
 const replaced: string[] = [];
 const assigned: string[] = [];
@@ -68,7 +76,7 @@ beforeEach(() => {
   assigned.length = 0;
   profileHandle = null;
   claimResult = 'chosen';
-  search = `?next=${encodeURIComponent(PLAN_PATH)}`;
+  search = `?next=${encodeURIComponent(PLAN_PATH)}${DONE}`;
   Object.defineProperty(window, 'location', {
     configurable: true,
     value: {
@@ -115,7 +123,7 @@ describe('onboarding returns the user to where the gate interrupted them', () =>
   });
 
   test('with no ?next= the destination is home', async () => {
-    search = '';
+    search = '?seq=done';
     const user = userEvent.setup();
     render(<OnboardingPage />);
     await screen.findByPlaceholderText('username');
@@ -128,7 +136,7 @@ describe('onboarding returns the user to where the gate interrupted them', () =>
     // The control-character bypass round 2 filed as HIGH: URLSearchParams
     // decodes %09 to a tab, and the WHATWG parser strips it before resolving,
     // turning this into //evil.example.
-    search = '?next=%2F%09%2Fevil.example';
+    search = `?next=%2F%09%2Fevil.example${DONE}`;
     const user = userEvent.setup();
     render(<OnboardingPage />);
     await screen.findByPlaceholderText('username');

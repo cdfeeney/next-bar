@@ -1,712 +1,352 @@
 'use client';
 
 import Link from 'next/link';
-import { drainBarWrites, useRatings } from '@/hooks/useRatings';
-import { useAuth } from '@/hooks/useAuth';
-import { loadProfile, clearProfile } from '@/lib/storedProfile';
 import { useEffect, useState } from 'react';
-import InstallPrompt from '@/components/InstallPrompt';
-import SetPassword from '@/components/SetPassword';
-import ClaimHandle from '@/components/ClaimHandle';
-import DisplayNameEditor from '@/components/DisplayNameEditor';
-import { fetchOwnProfile, setOwnPrivacy } from '@/lib/profile.server';
-import { fetchOutgoingRequests } from '@/lib/follows.server';
-import {
-  abandonInFlightSyncs,
-  destroyAccountDataOnDeletion,
-  getCacheEpoch,
-} from '@/lib/accountCache';
-import { requestAccountDeletion } from '@/lib/accountDeletion';
-import { seedSampleNight, clearSampleNight, isDemoSeeded } from '@/lib/demo';
-import { deleteAllServerRatings } from '@/lib/ratings.server';
-import { deleteAllServerComparisons } from '@/lib/pairwise.server';
-import { getBrowserSupabase } from '@/lib/supabase/client';
-import { deriveTasteProfile } from '@/lib/tasteProfile';
-import { deriveBadges } from '@/lib/badges';
+import Avatar from '@/components/Avatar';
+import { OperationalState } from '@/components/states/OperationalState';
+import { useAuth } from '@/hooks/useAuth';
+import { useFollowRequests } from '@/hooks/useFollowRequests';
+import { useFollows } from '@/hooks/useFollows';
+import { useRatings } from '@/hooks/useRatings';
+import { assembleNight, lastNightKey } from '@/lib/nightLog';
+import { nycNightKey } from '@/lib/nightKey';
+import { composeRecap, type Recap } from '@/lib/recap';
 import { useBars } from '@/lib/useBars';
-import { displayTag } from '@/lib/tagDisplay';
+import { useOwnProfile } from './_useOwnProfile';
 
-// Dismissal flag for the claim-your-username nudge. UI preference only —
-// deliberately NOT in accountCache ALL_KEYS (it holds no account data; a
-// shared browser leaking "nudge was dismissed" is harmless).
-const HANDLE_NUDGE_DISMISSED_KEY = 'next-bar:handle-nudge-dismissed:v1';
+/**
+ * Account — the profile ROOT (approved/next-bar-account-a-tabs.png).
+ *
+ * This route used to serve the legacy Settings page under a renamed tab. It is
+ * now the profile: a fixed identity header (photo, name, @username, connection
+ * counts, gear) with the Nights Out content below it. The gear is the single
+ * entry to Settings, which is a separate hierarchical stack at
+ * /settings/preferences — no settings rows live here (V8-R-ACC-001).
+ *
+ * NO BADGES TAB AND NO PERSONA CARD. Both are drawn in full on the approved
+ * canvas and both are DEFERRED TO V9 by V8-R-ACC-003, whose exclusions are
+ * "no Badges tab in V8" and "no Persona card in V8". The segmented control
+ * went with them: a tablist with one tab is chrome around nothing. The tab
+ * this surface would have swapped to is a V9 build, not a hidden V8 one.
+ *
+ * MECE, per the reference: Nights Out = this device's current-or-previous
+ * night recap, Rankings (its own tab) = bar taste. Neither repeats the other.
+ *
+ * V8 SCOPE (operator amendment, 2026-08-22): the durable multi-night archive
+ * with tappable saved recaps is V9. Nights Out shows only what the device
+ * actually holds, and no copy on this surface may promise saved past nights.
+ */
 
-export default function SettingsPage(): JSX.Element {
+export default function AccountPage(): JSX.Element {
+  const auth = useAuth();
   const { ratings } = useRatings();
   const bars = useBars();
-  const auth = useAuth();
-  const [hasProfile, setHasProfile] = useState(false);
-  const [seeded, setSeeded] = useState(false);
-  // null = unknown/unclaimed until the profile fetch lands; the claim UI
-  // only renders once the fetch confirms handle IS NULL (handleKnown).
-  const [handle, setHandle] = useState<string | null>(null);
-  const [handleKnown, setHandleKnown] = useState(false);
-  const [displayName, setDisplayName] = useState<string | null>(null);
-  const [nudgeDismissed, setNudgeDismissed] = useState(true);
-  // null = unknown until the profile fetch lands; the privacy toggle only
-  // renders once the real value is known (no flash of a wrong default).
-  const [isPrivate, setIsPrivate] = useState<boolean | null>(null);
-  const [privacyBusy, setPrivacyBusy] = useState(false);
-  // Consent enforcement lives in migration 0008's follow_user. Until that
-  // is live, flipping "private" would DISPLAY a promise ("you approve new
-  // followers") the backend cannot honor — pre-0008 follow_user creates
-  // edges directly (Opus review HIGH). Feature-detect by probing the 0008
-  // read RPC: null (missing RPC or transport failure) hides the toggle —
-  // fail-closed is correct for a consent promise.
-  const [consentLive, setConsentLive] = useState(false);
-  // Account deletion (H2): idle → armed (type-to-confirm visible) →
-  // deleting. 'failed' shows an inline error and returns to armed.
-  const [deleteState, setDeleteState] = useState<
-    'idle' | 'armed' | 'deleting' | 'failed'
-  >('idle');
-  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const { follows, mutuals } = useFollows();
+  const { requests } = useFollowRequests();
+  const profile = useOwnProfile();
+  const [nights, setNights] = useState<Recap[]>([]);
 
+  // The night log is localStorage-only, so compose after mount. The device
+  // holds ONE night at a time (nightLog is night-scoped by comparison), so
+  // this is tonight's route if it has started, else last night's.
   useEffect(() => {
-    setHasProfile(loadProfile() !== null);
-    setSeeded(isDemoSeeded());
-  }, [ratings.length]);
+    const now = new Date();
+    const composed = [nycNightKey(now), lastNightKey(now)]
+      .map((key) => composeRecap(assembleNight(key), bars))
+      .filter((recap): recap is Recap => recap !== null);
+    setNights(composed);
+  }, [bars, ratings.length]);
 
-  useEffect(() => {
-    if (auth.status !== 'signed-in') return;
-    setNudgeDismissed(
-      window.localStorage.getItem(HANDLE_NUDGE_DISMISSED_KEY) === '1',
-    );
-    const supabase = getBrowserSupabase();
-    if (!supabase) return;
-    let cancelled = false;
-    // Epoch guard (accountCache convention — Opus review): a sign-out wipe
-    // mid-fetch must abandon the hydrate, not repopulate the next identity.
-    const epoch = getCacheEpoch();
-    fetchOwnProfile(supabase).then((profile) => {
-      if (cancelled || getCacheEpoch() !== epoch || profile === null) return;
-      setHandle(profile.handle);
-      setHandleKnown(true);
-      setDisplayName(profile.displayName);
-      setIsPrivate(profile.isPrivate);
-    });
-    void fetchOutgoingRequests(supabase).then((outgoing) => {
-      if (cancelled || getCacheEpoch() !== epoch) return;
-      setConsentLive(outgoing !== null);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [auth.status]);
-
-  const handleDismissNudge = () => {
-    window.localStorage.setItem(HANDLE_NUDGE_DISMISSED_KEY, '1');
-    setNudgeDismissed(true);
-  };
-
-  const handleTogglePrivacy = async () => {
-    if (auth.status !== 'signed-in' || isPrivate === null || privacyBusy) return;
-    const supabase = getBrowserSupabase();
-    if (!supabase) return;
-    const next = !isPrivate;
-    // Optimistic flip with revert — the server response is authoritative.
-    // Epoch guard (Opus review): an identity change while the write is in
-    // flight must not revert-write user A's value into user B's view.
-    const epoch = getCacheEpoch();
-    setIsPrivate(next);
-    setPrivacyBusy(true);
-    const ok = await setOwnPrivacy(supabase, auth.user.id, next);
-    if (getCacheEpoch() !== epoch) return;
-    setPrivacyBusy(false);
-    if (!ok) setIsPrivate(!next);
-  };
-
-  const handleSeed = () => {
-    seedSampleNight();
-    setSeeded(true);
-  };
-
-  const handleUnseed = () => {
-    clearSampleNight();
-    setSeeded(false);
-  };
-
-  const lovedCount = ratings.filter((r) => r.rating === 'loved').length;
-  const likedCount = ratings.filter((r) => r.rating === 'liked').length;
-  const passCount = ratings.filter((r) => r.rating === 'pass').length;
-
-  const taste = deriveTasteProfile(ratings, bars);
-  const badgeReport = deriveBadges(ratings, bars, new Date());
-
-  const handleClearProfile = () => {
-    if (typeof window === 'undefined') return;
-    if (!window.confirm('Clear your saved vibe profile? You can retake the quiz anytime.')) return;
-    clearProfile();
-    setHasProfile(false);
-  };
-
-  const handleDeleteAccount = async () => {
-    if (auth.status !== 'signed-in' || deleteState === 'deleting') return;
-    if (deleteConfirmText.trim().toLowerCase() !== 'delete') return;
-    setDeleteState('deleting');
-    const ok = await requestAccountDeletion(auth.session.access_token);
-    if (!ok) {
-      // Nothing was deleted (the route is all-or-nothing) — say so and let
-      // the user retry or bail.
-      setDeleteState('failed');
-      return;
-    }
-    // The auth user is gone server-side. signOut() now SEALS the cache
-    // (V8-2 round-3) — right for an ordinary sign-out, wrong here: this
-    // owner can never return. Deletion hard-destroys EVERYTHING, personal
-    // keys included (round-4 panel: clearAccountCache alone removed the
-    // ownership signal while leaving lists/night-log/profile — the next
-    // account then passed the foreign guard and inherited them). try/finally
-    // (Opus review): the redirect must happen even if signOut throws — the
-    // account no longer exists, staying on a signed-in-looking page lies.
-    // Captured BEFORE signOut: the parked unopened-plan record is a map keyed
-    // by user id, and by the time the `finally` runs `auth` no longer names the
-    // account being deleted (round-2 panel, Codex).
-    const deletedUserId = auth.status === 'signed-in' ? auth.user.id : undefined;
-    try {
-      await auth.signOut();
-    } finally {
-      destroyAccountDataOnDeletion(deletedUserId);
-      window.location.assign('/');
-    }
-  };
-
-  const handleClearRatings = async () => {
-    if (typeof window === 'undefined') return;
-    if (!window.confirm('Clear ALL bar ratings? This cannot be undone.')) return;
-    // Signed-in: server rows are the source of truth — delete them BEFORE the
-    // reload, or useRatings re-fetches them and everything reappears.
-    if (auth.status === 'signed-in') {
-      const supabase = getBrowserSupabase();
-      if (supabase) {
-        // supabase-js resolves with { error } instead of throwing, so the
-        // helpers return success booleans — a try/catch alone here was dead
-        // code (Codex review). try/catch kept for genuine transport throws.
-        //
-        // Two deletes cannot be atomic from the client (round-4 panel,
-        // Codex). Order + honest partial reporting instead: comparisons go
-        // FIRST — they are derived judgments, so losing them while ratings
-        // survive is harmless, whereas the reverse leaves orphaned
-        // comparisons re-deriving stale scores. On a partial failure, say
-        // exactly what happened rather than claiming nothing was cleared.
-        let comparisonsOk = false;
-        let ratingsOk = false;
-        try {
-          // Stop new sync enqueues FIRST (cycle-5 panel, both lanes): the
-          // sign-in retry loop checks the epoch per entry, so bumping it
-          // here prevents writes from being enqueued AFTER the drain
-          // snapshot below — those landed after the server delete and
-          // restored rows the user had just cleared.
-          abandonInFlightSyncs();
-          // Then settle every already-pending same-tab write (cycle-4
-          // round-2, Codex): a delayed write-through landing AFTER the
-          // server delete silently restored the cleared row. Two passes:
-          // the first settles queued tasks, the second catches a task that
-          // was mid-enqueue when the first snapshot was taken. Bounded, so
-          // a user tapping ratings during the clear cannot livelock it.
-          await drainBarWrites();
-          await drainBarWrites();
-          comparisonsOk = await deleteAllServerComparisons(
-            supabase,
-            auth.user.id,
-          );
-          if (comparisonsOk) {
-            ratingsOk = await deleteAllServerRatings(supabase, auth.user.id);
-          }
-        } catch {
-          // fall through with the flags as they stand
-        }
-        if (!comparisonsOk) {
-          window.alert(
-            "Couldn't reach the server, so your ratings were NOT cleared. Try again in a moment.",
-          );
-          return;
-        }
-        if (!ratingsOk) {
-          window.alert(
-            'Your comparison history was cleared, but your ratings could NOT be — try "Clear ALL bar ratings" again in a moment.',
-          );
-          return;
-        }
-      }
-    }
-    window.localStorage.removeItem('next-bar:ratings:v1');
-    // Stale pairwise comparisons would silently re-derive scores onto freshly
-    // re-rated bars — clear them together with the ratings they came from.
-    window.localStorage.removeItem('next-bar:pairwise:v1');
-    // Clearing all ratings also clears the sample night, so reset the demo-seeded flags — otherwise the
-    // Settings "Demo" section still shows "Remove sample night" while Rankings is empty (Codex review).
-    window.localStorage.removeItem('next-bar:demo:seeded:v1');
-    window.localStorage.removeItem('next-bar:demo:seeded-ids:v1');
-    // E4.1: the night visit log is the most sensitive local record (which
-    // bars, in order, when) — the documented wipe control must cover it
-    // (privacy page: "wiped any time from Settings").
-    window.localStorage.removeItem('next-bar:night-log:v1');
-    // useRatings reads on next mount; a hard reload is the simplest correct refresh.
-    window.location.reload();
-  };
+  const seed = profile.handle ?? 'account';
 
   return (
     <main className="min-h-screen">
-      <header className="px-6 pt-8 pb-4 text-center">
-        <p className="text-accent uppercase tracking-[0.25em] text-xs mb-3">
-          Your account
-        </p>
-        <h1 className="font-display text-3xl md:text-4xl mb-2">Settings</h1>
+      <header className="px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 max-w-md mx-auto flex items-center justify-between gap-3">
+        <h1 className="font-display text-3xl">Account</h1>
+        {/* The gear is an ENTRY, not an overlay — it pushes the Settings
+            stack, which has its own back arrow and no bottom nav. */}
+        <Link
+          href="/settings/preferences"
+          aria-label="Settings"
+          className="w-11 h-11 shrink-0 inline-flex items-center justify-center rounded-full bg-surface border border-border text-text touch-manipulation"
+        >
+          <GearIcon />
+        </Link>
       </header>
 
-      {/* pb-24, not mb-24: a last-child bottom margin collapses out and
-          contributed ZERO scrollable clearance, so the footer links rested
-          underneath the fixed 5-tab nav and their centre point hit the nav
-          instead (measured 2026-08-19, both viewports). Padding cannot
-          collapse. */}
-      <section className="max-w-md mx-auto px-6 mt-8 pb-24 space-y-8">
-        <div>
-          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-            Account
+      <div className="max-w-md mx-auto px-5 pb-28 space-y-5">
+        <IdentityHeader
+          displayName={profile.displayName}
+          handle={profile.handle}
+          seed={seed}
+          authStatus={auth.status}
+          failed={profile.failed}
+          onRetry={profile.retry}
+        />
+
+        <dl className="grid grid-cols-3 border-y border-border py-4 text-center">
+          <CountStat label="Friends" value={mutuals.length} />
+          <CountStat label="Following" value={follows.length} />
+          <CountStat label="Requests" value={requests.length} accent />
+        </dl>
+
+        <section aria-labelledby="account-nights-heading" className="space-y-3">
+          <h2
+            id="account-nights-heading"
+            className="font-display text-[11px] uppercase tracking-[0.2em] text-muted px-1"
+          >
+            Nights Out
           </h2>
-          <div className="bg-surface border border-border rounded-3xl p-5">
-            {auth.status === 'loading' ? (
-              <p className="text-muted text-sm">Loading…</p>
-            ) : auth.status === 'signed-in' ? (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between gap-4">
-                  {/* Identity pair (name + @handle) — the email is
-                      login-only and never rendered here. */}
-                  <div className="min-w-0">
-                    <p className="text-xs text-muted uppercase tracking-widest mb-1">
-                      Signed in as
-                    </p>
-                    <p className="font-display text-base truncate">
-                      {displayName ??
-                        (handle !== null
-                          ? `@${handle}`
-                          : handleKnown
-                            ? 'Your account'
-                            : '…')}
-                    </p>
-                    {handle !== null && displayName !== null ? (
-                      // Identity convention (operator 2026-07-24): big white
-                      // name on top, grey @handle underneath — everywhere.
-                      <p className="text-muted text-sm mt-1 truncate">@{handle}</p>
-                    ) : null}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => auth.signOut()}
-                    className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0"
-                  >
-                    Sign out
-                  </button>
-                </div>
-                {handleKnown && handle === null ? (
-                  <div className="pt-3 border-t border-border space-y-3">
-                    {!nudgeDismissed ? (
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="text-xs text-muted leading-relaxed">
-                          Usernames are here — claim yours so friends can find
-                          you.
-                        </p>
-                        <button
-                          type="button"
-                          onClick={handleDismissNudge}
-                          aria-label="Dismiss username nudge"
-                          className="text-muted text-xs underline-offset-4 hover:underline min-h-[44px] touch-manipulation shrink-0"
-                        >
-                          Dismiss
-                        </button>
-                      </div>
-                    ) : null}
-                    <ClaimHandle onClaimed={setHandle} />
-                  </div>
-                ) : null}
-                {handleKnown ? (
-                  <div className="pt-3 border-t border-border">
-                    <DisplayNameEditor
-                      userId={auth.user.id}
-                      initialName={displayName}
-                      onSaved={setDisplayName}
-                    />
-                  </div>
-                ) : null}
-                <div className="pt-3 border-t border-border">
-                  <SetPassword />
-                </div>
-              </div>
-            ) : auth.status === 'unavailable' ? (
-              <p className="text-muted text-xs leading-relaxed">
-                Sign-in is unavailable on this build — Supabase env vars are
-                missing. Ratings stay on this device only.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                <p className="text-sm text-muted leading-relaxed">
-                  Sign in to keep your ratings across devices and unlock Friends
-                  + Rankings.
-                </p>
-                <Link
-                  href="/auth"
-                  className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-2 rounded-full min-h-[44px] touch-manipulation"
-                >
-                  Sign in →
-                </Link>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {auth.status === 'signed-in' && isPrivate !== null && consentLive ? (
-          <div>
-            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-              Privacy
-            </h2>
-            <div className="bg-surface border border-border rounded-3xl p-5 flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <p className="text-sm mb-1">Private account</p>
-                <p className="text-xs text-muted leading-relaxed">
-                  {isPrivate
-                    ? 'New followers must send a request you approve. People who already follow you keep access.'
-                    : 'Anyone can follow you and your username appears in search.'}
-                </p>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={isPrivate}
-                aria-label="Private account"
-                disabled={privacyBusy}
-                onClick={handleTogglePrivacy}
-                className={[
-                  'shrink-0 relative w-12 h-7 rounded-full border transition-colors touch-manipulation disabled:opacity-50',
-                  isPrivate ? 'bg-accent border-accent' : 'bg-surface border-border',
-                ].join(' ')}
-              >
-                <span
-                  aria-hidden
-                  className={[
-                    'absolute top-0.5 w-5 h-5 rounded-full transition-all',
-                    isPrivate ? 'right-0.5 bg-bg' : 'left-0.5 bg-muted',
-                  ].join(' ')}
-                />
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        <div>
-          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-            Your nights
-          </h2>
-          <div className="bg-surface border border-border rounded-3xl p-5 flex justify-around items-center text-center">
-            <Stat label="Loved" value={lovedCount} accent />
-            <div className="w-px h-10 bg-border" />
-            <Stat label="Liked" value={likedCount} />
-            <div className="w-px h-10 bg-border" />
-            <Stat label="Passed" value={passCount} />
-          </div>
-        </div>
-
-        {ratings.length > 0 ? (
-          <div>
-            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-              Badges
-            </h2>
-            <div className="bg-surface border border-border rounded-3xl p-5 space-y-4">
-              <p className="text-xs text-muted">
-                Explorer score{' '}
-                <span className="text-accent font-display tabular-nums">
-                  {badgeReport.explorerScore}
-                </span>
-                {badgeReport.weekendStreakCount >= 2
-                  ? ` · ${badgeReport.weekendStreakCount}-weekend streak`
-                  : null}
-              </p>
-              <ul className="flex flex-wrap gap-2">
-                {badgeReport.badges.map((b) => (
-                  <li
-                    key={b.id}
-                    title={b.description}
-                    className={[
-                      'text-xs rounded-full px-3 py-1 border',
-                      b.earned
-                        ? 'border-accent text-accent'
-                        : 'border-border text-muted opacity-60',
-                    ].join(' ')}
-                  >
-                    {b.label}
-                    {b.earned
-                      ? ''
-                      : ` ${b.progress.current}/${b.progress.target}`}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        ) : null}
-
-        {taste.archetype !== null ? (
-          <div>
-            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-              Your taste
-            </h2>
-            <div className="bg-surface border border-border rounded-3xl p-5 space-y-4">
-              <p className="font-display text-xl text-accent">{taste.archetype}</p>
-              <div className="flex flex-wrap gap-2">
-                {taste.topTags.map((t) => (
-                  <span
-                    key={t.tag}
-                    className="text-xs border border-border rounded-full px-3 py-1 text-muted"
-                  >
-                    {displayTag(t.tag)}
-                  </span>
-                ))}
-              </div>
-              {taste.neighborhoods.length > 0 ? (
-                <p className="text-xs text-muted leading-relaxed">
-                  Home turf:{' '}
-                  {taste.neighborhoods
-                    .slice(0, 3)
-                    .map((n) => `${n.neighborhood} (${n.count})`)
-                    .join(' · ')}
-                </p>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-
-        <div>
-          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-            Install
-          </h2>
-          <div className="bg-surface border border-border rounded-3xl p-5 flex items-center justify-between gap-4">
-            <p className="text-sm text-muted leading-relaxed">
-              Add Next Bar to your home screen for the full app experience.
-            </p>
-            <InstallPrompt />
-          </div>
-        </div>
-
-        <div>
-          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-            Vibe profile
-          </h2>
-          <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-sm">
-                {hasProfile ? 'Your quiz answers are saved.' : 'No vibe profile yet.'}
-              </p>
-              {hasProfile ? (
-                <button
-                  type="button"
-                  onClick={handleClearProfile}
-                  className="text-muted text-xs underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
-                >
-                  Clear
-                </button>
-              ) : null}
-            </div>
-            <Link
-              href="/quiz"
-              className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-2 rounded-full min-h-[44px] touch-manipulation"
-            >
-              {hasProfile ? 'Retake the quiz →' : 'Take the quiz →'}
-            </Link>
-          </div>
-        </div>
-
-        <div>
-          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-            Demo
-          </h2>
-          <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
-            <p className="text-xs text-muted leading-relaxed">
-              Load a sample night of ratings to see Rankings and the group
-              &ldquo;Where should we go?&rdquo; picks come alive — no sign-in
-              needed.
-            </p>
-            {seeded ? (
-              <div className="flex items-center gap-4 flex-wrap">
-                <Link
-                  href="/rankings"
-                  className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-2 rounded-full min-h-[44px] touch-manipulation"
-                >
-                  View rankings →
-                </Link>
-                <button
-                  type="button"
-                  onClick={handleUnseed}
-                  className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
-                >
-                  Remove sample night
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={handleSeed}
-                className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-2 rounded-full min-h-[44px] touch-manipulation"
-              >
-                Load sample night →
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div>
-          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-            Data
-          </h2>
-          <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
-            <p className="text-xs text-muted leading-relaxed">
-              Everything you&apos;ve rated lives only on this device until cross-device
-              sync ships with the native app.
-            </p>
-            <button
-              type="button"
-              onClick={handleClearRatings}
-              disabled={ratings.length === 0}
-              className="text-sm text-accent underline-offset-4 hover:underline min-h-[44px] touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Clear all ratings
-            </button>
-          </div>
-        </div>
-
-        {auth.status === 'signed-in' ? (
-          <div>
-            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-              Danger zone
-            </h2>
-            <div className="bg-surface border border-border rounded-3xl p-5 space-y-3">
-              <p className="text-xs text-muted leading-relaxed">
-                Deleting your account removes your login, profile, username,
-                ratings, rankings, and follows — permanently. There is no
-                undo.
-              </p>
-              {deleteState === 'idle' ? (
-                <button
-                  type="button"
-                  onClick={() => setDeleteState('armed')}
-                  className="text-sm text-red-400 underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
-                >
-                  Delete account
-                </button>
-              ) : (
-                <div className="space-y-3">
-                  <label
-                    htmlFor="delete-confirm"
-                    className="block text-xs text-muted"
-                  >
-                    Type <span className="text-text font-display">delete</span>{' '}
-                    to confirm:
-                  </label>
-                  <input
-                    id="delete-confirm"
-                    type="text"
-                    inputMode="text"
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    // Arming unmounts the trigger button — move focus here
-                    // so keyboard/screen-reader users aren't dropped to
-                    // <body> (Opus a11y review).
-                    autoFocus
-                    value={deleteConfirmText}
-                    onChange={(e) => setDeleteConfirmText(e.target.value)}
-                    className="w-full bg-bg border border-border rounded-2xl px-4 py-3 text-base text-text placeholder:text-muted focus:outline-none focus:border-red-400 min-h-[44px]"
-                  />
-                  {deleteState === 'failed' ? (
-                    <p className="text-red-400 text-xs" role="status">
-                      Couldn&apos;t delete your account — nothing was removed.
-                      Try again in a moment, or email hi@next-bar.app.
-                    </p>
-                  ) : null}
-                  <div className="flex items-center gap-4">
-                    <button
-                      type="button"
-                      onClick={handleDeleteAccount}
-                      disabled={
-                        deleteConfirmText.trim().toLowerCase() !== 'delete' ||
-                        deleteState === 'deleting'
-                      }
-                      className="bg-red-500/90 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-white font-display text-sm px-5 py-2 rounded-full min-h-[44px] touch-manipulation"
-                    >
-                      {deleteState === 'deleting'
-                        ? 'Deleting…'
-                        : 'Permanently delete'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDeleteState('idle');
-                        setDeleteConfirmText('');
-                      }}
-                      disabled={deleteState === 'deleting'}
-                      className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation disabled:opacity-40"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        ) : null}
-
-        <div>
-          <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
-            About
-          </h2>
-          <div className="text-xs text-muted space-y-2 pl-1">
-            <p>Next Bar · NYC · 2026</p>
-            <p>
-              Coverage: Manhattan and parts of Brooklyn. More neighborhoods
-              rolling out.
-            </p>
-            <p>Hours and specials are best-effort.</p>
-            <p>
-              <Link
-                href="mailto:hi@next-bar.app?subject=Bar+correction"
-                className="text-accent underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation"
-              >
-                Tell us if something&apos;s wrong.
-              </Link>
-            </p>
-            <p>
-              <Link
-                href="/privacy"
-                className="text-accent underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation"
-              >
-                Privacy Policy
-              </Link>
-              {' · '}
-              <Link
-                href="/terms"
-                className="text-accent underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation"
-              >
-                Terms of Use
-              </Link>
-            </p>
-          </div>
-        </div>
-      </section>
+          <NightsPanel nights={nights} />
+          <SavedNightsLink />
+        </section>
+      </div>
     </main>
   );
 }
 
-function Stat({ label, value, accent = false }: { label: string; value: number; accent?: boolean }) {
+/**
+ * The identity row.
+ *
+ * `failed` is the difference between "still loading" and "we gave up". The
+ * ellipsis below is honest only in the first case; after the silent retry
+ * budget is spent it was a dot-dot-dot that never resolved, with nothing said
+ * and nothing to tap — the dead end V8-R-OPS-001 and V8-R-OPS-007 forbid.
+ * When the read has failed the row is RETAINED (a generated avatar is still a
+ * real avatar) and the shared operational state is rendered under it with the
+ * single Retry, which is that component's contract.
+ */
+function IdentityHeader({
+  displayName,
+  handle,
+  seed,
+  authStatus,
+  failed,
+  onRetry,
+}: {
+  displayName: string | null;
+  handle: string | null;
+  seed: string;
+  authStatus: ReturnType<typeof useAuth>['status'];
+  failed: boolean;
+  onRetry: () => void;
+}): JSX.Element {
+  if (authStatus === 'signed-in' && failed) {
+    return (
+      <OperationalState
+        kind="failed"
+        message="We couldn't load your profile. Check your connection and try again."
+        recovery={{ label: 'Retry', onAction: onRetry }}
+      >
+        <IdentityRow displayName={displayName} handle={handle} seed={seed} />
+      </OperationalState>
+    );
+  }
+  if (authStatus === 'signed-in') {
+    return <IdentityRow displayName={displayName} handle={handle} seed={seed} />;
+  }
+  return <SignedOutIdentity authStatus={authStatus} />;
+}
+
+function IdentityRow({
+  displayName,
+  handle,
+  seed,
+}: {
+  displayName: string | null;
+  handle: string | null;
+  seed: string;
+}): JSX.Element {
+  // Identity convention: display name on top, grey @handle under it. A
+  // handle-only profile has no display name, so the handle IS the top line
+  // and the secondary line is dropped — it was printing @handle twice.
+  const primary = displayName ?? (handle !== null ? `@${handle}` : null);
+  const showHandleLine = displayName !== null && handle !== null;
+  return (
+    <div className="flex items-center gap-4">
+      <span className="rounded-full border-2 border-accent p-0.5">
+        <Avatar initials={initialsFor(primary ?? '?')} seed={seed} size="lg" />
+      </span>
+      <div className="min-w-0">
+        <p className="font-display text-2xl truncate">{primary ?? '…'}</p>
+        {showHandleLine ? (
+          <p className="text-muted text-sm truncate">@{handle}</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function SignedOutIdentity({
+  authStatus,
+}: {
+  authStatus: ReturnType<typeof useAuth>['status'];
+}): JSX.Element {
+  return (
+    <div className="flex items-center gap-4">
+      <span className="rounded-full border-2 border-border p-0.5">
+        <Avatar initials="NB" seed="guest" size="lg" />
+      </span>
+      <div className="min-w-0 space-y-2">
+        <p className="font-display text-xl">Not signed in</p>
+        {authStatus === 'unavailable' ? (
+          <p className="text-muted text-xs leading-relaxed">
+            Sign-in is unavailable on this build — Supabase env vars are
+            missing. Ratings stay on this device only.
+          </p>
+        ) : (
+          <Link
+            href="/auth"
+            className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-2 rounded-full min-h-[44px] touch-manipulation"
+          >
+            Sign in →
+          </Link>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CountStat({
+  label,
+  value,
+  accent = false,
+}: {
+  label: string;
+  value: number;
+  accent?: boolean;
+}): JSX.Element {
   return (
     <div>
-      <p
+      <dd
         className={[
-          'font-display text-3xl tabular-nums leading-none',
-          accent ? 'text-accent' : 'text-text',
+          'font-display text-2xl tabular-nums leading-none',
+          accent && value > 0 ? 'text-accent' : 'text-text',
         ].join(' ')}
       >
         {value}
-      </p>
-      <p className="text-[10px] uppercase tracking-widest text-muted mt-1">
+      </dd>
+      <dt className="text-[10px] uppercase tracking-widest text-muted mt-1">
         {label}
-      </p>
+      </dt>
     </div>
+  );
+}
+
+/**
+ * The way into the saved archive (V8-R-ACC-002).
+ *
+ * `NightsPanel` above is the DEVICE's current-or-previous night, composed from
+ * localStorage — it is tonight's route, not a history, which is why its cards
+ * are not tappable and its copy promises no archive.
+ *
+ * The durable archive is a different surface and it exists in this candidate's
+ * base: `/nights` reads `get_saved_nights` (owner-only, filtered on auth.uid()
+ * in the function body) and each card opens that night's archived recap at
+ * `/nights/[id]`. Without this row the Account root was the one place the
+ * archive could not be reached from, which is exactly where the requirement
+ * puts its entry point. `/nights` owns its own loading, signed-out, empty and
+ * failed states, so this is a link and nothing more.
+ */
+function SavedNightsLink(): JSX.Element {
+  return (
+    <Link
+      href="/nights"
+      className="w-full flex items-center gap-3 px-4 min-h-[48px] py-3 bg-surface border border-border rounded-2xl touch-manipulation"
+    >
+      <span className="text-sm flex-1 min-w-0">Saved nights out</span>
+      <span aria-hidden="true" className="text-muted shrink-0">
+        →
+      </span>
+    </Link>
+  );
+}
+
+function NightsPanel({ nights }: { nights: Recap[] }): JSX.Element {
+  return (
+    <div className="space-y-3">
+      {nights.length === 0 ? (
+        <p className="text-muted text-sm leading-relaxed bg-surface border border-border rounded-2xl p-5">
+          No nights out yet. Pick a bar on Next Bar? and tonight&apos;s route
+          shows up here — the bars you hit and what you rated.
+        </p>
+      ) : (
+        nights.map((night) => <NightCard key={night.nightKey} night={night} />)
+      )}
+    </div>
+  );
+}
+
+function NightCard({ night }: { night: Recap }): JSX.Element {
+  const hood = night.bars[0]?.neighborhood ?? null;
+  const stops = night.bars.length;
+  return (
+    <article
+      data-testid="account-night-card"
+      className="bg-surface border border-border rounded-2xl p-4"
+    >
+      <h3 className="font-display text-base">
+        {hood !== null ? `${hood} ${weekdayOf(night.nightKey)}` : weekdayOf(night.nightKey)}
+      </h3>
+      <p className="text-xs text-muted mt-1">
+        {formatNightDate(night.nightKey)} · {stops} {stops === 1 ? 'bar' : 'bars'}
+        {night.loved !== null ? ` · loved ${night.loved.name}` : ''}
+      </p>
+      <ol className="mt-3 space-y-1">
+        {night.bars.map((bar, index) => (
+          <li key={`${bar.id}-${index}`} className="text-sm text-muted truncate">
+            <span className="text-accent tabular-nums mr-2">{index + 1}</span>
+            {bar.name}
+          </li>
+        ))}
+      </ol>
+    </article>
+  );
+}
+
+function initialsFor(source: string): string {
+  const words = source.replace(/^@/, '').trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
+  return (words[0] ?? '?').slice(0, 2).toUpperCase();
+}
+
+/** Night keys are `YYYY-MM-DD` NYC night dates — parse as UTC so the label
+ *  never slides a day on a machine east or west of New York. */
+function nightDate(nightKey: string): Date {
+  const [y, m, d] = nightKey.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
+function weekdayOf(nightKey: string): string {
+  return nightDate(nightKey).toLocaleDateString('en-US', {
+    weekday: 'long',
+    timeZone: 'UTC',
+  });
+}
+
+function formatNightDate(nightKey: string): string {
+  return nightDate(nightKey).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+function GearIcon(): JSX.Element {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="w-5 h-5"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
   );
 }
