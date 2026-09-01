@@ -72,6 +72,35 @@ const DIRTY_KEY = 'next-bar:dirty:v1';
 
 export type DirtyEntry = { barId: string; stamp: string; op: 'u' | 'd' };
 
+/**
+ * DELETION UNCERTAINTY — the one fact that has to outlive the screen that
+ * learns it (WP8 cycle-5 ruling, after the same root cause recurred three
+ * times).
+ *
+ * `/api/account/delete` destroys the auth user and only THEN writes its
+ * reply, so a response lost in between leaves a deleted account and a browser
+ * that cannot tell. Settings calls that outcome `unknown` and, once it has
+ * happened, may never again say "nothing was removed" about that account: a
+ * later refusal is a fact about the RETRY, not about the account the first
+ * attempt may already have destroyed.
+ *
+ * Every earlier home for that fact was too short-lived — no flag at all, then
+ * a flag derived from view state that Cancel resets, then a `useState` latch
+ * that a remount (or the reload the screen itself recommends) discards. So it
+ * is stored, and it is registered HERE rather than written to a private key,
+ * because an unregistered key is one no sign-out or foreign-cache wipe ever
+ * clears. The VALUE is the user id it concerns, so a latch that outlives its
+ * session still cannot make the next account's screen cautious.
+ *
+ * It is account data: a confirmed deletion (`destroyAccountDataOnDeletion`)
+ * and a sign-out seal both clear it, and both are correct. After a successful
+ * sign-in the account demonstrably exists, so the uncertainty is over.
+ *
+ * The lane that owns Settings reads and writes it through
+ * `src/app/settings/security/_deletionUncertainty.ts`; only the key lives here.
+ */
+export const DELETION_UNCERTAIN_KEY = 'next-bar:account:deletion-uncertain:v1';
+
 const ALL_KEYS = [
   RATINGS_KEY,
   RATINGS_MERGED_KEY,
@@ -79,6 +108,7 @@ const ALL_KEYS = [
   PAIRWISE_MERGED_KEY,
   FOLLOWS_KEY,
   DIRTY_KEY,
+  DELETION_UNCERTAIN_KEY,
   OWNER_KEY,
 ] as const;
 

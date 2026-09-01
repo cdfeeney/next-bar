@@ -18,6 +18,10 @@ import {
   requestAccountDeletionOutcome,
   type DeletionOutcome,
 } from './_deleteRequest';
+import {
+  latchDeletionUnknown,
+  sawDeletionUnknown,
+} from './_deletionUncertainty';
 
 /**
  * Security & account (approved/next-bar-account-a-settings.png, screen 5).
@@ -312,7 +316,7 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
   const [state, setState] = useState<DeleteState>('idle');
   const [confirmText, setConfirmText] = useState('');
   /**
-   * Has ANY attempt in this session ended `unknown`? Latches true and never
+   * Has ANY attempt for THIS ACCOUNT ended `unknown`? Latches true and never
    * clears.
    *
    * IT CANNOT BE DERIVED FROM `state`. A first version read `state ===
@@ -321,12 +325,19 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
    * the sequence "attempt ends unknown, tap Cancel, re-arm, retry" lost the
    * fact that the account may already be gone, the dead token produced the
    * route's `unauthorized`, and the screen printed "nothing was removed" over
-   * a destroyed account: exactly the false assurance the whole three-outcome
-   * design exists to prevent, reached by one extra tap. What the classifier
-   * needs is a fact about the SESSION's history, and transient view state is
-   * not that.
+   * a destroyed account.
+   *
+   * AND IT CANNOT LIVE ONLY IN THIS MOUNT. A plain `useState(false)` fixed the
+   * Cancel path and left the same hole one step further out: the header Back,
+   * or the page reload the unknown message itself RECOMMENDS, unmounts the
+   * danger zone, and a cached JWT re-renders it signed-in with the latch back
+   * at false. So the seed is read from storage, keyed to this user, and the
+   * `useState` is now the in-memory half that also covers a browser where
+   * storage cannot be written at all.
    */
-  const [sawUnknown, setSawUnknown] = useState(false);
+  const [sawUnknown, setSawUnknown] = useState(() =>
+    sawDeletionUnknown(auth.user.id),
+  );
 
   const handleDelete = async () => {
     if (state === 'deleting') return;
@@ -338,6 +349,9 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
     // a lost answer is not allowed to borrow that sentence.
     if (outcome === 'refused') setState('failed');
     if (outcome === 'unknown') {
+      // Storage FIRST: the in-memory flag is worthless to the next mount, and
+      // the next mount is the case this exists for.
+      latchDeletionUnknown(auth.user.id);
       setSawUnknown(true);
       setState('unknown');
     }

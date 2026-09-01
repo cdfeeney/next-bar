@@ -44,6 +44,14 @@ import { useOwnProfile } from '../_useOwnProfile';
  * success, which V8-R-OPS-001 forbids outright — so those rows are `StatusRow`
  * and say what is actually true today. They become controls in the same change
  * that adds their storage, not before.
+ *
+ * WHICH CHANGE THAT IS, so this is a dependency rather than an open question:
+ * the operator ruled on 2026-09-01 that the preference columns and their RLS
+ * belong to a separate T0 migration goal, `0078_account_preferences`. This lane
+ * CONSUMES it and does not create it. As of this commit no `0078_*` file exists
+ * in `supabase/migrations` (the head here is `0075`), so the rows stay
+ * statements. Three requirements are held open by exactly that one file:
+ * V8-R-ACC-007, V8-R-ACC-008 and V8-R-ACC-010.
  */
 export default function SettingsHomePage(): JSX.Element {
   const auth = useAuth();

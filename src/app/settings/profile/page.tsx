@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
 import { useModalDialog } from '@/hooks/useModalDialog';
 import { clearProfile, loadProfile } from '@/lib/storedProfile';
+import { OperationalState } from '@/components/states/OperationalState';
 import { Group, LinkRow, SlotRow, StackHeader, StatusRow } from '../_ui';
 import { useOwnProfile } from '../_useOwnProfile';
 
@@ -76,6 +77,39 @@ const HANDLE_NUDGE_DISMISSED_KEY = 'next-bar:handle-nudge-dismissed:v1';
  * have to reach into two forms this lane cannot edit, and a Save button that
  * saves only one of the two fields is a control that lies. It arrives with the
  * change that can touch those components.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * ACC-006 HANDOVER — the operator ruled on 2026-09-01 that any part of this
+ * requirement exceeding the lane's scope moves to an integration follow-up,
+ * recorded precisely. Exactly three parts moved, and each names the file that
+ * has to change:
+ *
+ *   1. PHOTO UPLOAD → needs a `profiles` avatar column and a storage bucket,
+ *      i.e. a migration. This lane mints none by contract. Owner: the same
+ *      change that adds the storage.
+ *   2. EDITING AN ALREADY-CLAIMED @USERNAME → the claimed value is rendered
+ *      read-only below, and that is not the obstacle; the obstacle is that a
+ *      RENAME does not exist anywhere. `ClaimHandle` only ever claims a free
+ *      handle, and there is no server path that releases the old one, checks
+ *      uniqueness for a change, or updates what referenced it. Both the
+ *      component and that server path are outside this lane's write scope, and
+ *      the refusal is enforced in the DATABASE: the `claim_handle` RPC rejects
+ *      a caller who already owns a different handle, so a rename needs a
+ *      migration this lane mints none of. Owners: the migration that adds a
+ *      rename path, then `src/lib/profile.server` and
+ *      `src/components/ClaimHandle.tsx`.
+ *   3. THE SINGLE FIXED SAVE ACTION → see the paragraph above; it needs
+ *      `src/components/DisplayNameEditor.tsx` and `ClaimHandle.tsx` to expose
+ *      their submit, both outside this lane's write scope.
+ *
+ * What did NOT move, and is built here: the display-name edit, the first
+ * @username claim, the Discard-changes guard on every exit, and the honest
+ * photo row. In-app browser and hardware Back remain uncovered by the guard —
+ * `beforeunload` handles reload, tab close and cross-origin exits, but the App
+ * Router exposes no navigation guard and the sentinel-history workaround would
+ * corrupt the back stack and break the one-level-back decision of 2026-09-01.
+ * That is stated, not implied away.
+ * ────────────────────────────────────────────────────────────────────────────
  */
 const SETTINGS_HOME = '/settings/preferences';
 
@@ -158,7 +192,10 @@ export default function EditProfilePage(): JSX.Element {
                       }}
                     />
                   ) : (
-                    <p className="text-muted text-sm">Loading…</p>
+                    <ProfileReadState
+                      failed={profile.failed}
+                      onRetry={profile.retry}
+                    />
                   )}
                 </SlotRow>
               </Group>
@@ -167,6 +204,8 @@ export default function EditProfilePage(): JSX.Element {
             <div onInput={() => setHandleDirty(true)}>
               <UsernameGroup
                 known={profile.known}
+                failed={profile.failed}
+                onRetry={profile.retry}
                 handle={profile.handle}
                 onClaimed={(handle) => {
                   profile.setHandle(handle);
@@ -250,13 +289,43 @@ function DiscardChangesDialog({
   );
 }
 
+/**
+ * The identity read, while it has not landed.
+ *
+ * "Loading…" is only true while something is still being tried. Once the
+ * silent retries are spent it is a lie, and it was the lie this screen told
+ * forever after one failed read — no message, no retry, no end. V8-R-OPS-007
+ * wants the specific failure named and at most one recovery, which is exactly
+ * what the shared component renders.
+ */
+function ProfileReadState({
+  failed,
+  onRetry,
+}: {
+  failed: boolean;
+  onRetry: () => void;
+}): JSX.Element {
+  if (!failed) return <p className="text-muted text-sm">Loading…</p>;
+  return (
+    <OperationalState
+      kind="failed"
+      message="We couldn't load your profile. Check your connection and try again."
+      recovery={{ label: 'Retry', onAction: onRetry }}
+    />
+  );
+}
+
 /** Claim-once username: the nudge, the claim form, or the claimed value. */
 function UsernameGroup({
   known,
+  failed,
+  onRetry,
   handle,
   onClaimed,
 }: {
   known: boolean;
+  failed: boolean;
+  onRetry: () => void;
   handle: string | null;
   onClaimed: (handle: string) => void;
 }): JSX.Element {
@@ -272,7 +341,7 @@ function UsernameGroup({
     <Group label="Username">
       <SlotRow>
         {!known ? (
-          <p className="text-muted text-sm">Loading…</p>
+          <ProfileReadState failed={failed} onRetry={onRetry} />
         ) : handle === null ? (
           <>
             {!nudgeDismissed ? (

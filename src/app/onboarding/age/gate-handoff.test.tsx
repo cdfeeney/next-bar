@@ -22,7 +22,15 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 const pushed: string[] = [];
 let pathname = '/';
-let acked = false;
+/**
+ * THE STORED ANSWER, three-valued. It was a boolean `acked` until the operator
+ * ruling of 2026-09-01 moved the age check ahead of account creation: a
+ * cleared key and a recorded "no" are different states, and collapsing them is
+ * exactly the defect — a withdrawn ack reads as "never asked", so the overlay
+ * asked again and offered one-tap admission to the visitor who had just said
+ * they were under 21.
+ */
+let answer: 'yes' | 'no' | null = null;
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: (href: string) => pushed.push(href) }),
@@ -35,8 +43,10 @@ vi.mock('@/app/onboarding/_ageAck', async () => {
   );
   return {
     ...actual,
-    readAgeAck: () => acked,
+    readAgeAnswer: () => answer,
+    readAgeAck: () => answer === 'yes',
     writeAgeAck: vi.fn(),
+    clearAgeAck: vi.fn(),
   };
 });
 
@@ -48,7 +58,7 @@ const gate = () => screen.queryByRole('dialog', { name: /are you 21 or older/i }
 beforeEach(() => {
   pushed.length = 0;
   pathname = '/';
-  acked = false;
+  answer = null;
 });
 
 describe('the global age gate', () => {
@@ -114,7 +124,7 @@ describe('the global age gate', () => {
   });
 
   test('stays down for a device that already acknowledged', () => {
-    acked = true;
+    answer = 'yes';
     render(<AgeGate />);
 
     expect(gate()).toBeNull();
@@ -130,10 +140,77 @@ describe('the global age gate', () => {
     const { rerender } = render(<AgeGate />);
     expect(gate()).toBeNull(); // stands down on the step itself
 
-    acked = true; // the step confirms 21+ …
+    answer = 'yes'; // the step confirms 21+ …
     pathname = '/onboarding/location'; // … and pushes on
     rerender(<AgeGate />);
 
     expect(gate()).toBeNull();
+  });
+});
+
+/**
+ * V8-R-ONB-003 under the operator ruling of 2026-09-01, verbatim: "we should
+ * just have it be where they can't make an account if they are under 21."
+ *
+ * The age check gates account creation, so the "no" has to be REMEMBERED. The
+ * exit used to `clearAgeAck()`, which leaves the device in the state a
+ * brand-new one is in — so the overlay re-asked on the very next route and
+ * offered "I'm 21 or older" as a one-tap way to `/auth`. Every sentence was
+ * true and the gate blocked nothing.
+ */
+describe('a recorded under-21 answer', () => {
+  const closed = () =>
+    screen.queryByRole('dialog', { name: /next bar is for ages 21\+/i });
+
+  test('closes the app instead of re-asking the question', () => {
+    answer = 'no';
+    pathname = '/map';
+    render(<AgeGate />);
+
+    expect(closed()).toBeTruthy();
+    // The whole point: no route back into sign-up from the refusal.
+    expect(gate()).toBeNull();
+    expect(screen.queryByRole('button', { name: /i.m 21 or older/i })).toBeNull();
+  });
+
+  test('blocks the sign-up route itself, not just the app shell', () => {
+    // `/auth` is where the account is created. If the overlay came down here,
+    // "they can't make an account if they are under 21" would be false.
+    answer = 'no';
+    pathname = '/auth';
+    render(<AgeGate />);
+
+    expect(closed()).toBeTruthy();
+  });
+
+  test('leaves the marketing page and the exit screen readable', () => {
+    // The exit pushes to /install and the age step owns the question. Covering
+    // either with the closed state would hide the screen that explains it.
+    answer = 'no';
+    for (const route of ['/install', AGE_STEP_PATH]) {
+      pathname = route;
+      const { unmount } = render(<AgeGate />);
+      expect(closed()).toBeNull();
+      expect(gate()).toBeNull();
+      unmount();
+    }
+  });
+
+  test('a mistap has a remedy, and the remedy is to be ASKED again', async () => {
+    // Not "admitted again". A control on the refusal that let the device
+    // straight in would be the refusal undoing itself; this one returns the
+    // device to unanswered and the question comes back.
+    const { clearAgeAck } = await import('../_ageAck');
+    answer = 'no';
+    pathname = '/map';
+    render(<AgeGate />);
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /answered that by mistake/i }),
+    );
+
+    expect(clearAgeAck).toHaveBeenCalled();
+    expect(gate()).toBeTruthy();
+    expect(closed()).toBeNull();
   });
 });

@@ -53,6 +53,8 @@ vi.mock('../_useOwnProfile', () => ({
     displayName: 'Connor Feeney',
     isPrivate: false,
     known: true,
+    failed: false,
+    retry: vi.fn(),
     consentLive: true,
     setHandle: vi.fn(),
     setDisplayName: vi.fn(),

@@ -34,6 +34,9 @@ vi.mock('@/components/SetPassword', () => ({ default: () => null }));
 vi.mock('@/lib/accountCache', () => ({
   abandonInFlightSyncs: vi.fn(),
   destroyAccountDataOnDeletion: vi.fn(),
+  // The real registered key, not a stand-in: the persistence test below is
+  // about the value that actually survives a remount.
+  DELETION_UNCERTAIN_KEY: 'next-bar:account:deletion-uncertain:v1',
 }));
 /**
  * The mock HONOURS `afterUnknown` rather than ignoring it. A mock that drops
@@ -63,6 +66,10 @@ import SecurityAccountPage from './page';
 beforeEach(() => {
   deletionOutcome = 'deleted';
   seenAfterUnknown.length = 0;
+  // The uncertainty latch is now STORED, so it outlives a test that does not
+  // clear it — which is the whole point of the change, and exactly why the
+  // suite has to reset it between cases.
+  window.localStorage.clear();
 });
 
 const dangerZone = (): HTMLElement =>
@@ -237,6 +244,58 @@ describe('V8-R-ACC-012 — the deletion result says only what is known', () => {
     await waitFor(() => expect(seenAfterUnknown).toEqual([false, true]));
     // … and the screen must not go back to the confident sentence.
     expect(screen.queryByText(/nothing was removed/i)).toBeNull();
+  });
+
+  it('remembers an unknown outcome across a REMOUNT — the reload it recommends', async () => {
+    // The same root cause one step further out, and the reason the latch is
+    // now stored rather than held in `useState`. The unknown message tells the
+    // user to RELOAD and try to sign in; a cached JWT then re-renders this
+    // screen signed-in with a fresh mount, and a mount-scoped flag is gone.
+    // The retry's `unauthorized` — which is precisely what a DELETED user's
+    // token produces — then read as a certain refusal and reprinted "nothing
+    // was removed" over an account that no longer exists.
+    deletionOutcome = 'unknown';
+    const first = render(<SecurityAccountPage />);
+    await userEvent.click(
+      screen.getByRole('button', { name: /^Delete account$/i }),
+    );
+    await userEvent.type(screen.getByLabelText(/type/i), 'DELETE');
+    await userEvent.click(
+      screen.getByRole('button', { name: /permanently delete/i }),
+    );
+    await waitFor(() => expect(seenAfterUnknown).toEqual([false]));
+
+    // Everything React was holding goes away. Only storage survives.
+    first.unmount();
+
+    deletionOutcome = 'refused';
+    render(<SecurityAccountPage />);
+    await userEvent.click(
+      screen.getByRole('button', { name: /^Delete account$/i }),
+    );
+    await userEvent.type(screen.getByLabelText(/type/i), 'DELETE');
+    await userEvent.click(
+      screen.getByRole('button', { name: /permanently delete/i }),
+    );
+
+    await waitFor(() => expect(seenAfterUnknown).toEqual([false, true]));
+    expect(screen.queryByText(/nothing was removed/i)).toBeNull();
+  });
+
+  it('does not make a DIFFERENT account cautious — the latch names its user', async () => {
+    // The negative half of "keyed to the user id". A latch that outlived its
+    // session must not silently downgrade the next owner of this device to
+    // permanent uncertainty about an account nothing ever tried to delete.
+    window.localStorage.setItem(
+      'next-bar:account:deletion-uncertain:v1',
+      'someone-else',
+    );
+    deletionOutcome = 'refused';
+
+    await armAndDelete();
+
+    await waitFor(() => expect(seenAfterUnknown).toEqual([false]));
+    expect(screen.getByText(/nothing was removed/i)).toBeTruthy();
   });
 });
 

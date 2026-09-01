@@ -16,6 +16,22 @@ import type { OperationalStateKind } from './OperationalState';
  * a load has succeeded, a later failure is `stale`, not `failed`. The last
  * good value is kept and handed back, and the surface keeps rendering it under
  * a small label. `failed` is reserved for a surface that has nothing to show.
+ *
+ * WHO APPLIES THIS POLICY TODAY, stated because "the app's retry rule lives in
+ * one place" is only true to the extent surfaces actually use it:
+ *
+ *   - `src/app/settings/connections/blocked/page.tsx` uses the hook directly.
+ *   - `src/app/settings/_useOwnProfile.ts` imports `shouldAutoRetry` and
+ *     applies the same cap by hand. It cannot use the hook itself: the hook
+ *     has no "not applicable" state, and signed-out is not a failure —
+ *     modelling it as a null load would spend the budget on every signed-out
+ *     render. The predicate is shared so the cap still has ONE definition.
+ *   - Everything else in `src/` still has its own state machine. The nearest
+ *     one, `StoriesEmptyState`, exposes a manual retry on the FIRST failure
+ *     instead of retrying silently three times — a real divergence from
+ *     V8-R-OPS-001, and one this lane cannot close: `src/components/` outside
+ *     `states/` is another lane's write scope. Converting those surfaces is an
+ *     integration follow-up, not a lane fix.
  */
 
 /** V8-R-OPS-001 / V8-R-OPS-007: three, then the user asks. */

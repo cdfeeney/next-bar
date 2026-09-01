@@ -5,7 +5,8 @@ import { usePathname, useRouter } from 'next/navigation';
 import {
   AGE_EXIT_PATH,
   AGE_STEP_PATH,
-  readAgeAck,
+  clearAgeAck,
+  readAgeAnswer,
   writeAgeAck,
 } from '@/app/onboarding/_ageAck';
 
@@ -38,12 +39,24 @@ import {
  *   - The overlay STANDS DOWN on the age step itself. That step asks the
  *     same question with the same two answers, so covering it was asking
  *     twice and hiding the answer; and after the hand-off the exit screen
- *     has to be visible to be read. Stateless, so a visitor who navigates
- *     back off the step meets the gate again — the ack is the only thing
- *     that puts it down, and the under-21 exit withdraws it.
+ *     has to be visible to be read.
+ *
+ * AND THE "NO" IS NOW REMEMBERED, which is what makes this a gate on account
+ * creation rather than a speed bump. Operator ruling 2026-09-01: "we should
+ * just have it be where they can't make an account if they are under 21", the
+ * age check moved AHEAD of account creation so nothing is created that would
+ * then have to be deleted. The exit used to WITHDRAW the acknowledgement,
+ * leaving the device in the state a brand-new one is in — so this overlay
+ * asked again on the very next route and offered "I'm 21 or older" as a
+ * one-tap route to `/auth`. The refusal blocked nothing.
+ *
+ * A recorded refusal renders the closed state instead of the question. The
+ * only way back is the explicit "I answered that by mistake", which returns
+ * the device to UNANSWERED rather than to 21+ — a mistap has a remedy, and
+ * the remedy is to be asked again, not to be admitted.
  */
 
-type AckState = 'unknown' | 'acked' | 'unacked';
+type AckState = 'unknown' | 'acked' | 'unacked' | 'declined';
 
 export default function AgeGate(): JSX.Element | null {
   const router = useRouter();
@@ -63,10 +76,11 @@ export default function AgeGate(): JSX.Element | null {
     // device had just answered. Re-reading per route is the cheap half of
     // "one key, one reader": the key is the state, and this is the component
     // that has to keep looking at it.
-    setState(readAgeAck() ? 'acked' : 'unacked');
+    const answer = readAgeAnswer();
+    setState(answer === 'yes' ? 'acked' : answer === 'no' ? 'declined' : 'unacked');
   }, [pathname]);
 
-  if (state !== 'unacked') return null;
+  if (state === 'unknown' || state === 'acked') return null;
   // The age step owns this question AND its "no" branch. Never cover it.
   //
   // AND NEVER COVER WHERE THAT BRANCH ENDS. The exit withdraws the ack and
@@ -83,12 +97,56 @@ export default function AgeGate(): JSX.Element | null {
     setState('acked');
   };
 
-  // Deliberately does NOT write, clear, or infer anything about the ack: the
-  // step it hands to withdraws the ack itself, and duplicating that here is
-  // how the two copies drift apart.
+  // Deliberately does NOT write, clear, or infer anything about the answer:
+  // the step it hands to records the refusal itself, and duplicating that here
+  // is how the two copies drift apart.
   const decline = (): void => {
     router.push(`${AGE_STEP_PATH}?under21=1`);
   };
+
+  // The one way back from a recorded refusal. It returns the device to
+  // UNANSWERED, not to 21+ — correcting a mistap means being asked again, and
+  // a control that admitted you outright would be the refusal undoing itself.
+  const retract = (): void => {
+    clearAgeAck();
+    setState('unacked');
+  };
+
+  if (state === 'declined') {
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="age-gate-title"
+        className="fixed inset-0 z-[2000] bg-bg/95 backdrop-blur-sm flex items-center justify-center px-6"
+      >
+        <div className="max-w-sm w-full bg-surface border border-border rounded-3xl p-8 text-center">
+          <p className="text-accent uppercase tracking-[0.25em] text-xs mb-3">
+            Come back at 21
+          </p>
+          <h2 id="age-gate-title" className="font-display text-2xl mb-3">
+            Next Bar is for ages 21+
+          </h2>
+          {/* Says only what this overlay KNOWS. It deliberately does not add
+              "nothing was created": for the edge the exit screen exists for —
+              a pre-V8 account, or an invite link that landed past the gate —
+              that sentence would be false, and the exit screen is the one
+              place that discloses the account and how to have it removed. */}
+          <p className="text-muted text-sm leading-relaxed mb-6">
+            You told us you&apos;re under 21, so we can&apos;t set up a Next Bar
+            account.
+          </p>
+          <button
+            type="button"
+            onClick={retract}
+            className="block mx-auto text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+          >
+            I answered that by mistake
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

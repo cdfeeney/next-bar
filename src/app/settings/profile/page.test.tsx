@@ -22,13 +22,24 @@ vi.mock('@/hooks/useAuth', () => ({
     signOut: vi.fn(),
   }),
 }));
+/**
+ * Mutable so a test can put the identity read in its FAILED state. It used to
+ * be a frozen `known: true`, which meant the screen's not-loaded branches —
+ * the ones a real network failure lands on — were never rendered by any test.
+ */
+const ownProfileRetry = vi.fn();
+let ownProfile = {
+  handle: null as string | null,
+  displayName: 'Alice' as string | null,
+  isPrivate: false as boolean | null,
+  known: true,
+  failed: false,
+  consentLive: true,
+};
 vi.mock('../_useOwnProfile', () => ({
   useOwnProfile: () => ({
-    handle: null,
-    displayName: 'Alice',
-    isPrivate: false,
-    known: true,
-    consentLive: true,
+    ...ownProfile,
+    retry: ownProfileRetry,
     setHandle: vi.fn(),
     setDisplayName: vi.fn(),
     setIsPrivate: vi.fn(),
@@ -236,5 +247,55 @@ describe('V8-R-ACC-004 — the saved vibe profile can be VIEWED, not just retake
     expect(
       screen.getByRole('link', { name: /take the quiz/i }),
     ).toBeInTheDocument();
+  });
+});
+
+describe('V8-R-OPS-001 / -007 — a failed identity read is not a permanent "Loading…"', () => {
+  const readState = (next: { known: boolean; failed: boolean }): void => {
+    ownProfile = { ...ownProfile, ...next };
+  };
+
+  test('offers ONE retry, naming the failure, once the silent budget is spent', async () => {
+    // The regression this pins: `known` went true only on success, so a single
+    // failed read left BOTH identity slots showing "Loading…" for the life of
+    // the mount — no message, no retry, no end.
+    readState({ known: false, failed: true });
+    try {
+      render(<EditProfilePage />);
+
+      const states = screen.getAllByTestId('operational-state');
+      // One per identity slot (display name, username), each carrying at most
+      // one recovery — the shared component's own contract.
+      expect(states).toHaveLength(2);
+      for (const state of states) {
+        expect(state.getAttribute('data-state')).toBe('failed');
+      }
+      expect(screen.queryByText('Loading…')).toBeNull();
+      expect(
+        screen.getAllByText(/couldn't load your profile/i).length,
+      ).toBeGreaterThan(0);
+
+      const retries = screen.getAllByRole('button', { name: /retry/i });
+      await userEvent.click(retries[0]);
+      expect(ownProfileRetry).toHaveBeenCalled();
+    } finally {
+      readState({ known: true, failed: false });
+      ownProfileRetry.mockClear();
+    }
+  });
+
+  test('still says "Loading…" while attempts remain — the budget is not spent', () => {
+    // The negative half: an in-flight read must NOT be dressed as a failure,
+    // or the screen asks the user to fix something that is still working.
+    readState({ known: false, failed: false });
+    try {
+      render(<EditProfilePage />);
+
+      expect(screen.getAllByText('Loading…').length).toBeGreaterThan(0);
+      expect(screen.queryByTestId('operational-state')).toBeNull();
+      expect(screen.queryByRole('button', { name: /retry/i })).toBeNull();
+    } finally {
+      readState({ known: true, failed: false });
+    }
   });
 });

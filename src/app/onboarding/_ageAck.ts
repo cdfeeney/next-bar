@@ -23,6 +23,32 @@
 export const AGE_ACK_KEY = 'next-bar:age-ack:v1';
 
 /**
+ * THE KEY HOLDS AN ANSWER, NOT A BOOLEAN — three states, not two.
+ *
+ * Operator ruling 2026-09-01, verbatim: "we should just have it be where they
+ * can't make an account if they are under 21", with the age check moved AHEAD
+ * of account creation. Until this change the under-21 branch only REMOVED the
+ * acknowledgement, which left the device in exactly the state a brand-new one
+ * is in: unanswered. The overlay then asked again on the very next route, so a
+ * "no" bought one screen and blocked nothing — sign-up was one tap away, and
+ * the answer that was supposed to stop it had been erased rather than
+ * recorded.
+ *
+ * So a decline is now WRITTEN. `absent` still means never asked; `'1'` is the
+ * existing 21+ confirmation, unchanged and still the only value `readAgeAck`
+ * accepts, so an already-acknowledged device is untouched by this; `'under21'`
+ * is a recorded refusal that the gate honours instead of re-asking.
+ *
+ * It stays ONE key because it is one question. Two keys would allow the
+ * impossible state "confirmed and declined" and leave a reader to decide which
+ * wins.
+ */
+const DECLINED = 'under21';
+
+/** What this device has answered, if anything. */
+export type AgeAnswer = 'yes' | 'no' | null;
+
+/**
  * The onboarding step that owns the 21+ question AND its "no" branch.
  *
  * Exported so the global overlay can hand an under-21 answer here (with
@@ -59,6 +85,48 @@ export function readAgeAck(): boolean {
   }
 }
 
+/**
+ * The full answer, for the one reader that has to tell "not asked yet" from
+ * "asked and said no" — the overlay. Everything else only ever needs
+ * `readAgeAck()`, which is deliberately still a boolean about 21+.
+ *
+ * An unreadable store reads as `null`: fail toward ASKING, never toward
+ * letting an unanswered device through and never toward locking one out.
+ */
+export function readAgeAnswer(): AgeAnswer {
+  let raw: string | null;
+  try {
+    raw = window.localStorage.getItem(AGE_ACK_KEY);
+  } catch {
+    return null;
+  }
+  if (raw === '1') return 'yes';
+  if (raw === DECLINED) return 'no';
+  return null;
+}
+
+/**
+ * Record "I'm under 21".
+ *
+ * This REPLACES the ack rather than clearing it, which is the whole point: a
+ * cleared key is indistinguishable from never having been asked, so the gate
+ * re-offered "I'm 21 or older" on the next route and the refusal blocked
+ * nothing. Written by the age step's exit — the one place that owns the "no" —
+ * so the overlay that hands the answer over never grows a second copy of it.
+ *
+ * A storage failure is non-fatal and fails toward asking again, which is the
+ * same place the previous behaviour landed: worse than a recorded refusal,
+ * never worse than a silent admission.
+ */
+export function writeAgeDenial(): void {
+  try {
+    window.localStorage.setItem(AGE_ACK_KEY, DECLINED);
+  } catch {
+    // Non-fatal: an unwritable store reads back as unanswered, so the gate
+    // asks rather than admits.
+  }
+}
+
 /** Record the confirmation. A storage failure is non-fatal — the sequence
  *  continues and the question returns on the next visit. */
 export function writeAgeAck(): void {
@@ -70,14 +138,14 @@ export function writeAgeAck(): void {
 }
 
 /**
- * Withdraw the confirmation.
+ * Return the device to UNANSWERED.
  *
- * Called when someone answers "I'm under 21". Leaving the ack in place is what
- * let a device that had confirmed 21+ earlier — through the global AgeGate
- * overlay on `/` — declare itself under 21 here and then walk straight back
- * into the app, because the overlay reads this key and stays down for an
- * acknowledged device. The most recent answer from the person at the keyboard
- * is the one that counts, and it is a NO.
+ * Answering "I'm under 21" no longer lands here — it calls `writeAgeDenial()`,
+ * because clearing the key erases the answer instead of recording it and the
+ * gate then simply asks again. What remains here is the RETRACTION: the gate's
+ * "I answered that by mistake", the one way back from a recorded refusal that
+ * does not require clearing site data. It is deliberately not a way to say
+ * yes — it only puts the question back.
  *
  * A storage failure fails toward asking: `readAgeAck` already treats an
  * unreadable store as unacknowledged.

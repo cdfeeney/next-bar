@@ -26,6 +26,16 @@ let authStatus: 'signed-in' | 'signed-out' | 'unavailable' | 'loading' =
   'signed-in';
 let signOut: () => Promise<void> = async () => {};
 let acked = false;
+/**
+ * How many times the exit RECORDED the refusal. It counted `clearAgeAck` until
+ * the 2026-09-01 ruling moved the age check ahead of account creation:
+ * clearing the key erases the answer, and an erased answer is
+ * indistinguishable from never having been asked, so the overlay re-offered
+ * one-tap admission on the next route. The exit now writes the "no".
+ */
+let denialsRecorded = 0;
+/** Clearing must NOT be how the exit ends any more. Counted so a regression
+ *  back to the erasing behaviour fails rather than passes quietly. */
 let ackCleared = 0;
 
 // One STABLE router object, the way next/navigation's really behaves: the
@@ -54,6 +64,9 @@ vi.mock('../_ageAck', () => ({
   writeAgeAck: vi.fn(),
   clearAgeAck: () => {
     ackCleared += 1;
+  },
+  writeAgeDenial: () => {
+    denialsRecorded += 1;
   },
 }));
 
@@ -107,6 +120,7 @@ beforeEach(() => {
   signOut = async () => {};
   acked = false;
   ackCleared = 0;
+  denialsRecorded = 0;
   window.history.replaceState({}, '', '/onboarding/age');
 });
 
@@ -303,30 +317,41 @@ describe('the under-21 exit', () => {
   });
 
   /**
-   * The device ack is WITHDRAWN by the exit.
+   * The refusal is RECORDED by the exit, and the recording is what makes the
+   * age check a gate on account creation (operator ruling, 2026-09-01).
    *
-   * The gap this closes: the global AgeGate overlay on `/` writes the same
-   * key and stays down for an acknowledged device. A device that confirmed
-   * 21+ there, then answered "under 21" here, kept its ack and could reach the
-   * app again — and the sign-out cannot be relied on to stop it, because
-   * `useAuth().signOut()` returns `Promise<void>` and swallows the provider
-   * error. Clearing the ack is the half of the exit that cannot fail.
+   * Two defects, closed in order, and the second is why this asserts a WRITE
+   * rather than a clear. First, the ack had to stop applying: the global
+   * overlay writes the same key and stays down for an acknowledged device, so
+   * a device that confirmed 21+ there and then answered "under 21" here kept
+   * its ack and could reach the app anyway — and the sign-out cannot be relied
+   * on to stop it, because `useAuth().signOut()` returns `Promise<void>` and
+   * swallows the provider error.
+   *
+   * Then, WITHDRAWING it turned out to block nothing: a cleared key is exactly
+   * what a brand-new device has, so the overlay asked again on the next route
+   * and offered "I'm 21 or older" as one tap back to sign-up. The answer has
+   * to survive as an answer. This half of the exit cannot fail, which is why
+   * it carries the guarantee rather than the sign-out.
    */
-  test('withdraws the device 21+ acknowledgement', async () => {
+  test('records the under-21 answer instead of erasing the question', async () => {
     await takeTheExit();
-    expect(ackCleared).toBe(1);
+    expect(denialsRecorded).toBe(1);
+    // Specifically NOT the old behaviour: clearing leaves "never asked".
+    expect(ackCleared).toBe(0);
   });
 
-  test('withdraws it on the deep-linked exit too', async () => {
+  test('records it on the deep-linked exit too', async () => {
     // The overlay hands its answer here via ?under21=1, and that path must not
-    // be the one that leaves the ack standing.
+    // be the one that leaves the device looking unasked.
     window.history.replaceState({}, '', '/onboarding/age?under21=1');
     render(<OnboardingAgePage />);
     await screen.findByRole('heading', { name: /next bar is for ages 21\+/i });
-    expect(ackCleared).toBe(1);
+    expect(denialsRecorded).toBe(1);
+    expect(ackCleared).toBe(0);
   });
 
-  test('withdraws it even when the sign-out fails', async () => {
+  test('records it even when the sign-out fails', async () => {
     signOut = async () => {
       throw new Error('network');
     };
@@ -334,6 +359,7 @@ describe('the under-21 exit', () => {
     await waitFor(() =>
       expect(screen.getByText(/still signed in on this device/i)).toBeTruthy(),
     );
-    expect(ackCleared).toBe(1);
+    expect(denialsRecorded).toBe(1);
+    expect(ackCleared).toBe(0);
   });
 });

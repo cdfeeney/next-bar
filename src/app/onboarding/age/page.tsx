@@ -43,7 +43,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { signOutAndRevokePush } from '@/app/settings/_signOut';
-import { AGE_EXIT_PATH, clearAgeAck, readAgeAck, writeAgeAck } from '../_ageAck';
+import {
+  AGE_EXIT_PATH,
+  readAgeAck,
+  writeAgeAck,
+  writeAgeDenial,
+} from '../_ageAck';
 import { LOCATION_STEP, returnDestination, stepHref } from '../_sequence';
 
 /** The next step, carrying the destination the sequence must end on. */
@@ -166,13 +171,22 @@ export default function OnboardingAgePage(): JSX.Element | null {
    */
   const exit = (): void => {
     setView('exited');
-    // WITHDRAW THE DEVICE ACK. Without this, a device that confirmed 21+
-    // earlier — through the global AgeGate overlay on `/` — could answer
-    // "under 21" here and then reach the app anyway, because the overlay stays
-    // down for an acknowledged device. The sign-out is the other half of the
-    // exit and it can fail (see below); this half cannot, so it is what keeps
-    // the answer binding.
-    clearAgeAck();
+    // RECORD THE REFUSAL. Two separate defects were closed here, in order.
+    //
+    // First, the ack had to stop applying: a device that confirmed 21+ earlier
+    // — through the global overlay on `/` — could answer "under 21" here and
+    // then reach the app anyway, because the overlay stays down for an
+    // acknowledged device.
+    //
+    // Then, withdrawing it turned out not to be enough. A cleared key is
+    // exactly what a brand-new device has, so the overlay asked again on the
+    // very next route and offered "I'm 21 or older" as a one-tap way back to
+    // sign-up. The refusal bought one screen and blocked nothing, which is the
+    // opposite of the ruling that the age check gates account creation. So the
+    // "no" is WRITTEN, and the gate honours it instead of re-asking. The
+    // sign-out is the other half of the exit and it can fail (see below); this
+    // half cannot, so it is what keeps the answer binding.
+    writeAgeDenial();
     // 'loading' counts as "attempt it": the status may not have settled by the
     // time the tap lands, signing out a session that is not there is a no-op,
     // and leaving a real one alive is the failure this branch exists to avoid.

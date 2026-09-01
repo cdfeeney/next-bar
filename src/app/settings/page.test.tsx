@@ -42,6 +42,8 @@ vi.mock('./_useOwnProfile', () => ({
     ...profile,
     isPrivate: false,
     known: true,
+    failed: false,
+    retry: vi.fn(),
     consentLive: true,
     setHandle: vi.fn(),
     setDisplayName: vi.fn(),
