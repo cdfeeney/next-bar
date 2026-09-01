@@ -239,6 +239,47 @@ describe('a recorded under-21 answer', () => {
     expect(closed()).toBeTruthy();
   });
 
+  test('takes focus off the page underneath, so Enter cannot reach it', async () => {
+    // aria-modal is a promise to assistive technology, not enforcement: it
+    // neither moves focus nor disables the page. The panel's case was a /auth
+    // sign-up form focused in one tab while another tab records the refusal —
+    // the dialog painted over it and Enter still submitted the form, so the
+    // account was still creatable through the screen that says it is not.
+    const outside = document.createElement('input');
+    document.body.appendChild(outside);
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+
+    answer = 'no';
+    pathname = '/auth';
+    render(<AgeGate />);
+
+    const dialog = closed() as HTMLElement;
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    outside.remove();
+  });
+
+  test('keeps Tab inside the dialog', async () => {
+    // The other half: focus taken once is focus that can be tabbed straight
+    // back out on the next keypress.
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+
+    answer = null;
+    pathname = '/auth';
+    render(<AgeGate />);
+
+    const dialog = gate() as HTMLElement;
+    const controls = dialog.querySelectorAll('button');
+    const last = controls[controls.length - 1] as HTMLElement;
+    last.focus();
+    await userEvent.tab();
+
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(outside);
+    outside.remove();
+  });
+
   test('a mistap has a remedy, and the remedy is to be ASKED again', async () => {
     // Not "admitted again". A control on the refusal that let the device
     // straight in would be the refusal undoing itself; this one returns the

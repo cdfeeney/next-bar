@@ -15,7 +15,13 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
  */
 
 const pushed: string[] = [];
-let authStatus: 'signed-in' | 'signed-out' = 'signed-out';
+/**
+ * 'loading' is a real value of this status and was the gap: the destination
+ * was chosen with `auth.status === 'signed-in'`, which is false while the
+ * status is still resolving, so a signed-in account that skipped before
+ * `useAuth` settled was routed as though it were signed out.
+ */
+let authStatus: 'signed-in' | 'signed-out' | 'loading' = 'signed-out';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: (href: string) => pushed.push(href) }),
@@ -72,6 +78,29 @@ describe('the end of the onboarding sequence', () => {
     expect(pushed).toEqual([
       `/onboarding?next=${encodeURIComponent('/')}&seq=done`,
     ]);
+  });
+
+  test('WAITS for auth rather than reading "loading" as signed out', async () => {
+    // The gap: `auth.status === 'signed-in'` is false while the status is
+    // still resolving, and the quiz is one tap from arrival on a cold load. A
+    // signed-in account that skipped in that window was routed as signed out
+    // and the identity step was silently dropped from its run. Guessing either
+    // way is wrong, so the navigation waits for a real answer.
+    authStatus = 'loading';
+    const view = render(<OnboardingQuizPage />);
+    await userEvent.click(screen.getByRole('button', { name: /show me bars/i }));
+
+    // Nothing yet — and specifically NOT the signed-out destination.
+    expect(pushed).toEqual([]);
+
+    authStatus = 'signed-in';
+    view.rerender(<OnboardingQuizPage />);
+
+    await waitFor(() =>
+      expect(pushed).toEqual([
+        `/onboarding?next=${encodeURIComponent('/')}&seq=done`,
+      ]),
+    );
   });
 
   test('COMPLETING the quiz ends in the same place as skipping it', async () => {

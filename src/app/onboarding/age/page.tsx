@@ -97,6 +97,13 @@ export default function OnboardingAgePage(): JSX.Element | null {
   const [sawSession, setSawSession] = useState(false);
   /** Whether the current sign-out CALL has settled, however it settled. */
   const [signOutSettled, setSignOutSettled] = useState(false);
+  /**
+   * This exit was rendered from a STORED answer rather than from a tap here.
+   * The distinction matters because such a visit performs no sign-out — a
+   * record is not a fresh decision — so the screen would otherwise say nothing
+   * at all about a session that is still alive.
+   */
+  const [restoredExit, setRestoredExit] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
@@ -133,6 +140,33 @@ export default function OnboardingAgePage(): JSX.Element | null {
     const timer = setTimeout(() => setSignOutState('failed'), SIGN_OUT_SETTLE_MS);
     return () => clearTimeout(timer);
   }, [signOutState, signOutSettled, auth.status]);
+
+  /**
+   * A RESTORED EXIT BESIDE A LIVE SESSION IS A FAILED SIGN-OUT, and must say
+   * so (cycle-5 round 2, both lanes).
+   *
+   * The earlier version rendered a stored refusal with `signOutState: 'none'`,
+   * which suppresses both the status line and "Try signing out again". So a
+   * device that declined while signed in — a pre-V8 account, or an invite link
+   * that landed past the gate — could tap Close, come back, and find a screen
+   * that mentioned nothing about the session it had failed to end. The
+   * declined gate covers every other route, so that was the last reachable
+   * sign-out control, and the session outlived the refusal in silence: the
+   * exact outcome this branch exists to prevent.
+   *
+   * `failed` is not a guess. No sign-out was attempted on this visit, so the
+   * session is still there because the previous attempt did not end it. The
+   * retry button already calls `attemptSignOut`, and nothing here re-records
+   * the refusal or signs anyone out unprompted.
+   */
+  useEffect(() => {
+    if (!restoredExit || auth.status !== 'signed-in') return;
+    // Only from 'none'. A retry started on this screen owns the state from
+    // then on, and stomping its 'pending' would accuse a sign-out that is
+    // still in flight of having failed.
+    setSignOutState((current) => (current === 'none' ? 'failed' : current));
+    setSawSession(true);
+  }, [restoredExit, auth.status]);
 
   // An in-page swap removes the button that was focused, which drops focus to
   // <body> and announces nothing. Put it on the new heading instead.
@@ -221,7 +255,12 @@ export default function OnboardingAgePage(): JSX.Element | null {
      * one, and `exit()` is what performs the exit's side effects.
      */
     const answer = readAgeAnswer();
-    setView(answer === 'yes' ? 'confirmed' : answer === 'no' ? 'exited' : 'ask');
+    if (answer === 'no') {
+      setView('exited');
+      setRestoredExit(true);
+      return;
+    }
+    setView(answer === 'yes' ? 'confirmed' : 'ask');
     // `exit` is recreated every render and this must run once per mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);

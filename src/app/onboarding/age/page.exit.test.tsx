@@ -392,6 +392,39 @@ describe('the under-21 exit', () => {
     ).toBeNull();
   });
 
+  test('a restored exit beside a LIVE session says so, and offers the retry', async () => {
+    // Cycle-5 round 2, both lanes. Rendering the stored refusal with
+    // signOutState 'none' suppressed the status line AND "Try signing out
+    // again". The declined gate covers every other route, so that was the last
+    // reachable sign-out control: the session outlived the refusal in silence,
+    // which is the outcome this branch exists to prevent.
+    answer = 'no';
+    authStatus = 'signed-in';
+    render(<OnboardingAgePage />);
+    await screen.findByRole('heading', { name: /next bar is for ages 21\+/i });
+
+    await waitFor(() =>
+      expect(screen.getByText(/still signed in on this device/i)).toBeTruthy(),
+    );
+    expect(
+      screen.getByRole('button', { name: /try signing out again/i }),
+    ).toBeTruthy();
+  });
+
+  test('a restored exit with no session says nothing about one', async () => {
+    // The negative half. Someone who was never signed in must not be told a
+    // sign-out failed — there was nothing to sign out of.
+    answer = 'no';
+    authStatus = 'signed-out';
+    render(<OnboardingAgePage />);
+    await screen.findByRole('heading', { name: /next bar is for ages 21\+/i });
+
+    expect(screen.queryByText(/still signed in on this device/i)).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: /try signing out again/i }),
+    ).toBeNull();
+  });
+
   test('does not re-attempt a sign-out when it is only re-rendering a past answer', async () => {
     // The stored answer is a RECORD, not a fresh decision: re-running the
     // exit's side effects on every visit would sign the user out again — and

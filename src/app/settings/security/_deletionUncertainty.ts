@@ -27,11 +27,12 @@ import { DELETION_UNCERTAIN_KEY } from '@/lib/accountCache';
  *
  * The key is registered in `accountCache`'s `ALL_KEYS` (the confirmed-deletion
  * and foreign-sign-in wipes) AND removed explicitly by
- * `clearResidualAccountCache` (the ordinary sign-out seal). Both are needed:
- * that function clears by explicit list, so registration alone left the latch
- * outliving every sign-out — an account that demonstrably survived stayed
- * permanently uncertain. An unregistered key is one no wipe ever reaches; a
- * registered one that no list names is barely better.
+ * `clearResidualAccountCache` (registration alone would miss it — that
+ * function clears by explicit list). It is dropped only where the session is
+ * demonstrably GONE: `useAuth` calls that function directly when
+ * `getSession()` comes back empty or a `SIGNED_OUT` event arrives. The
+ * sign-out SEAL keeps it, because a failed sign-out resolves with `{ error }`
+ * and keeps the session, so sealing is not evidence that anything ended.
  *
  * Storage failing (private mode, quota) is NON-FATAL and deliberately fails
  * toward the in-memory latch the caller also keeps: within one mount the

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   AGE_ACK_KEY,
@@ -66,6 +66,81 @@ function stateFor(answer: AgeAnswer): AckState {
   if (answer === 'yes') return 'acked';
   if (answer === 'no') return 'declined';
   return 'unacked';
+}
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * The overlay's shell — and the part that makes it a GATE rather than a
+ * picture of one.
+ *
+ * `aria-modal` is a promise to assistive technology, not an enforcement: it
+ * does not move focus and it does not stop the page underneath. So a form that
+ * was already focused stayed focused when this appeared, and Enter still
+ * submitted it — the case the panel found is a `/auth` sign-up form focused in
+ * one tab while another tab records an under-21 answer. The dialog painted
+ * over it and the account was still creatable, which is the one thing the
+ * refusal exists to stop.
+ *
+ * Two things close that, and both are small: take focus when the dialog
+ * appears, and keep Tab inside it. Nothing else on the page can then be
+ * reached by keyboard, and a pointer cannot reach it either because the
+ * backdrop covers the viewport.
+ */
+function GateDialog({ children }: { children: ReactNode }): JSX.Element {
+  const panel = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Take focus off whatever the page underneath had. `preventScroll` so an
+    // input the user was typing in is not scrolled into view behind the
+    // backdrop.
+    const first = panel.current?.querySelector<HTMLElement>(FOCUSABLE);
+    (first ?? panel.current)?.focus({ preventScroll: true });
+  }, []);
+
+  const keepFocusInside = (event: React.KeyboardEvent): void => {
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(
+      panel.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [],
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    // Wrap at both ends. Anything else — including focus having escaped
+    // already — is pulled back to the first control rather than allowed out.
+    if (event.shiftKey && (active === first || !panel.current?.contains(active))) {
+      event.preventDefault();
+      last.focus();
+      return;
+    }
+    if (!event.shiftKey && (active === last || !panel.current?.contains(active))) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="age-gate-title"
+      onKeyDown={keepFocusInside}
+      // z-[2000]: above BottomNav's z-[1000] — the gate must cover the nav
+      // too, or an unacked user can browse right under it (caught by the
+      // app-store-pack e2e blocking test).
+      className="fixed inset-0 z-[2000] bg-bg/95 backdrop-blur-sm flex items-center justify-center px-6"
+    >
+      <div
+        ref={panel}
+        tabIndex={-1}
+        className="max-w-sm w-full bg-surface border border-border rounded-3xl p-8 text-center outline-none"
+      >
+        {children}
+      </div>
+    </div>
+  );
 }
 
 export default function AgeGate(): JSX.Element | null {
@@ -148,79 +223,62 @@ export default function AgeGate(): JSX.Element | null {
 
   if (state === 'declined') {
     return (
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="age-gate-title"
-        className="fixed inset-0 z-[2000] bg-bg/95 backdrop-blur-sm flex items-center justify-center px-6"
-      >
-        <div className="max-w-sm w-full bg-surface border border-border rounded-3xl p-8 text-center">
-          <p className="text-accent uppercase tracking-[0.25em] text-xs mb-3">
-            Come back at 21
-          </p>
-          <h2 id="age-gate-title" className="font-display text-2xl mb-3">
-            Next Bar is for ages 21+
-          </h2>
-          {/* Says only what this overlay KNOWS. It deliberately does not add
-              "nothing was created": for the edge the exit screen exists for —
-              a pre-V8 account, or an invite link that landed past the gate —
-              that sentence would be false, and the exit screen is the one
-              place that discloses the account and how to have it removed. */}
-          <p className="text-muted text-sm leading-relaxed mb-6">
-            You told us you&apos;re under 21, so we can&apos;t set up a Next Bar
-            account.
-          </p>
-          <button
-            type="button"
-            onClick={retract}
-            className="block mx-auto text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
-          >
-            I answered that by mistake
-          </button>
-        </div>
-      </div>
+      <GateDialog>
+        <p className="text-accent uppercase tracking-[0.25em] text-xs mb-3">
+          Come back at 21
+        </p>
+        <h2 id="age-gate-title" className="font-display text-2xl mb-3">
+          Next Bar is for ages 21+
+        </h2>
+        {/* Says only what this overlay KNOWS. It deliberately does not add
+            "nothing was created": for the edge the exit screen exists for —
+            a pre-V8 account, or an invite link that landed past the gate —
+            that sentence would be false, and the exit screen is the one
+            place that discloses the account and how to have it removed. */}
+        <p className="text-muted text-sm leading-relaxed mb-6">
+          You told us you&apos;re under 21, so we can&apos;t set up a Next Bar
+          account.
+        </p>
+        <button
+          type="button"
+          onClick={retract}
+          className="block mx-auto text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+        >
+          I answered that by mistake
+        </button>
+      </GateDialog>
     );
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="age-gate-title"
-      // z-[2000]: above BottomNav's z-[1000] — the gate must cover the nav
-      // too, or an unacked user can browse right under it (caught by the
-      // app-store-pack e2e blocking test).
-      className="fixed inset-0 z-[2000] bg-bg/95 backdrop-blur-sm flex items-center justify-center px-6"
-    >
-      <div className="max-w-sm w-full bg-surface border border-border rounded-3xl p-8 text-center">
-        <p className="text-accent uppercase tracking-[0.25em] text-xs mb-3">
-          Before you head in
-        </p>
-        <h2 id="age-gate-title" className="font-display text-2xl mb-3">
-          Are you 21 or older?
-        </h2>
-        <p className="text-muted text-sm leading-relaxed mb-6">
-          Next Bar is a guide to NYC bars and nightlife. You need to be of
-          legal drinking age in the US to use it.
-        </p>
-        <button
-          type="button"
-          onClick={acknowledge}
-          className="w-full bg-accent hover:bg-accentDim transition-colors text-bg font-display text-lg py-3 rounded-xl min-h-[44px] touch-manipulation"
-        >
-          I&apos;m 21 or older
-        </button>
-        <button
-          type="button"
-          onClick={decline}
-          className="block mx-auto mt-4 text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
-        >
-          I&apos;m under 21
-        </button>
-        <p className="text-muted text-xs leading-relaxed mt-4">
-          Please drink responsibly.
-        </p>
-      </div>
-    </div>
+    <GateDialog>
+      <p className="text-accent uppercase tracking-[0.25em] text-xs mb-3">
+        Before you head in
+      </p>
+      <h2 id="age-gate-title" className="font-display text-2xl mb-3">
+        Are you 21 or older?
+      </h2>
+      <p className="text-muted text-sm leading-relaxed mb-6">
+        Next Bar is a guide to NYC bars and nightlife. You need to be of
+        legal drinking age in the US to use it.
+      </p>
+      <button
+        type="button"
+        onClick={acknowledge}
+        className="w-full bg-accent hover:bg-accentDim transition-colors text-bg font-display text-lg py-3 rounded-xl min-h-[44px] touch-manipulation"
+      >
+        I&apos;m 21 or older
+      </button>
+      <button
+        type="button"
+        onClick={decline}
+        className="block mx-auto mt-4 text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
+      >
+        I&apos;m under 21
+      </button>
+      <p className="text-muted text-xs leading-relaxed mt-4">
+        Please drink responsibly.
+      </p>
+    </GateDialog>
   );
 }

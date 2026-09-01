@@ -70,11 +70,31 @@ export default function OnboardingQuizPage(): JSX.Element {
     if (started) quizRegion.current?.focus();
   }, [started]);
 
-  const finish = (): void => {
+  /**
+   * WAIT FOR AUTH BEFORE CHOOSING THE DESTINATION.
+   *
+   * `auth.status === 'signed-in'` is false while the status is still
+   * `loading`, and this comparison decided whether the sequence ends on the
+   * identity step or goes straight to the destination. A signed-in account
+   * that skipped or completed the quiz before `useAuth` settled — the common
+   * case on a cold load, since the quiz is one tap from arrival — was routed
+   * as though it were signed out, and V8-R-ONB-001's identity step was
+   * silently dropped from its run.
+   *
+   * Guessing either way is wrong, so it does not guess: the intent is
+   * recorded and the navigation happens once the status is real. The wait is
+   * a few milliseconds and there is nothing left on screen to interact with.
+   */
+  const [finishing, setFinishing] = useState(false);
+
+  const finish = (): void => setFinishing(true);
+
+  useEffect(() => {
+    if (!finishing || auth.status === 'loading') return;
     router.push(
       completionPath(auth.status === 'signed-in', window.location.search),
     );
-  };
+  }, [finishing, auth.status, router]);
 
   const complete = (profile: VibeProfile): void => {
     // The neighborhood picked in step 3 is not re-asked here, so an empty
