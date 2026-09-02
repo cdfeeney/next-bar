@@ -42,11 +42,26 @@ const EXPECTED_COUNTS: Record<string, number> = {
   'public.waitlist': 1,
 };
 
-// UPDATED 2026-09-01 for the 0075+0076 apply. These MOVE every time a migration set lands, and
-// a stale pin here reports a false failure at exactly the moment a real apply succeeds.
-// Before 0075/0076: head 0074_waitlist_reconcile.sql, 66 rows.
-const EXPECTED_HEAD = '0076_feed_access_consolidation_and_group_read_window.sql';
-const EXPECTED_ROWS = 68;
+/**
+ * REQUIRED PARAMETERS, not constants. Pinning these in the file is how this tool and
+ * db-precheck-prod both came to refuse a correct database: the pin describes the database on
+ * the day it was written, and the database moves. The caller states what it expects, and
+ * omitting it is refused rather than checked against a stale snapshot.
+ */
+function requireArg(name: string): string {
+  const value = arg(name);
+  if (value === null || value === '') {
+    process.stderr.write(
+      `${name} is REQUIRED - this tool does not carry a hardcoded snapshot of a moving `
+      + 'database. Pass what the apply was expected to produce, e.g. --expect-head '
+      + '0076_feed_access_consolidation_and_group_read_window.sql --expect-rows 68\n',
+    );
+    process.exit(2);
+  }
+  return value;
+}
+const EXPECTED_HEAD = requireArg('--expect-head');
+const EXPECTED_ROWS = Number(requireArg('--expect-rows'));
 
 /** Headline tables the applied set creates. Not exhaustive: a spot check, named as one. */
 const EXPECTED_NEW_TABLES = [

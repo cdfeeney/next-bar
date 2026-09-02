@@ -40,8 +40,31 @@ function arg(name: string): string | null {
   return i >= 0 ? process.argv[i + 1] ?? '' : null;
 }
 
-/** What production is known to hold, from FACTS and the 2026-08-28 dump: through 0032. */
-const EXPECTED_APPLIED_MAX = '0032_geocode_remaining_from_osm.sql';
+/**
+ * THE EXPECTED STATE IS A PARAMETER, NOT A SNAPSHOT, and it is REQUIRED.
+ *
+ * This constant used to be '0032_geocode_remaining_from_osm.sql' - what production held on
+ * 2026-08-28. Phase C moved production to 0074 on 08-31, nobody updated the constant, and on
+ * 09-01 this tool refused a CORRECT database with "applied head is 0074..., expected 0032".
+ * That is the second tool to rot the same way (verify-post-apply.mts was the first).
+ *
+ * A hardcoded snapshot of a moving database is a lie with a timestamp on it. So the caller -
+ * the gate script, which knows what it is about to apply - passes what it expects, and there
+ * is NO DEFAULT: omitting it is refused rather than silently checked against last month.
+ */
+function requireArg(name: string): string {
+  const value = arg(name);
+  if (value === null || value === '') {
+    fail(
+      `${name} is REQUIRED. This tool refuses to carry a hardcoded snapshot of a database that `
+      + 'moves; the caller states what it expects. Pass the CURRENT head, row count and pending '
+      + 'set, e.g. --expect-head 0074_waitlist_reconcile.sql --expect-rows 66 '
+      + '--expect-pending 0075_x.sql,0076_y.sql',
+      2,
+    );
+  }
+  return value;
+}
 
 /** 0074 creates these seven columns; the live table must match, or the migration is a lie. */
 const WAITLIST_COLUMNS = [
@@ -51,6 +74,12 @@ const WAITLIST_POLICIES = ['waitlist anyone insert', 'waitlist service role sele
 
 async function main(): Promise<void> {
   const secretsFile = arg('--secrets-file');
+  const expectedHead = requireArg('--expect-head');
+  const expectedRows = Number(requireArg('--expect-rows'));
+  if (!Number.isInteger(expectedRows) || expectedRows < 1) {
+    fail('--expect-rows takes a positive integer', 2);
+  }
+  const expectedPending = requireArg('--expect-pending').split(',').map((s) => s.trim()).filter(Boolean);
   const migrationsDir = path.join(process.cwd(), 'supabase', 'migrations');
 
   const classification = readClassification();
@@ -125,8 +154,21 @@ async function main(): Promise<void> {
 
     const appliedMax = [...applied.keys()].sort().pop() ?? '(none)';
     process.stdout.write(`applied head: ${appliedMax}\n`);
-    if (appliedMax !== EXPECTED_APPLIED_MAX) {
-      problems.push(`applied head is ${appliedMax}, expected ${EXPECTED_APPLIED_MAX}`);
+    if (appliedMax !== expectedHead) {
+      problems.push(`applied head is ${appliedMax}, expected ${expectedHead}`);
+    }
+    if (applied.size !== expectedRows) {
+      problems.push(`ledger has ${applied.size} rows, expected ${expectedRows}`);
+    }
+    // THE PENDING SET WAS ONLY EVER PRINTED, NEVER ASSERTED - so a surprise extra migration
+    // would have scrolled past a reader as just another line. Now it is checked exactly, in
+    // order, because "what is about to be applied" is the one thing a pre-check exists to pin.
+    const pendingMismatch = pending.length !== expectedPending.length
+      || pending.some((name, i) => name !== expectedPending[i]);
+    if (pendingMismatch) {
+      problems.push(
+        `pending set is [${pending.join(', ')}], expected [${expectedPending.join(', ')}]`,
+      );
     }
 
     // A row the repository cannot produce a file for is drift this tool must not paper over.
