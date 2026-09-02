@@ -31,16 +31,54 @@ function arg(name: string): string | null {
   return i >= 0 ? process.argv[i + 1] ?? '' : null;
 }
 
-/** Measured on production immediately BEFORE the apply, from the 12-26-14Z revert-point dump. */
-const EXPECTED_COUNTS: Record<string, number> = {
-  'auth.users': 8,
-  'public.profiles': 8,
-  'public.bars': 1256,
-  'public.ratings': 32,
-  'public.follows': 16,
-  'public.pairwise_comparisons': 49,
-  'public.waitlist': 1,
-};
+/**
+ * COUNTS ARE READ FROM THE PRE-APPLY DUMP. They used to be a hardcoded object whose header
+ * CLAIMED to be 'measured from the revert-point dump' - and it was, once, on 2026-08-31, before
+ * phase D loaded 851 bars. On 09-02 it failed a correct production apply with
+ * `public.bars: 2107 rows, expected 1256`: the THIRD tool in this set to refuse a right answer
+ * from a stale pin.
+ *
+ * A comment saying a constant was measured is not the same as measuring it. So the dump is now
+ * READ, and the comparison is genuinely before-versus-after rather than after-versus-a-memory.
+ * The dump's shape is { ref, taken_at, tables: { name: rows[] } }, so a count is a row-array
+ * length.
+ */
+const TRACKED_TABLES = [
+  'auth.users', 'public.profiles', 'public.bars', 'public.ratings',
+  'public.follows', 'public.pairwise_comparisons', 'public.waitlist',
+] as const;
+
+function countsFromDump(file: string): Record<string, number> {
+  let parsed: { ref?: string; taken_at?: string; tables?: Record<string, unknown[]> };
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    process.stderr.write(`--pre-dump ${file} could not be read: ${(error as Error).message}\n`);
+    process.exit(2);
+  }
+  const tables = parsed.tables;
+  if (!tables || typeof tables !== 'object') {
+    process.stderr.write(`--pre-dump ${file} has no 'tables' object; it is not a db:dump file\n`);
+    process.exit(2);
+  }
+  const counts: Record<string, number> = {};
+  for (const name of TRACKED_TABLES) {
+    const rows = tables[name];
+    // A table absent from the dump is NOT zero - it is unmeasured, and treating it as zero
+    // would turn a gap in the evidence into a passing assertion.
+    if (!Array.isArray(rows)) {
+      process.stderr.write(`--pre-dump ${file} does not contain ${name}; cannot verify it survived\n`);
+      process.exit(2);
+    }
+    counts[name] = rows.length;
+  }
+  process.stdout.write(`pre-apply dump  : ${file}\n`);
+  process.stdout.write(`  taken_at      : ${parsed.taken_at ?? '(unstated)'}\n`);
+  process.stdout.write(`  ref           : ${parsed.ref ?? '(unstated)'}\n\n`);
+  return counts;
+}
+
+const EXPECTED_COUNTS = countsFromDump(requireArg('--pre-dump'));
 
 /**
  * REQUIRED PARAMETERS, not constants. Pinning these in the file is how this tool and
