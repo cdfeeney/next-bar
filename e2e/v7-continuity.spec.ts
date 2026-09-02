@@ -127,6 +127,23 @@ async function seedV7Install(page: Page): Promise<void> {
   );
 }
 
+/**
+ * The V7 vibe profile, read back off the device.
+ *
+ * WP8 moved this row: the old Settings page said only "Your quiz answers are
+ * saved." and that copy no longer exists anywhere. The Edit-profile screen
+ * (/settings/profile) now READS the stored profile out — archetype, tags and
+ * neighborhoods — so the assertion is retargeted onto the seeded values
+ * themselves, which is a stricter check than the sentence it replaces: a
+ * dropped or rewritten `next-bar:profile:v1` fails it, where the old copy line
+ * would have rendered regardless of what the key held.
+ */
+async function expectV7VibeProfile(page: Page): Promise<void> {
+  await expect(page.getByText('Skyline Sipper')).toBeVisible();
+  await expect(page.getByText('cocktail · rooftop')).toBeVisible();
+  await expect(page.getByText('Neighborhoods: Midtown')).toBeVisible();
+}
+
 function readLocal(page: Page): Promise<Record<string, string | null>> {
   return page.evaluate(
     (keys) => Object.fromEntries(keys.map((key) => [key, localStorage.getItem(key)])),
@@ -154,8 +171,8 @@ test('V7 Bar 54, tied scores, lists, vibe profile, and night history survive nav
   await page.reload();
   await expect(page.getByRole('button', { name: /^V7 favorites 3 bars$/ })).toBeVisible();
 
-  await page.goto('/settings');
-  await expect(page.getByText('Your quiz answers are saved.')).toBeVisible();
+  await page.goto('/settings/profile');
+  await expectV7VibeProfile(page);
 
   await page.goto('/');
   await expect(page.getByTestId('recap-card')).toContainText('Attaboy');
@@ -252,8 +269,8 @@ test('every V7 key survives a force-close and reopen; the session-scoped flag do
   // Named lists and vibe profile still render from the surviving keys.
   await reopened.goto('/lists');
   await expect(reopened.getByRole('button', { name: /^V7 favorites 3 bars$/ })).toBeVisible();
-  await reopened.goto('/settings');
-  await expect(reopened.getByText('Your quiz answers are saved.')).toBeVisible();
+  await reopened.goto('/settings/profile');
+  await expectV7VibeProfile(reopened);
   await reopened.close();
 });
 
@@ -509,8 +526,8 @@ test('signing back in to the SAME V7 account keeps every V7 key and everything i
 
   await page.goto('/lists');
   await expect(page.getByRole('button', { name: /^V7 favorites 3 bars$/ })).toBeVisible();
-  await page.goto('/settings');
-  await expect(page.getByText('Your quiz answers are saved.')).toBeVisible();
+  await page.goto('/settings/profile');
+  await expectV7VibeProfile(page);
 
   // Sign-in ADDS `next-bar:account:owner:v1` (and may add the journal-era
   // marker); it may not change or remove anything the V7 device already had —

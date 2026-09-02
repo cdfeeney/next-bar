@@ -126,9 +126,12 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/u/claire');
   });
 
-  test('/settings renders signed-out account card', async ({ page }) => {
+  test('/settings renders the signed-out Account root', async ({ page }) => {
+    // WP8 split this surface: /settings is the profile ROOT and its h1 reads
+    // "Account"; the settings list moved to /settings/preferences, which keeps
+    // the "Settings" heading (smoke-tested below).
     await page.goto('/settings');
-    await expect(page.getByRole('heading', { name: /^Settings$/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Account$/ })).toBeVisible();
     // A configured build resolves signed-out to the CTA; an intentionally
     // unconfigured local build resolves to its explicit unavailable state.
     await expect(
@@ -137,6 +140,13 @@ test.describe('App-shell smoke', () => {
         .or(page.getByText(/Sign-in is unavailable on this build/i)),
     ).toBeVisible({ timeout: 10_000 });
     await expectNoConsoleErrors(page, '/settings');
+  });
+
+  test('/settings/preferences renders the Settings list', async ({ page }) => {
+    await page.goto('/settings/preferences');
+    await expect(page.getByRole('heading', { name: /^Settings$/ })).toBeVisible();
+    await expect(page.getByRole('link', { name: /^Edit profile/ })).toBeVisible();
+    await expectNoConsoleErrors(page, '/settings/preferences');
   });
 
   test('/install renders the marketing pitch', async ({ page }) => {

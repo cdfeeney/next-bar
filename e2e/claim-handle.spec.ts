@@ -1,9 +1,14 @@
 /**
  * claim-handle.spec.ts
  *
- * Coverage for the B2 claim-username flow on /settings.
+ * Coverage for the B2 claim-username flow on /settings/profile.
  *
- * Scope: client-side UI of ClaimHandle + the settings account card. Same
+ * WP8 split the old Settings page: ClaimHandle now lives in the Username
+ * group of the Edit-profile screen (/settings/profile), and /settings is the
+ * Account root. The assertions below are unchanged — only the route they are
+ * made against moved.
+ *
+ * Scope: client-side UI of ClaimHandle + the Username group that hosts it. Same
  * stubbed-Supabase pattern as auth-page.spec.ts — every REST/RPC endpoint
  * is intercepted so no real accounts or database rows are involved.
  *
@@ -111,7 +116,7 @@ type StubOptions = {
 };
 
 /**
- * Stub every Supabase surface /settings touches when signed in. Playwright
+ * Stub every Supabase surface /settings/profile touches when signed in. Playwright
  * checks routes newest-first, so the broad rest catch-all goes FIRST and
  * the specific endpoints override it.
  */
@@ -153,14 +158,14 @@ const usernameInput = (page: Page) => page.getByPlaceholder('username');
 const claimButton = (page: Page) =>
   page.getByRole('button', { name: /claim username/i });
 
-test.describe('/settings — claim username (signed in, no handle)', () => {
+test.describe('/settings/profile — claim username (signed in, no handle)', () => {
   test.beforeEach(async ({ page }) => {
     test.skip(
       SUPABASE_URL === null,
       'NEXT_PUBLIC_SUPABASE_URL not found in .env.local',
     );
     await signIn(page);
-    // This spec exercises ClaimHandle's UI on /settings for a handle-less
+    // This spec exercises ClaimHandle's UI on /settings/profile for a handle-less
     // account — exactly the state OnboardingGate redirects. Pre-set the
     // once-per-session prompted flag so the gate stays quiet (the gate's
     // own behavior is covered in onboarding-identity.spec.ts).
@@ -173,7 +178,7 @@ test.describe('/settings — claim username (signed in, no handle)', () => {
     page,
   }) => {
     await stubSupabase(page, { profileHandle: null });
-    await page.goto('/settings');
+    await page.goto('/settings/profile');
 
     await expect(page.getByText('Claim your username')).toBeVisible();
     await expect(usernameInput(page)).toBeVisible();
@@ -196,7 +201,7 @@ test.describe('/settings — claim username (signed in, no handle)', () => {
     page,
   }) => {
     await stubSupabase(page, { profileHandle: null, searchResults: [] });
-    await page.goto('/settings');
+    await page.goto('/settings/profile');
 
     await typeInto(usernameInput(page), 'connor_f');
 
@@ -211,7 +216,7 @@ test.describe('/settings — claim username (signed in, no handle)', () => {
       profileHandle: null,
       searchResults: [{ handle: 'ConnorF', display_name: 'Connor' }],
     });
-    await page.goto('/settings');
+    await page.goto('/settings/profile');
 
     await typeInto(usernameInput(page), 'connorf');
 
@@ -224,7 +229,7 @@ test.describe('/settings — claim username (signed in, no handle)', () => {
   }) => {
     const searchRequests: string[] = [];
     await stubSupabase(page, { profileHandle: null, searchRequests });
-    await page.goto('/settings');
+    await page.goto('/settings/profile');
 
     await typeInto(usernameInput(page), 'a!');
 
@@ -244,19 +249,20 @@ test.describe('/settings — claim username (signed in, no handle)', () => {
       searchResults: [],
       claimResult: 'ConnorF',
     });
-    await page.goto('/settings');
+    await page.goto('/settings/profile');
 
     await typeInto(usernameInput(page), 'ConnorF');
     await claimButton(page).click();
 
-    // On success, Settings' onClaimed updates the account card and UNMOUNTS
-    // the ClaimHandle card entirely — the @handle line in the account card
-    // is the persistent success feedback (the card's internal claimed-state
-    // copy is unreachable in this integration; documented seam).
+    // On success, the Username group's onClaimed records the handle and
+    // UNMOUNTS the ClaimHandle card entirely — the @handle line the group
+    // renders in its place is the persistent success feedback (the card's
+    // internal claimed-state copy is unreachable in this integration;
+    // documented seam).
     await expect(page.getByText('@ConnorF').first()).toBeVisible();
     await expect(usernameInput(page)).not.toBeVisible();
-    // Still on /settings — claiming must not navigate.
-    await expect(page).toHaveURL(/\/settings$/);
+    // Still on /settings/profile — claiming must not navigate.
+    await expect(page).toHaveURL(/\/settings\/profile$/);
   });
 
   test('lost race / taken claim (RPC returns null) surfaces the taken error', async ({
@@ -267,7 +273,7 @@ test.describe('/settings — claim username (signed in, no handle)', () => {
       searchResults: [],
       claimResult: null,
     });
-    await page.goto('/settings');
+    await page.goto('/settings/profile');
 
     await typeInto(usernameInput(page), 'connor_f');
     await claimButton(page).click();
@@ -280,15 +286,15 @@ test.describe('/settings — claim username (signed in, no handle)', () => {
   });
 });
 
-test.describe('/settings — handle already claimed', () => {
-  test('shows @handle in the account card and no claim UI', async ({ page }) => {
+test.describe('/settings/profile — handle already claimed', () => {
+  test('shows @handle in the Username group and no claim UI', async ({ page }) => {
     test.skip(
       SUPABASE_URL === null,
       'NEXT_PUBLIC_SUPABASE_URL not found in .env.local',
     );
     await signIn(page);
     await stubSupabase(page, { profileHandle: 'ConnorF' });
-    await page.goto('/settings');
+    await page.goto('/settings/profile');
 
     await expect(page.getByText('@ConnorF')).toBeVisible();
     await expect(page.getByText('Claim your username')).not.toBeVisible();
@@ -296,9 +302,9 @@ test.describe('/settings — handle already claimed', () => {
   });
 });
 
-test.describe('/settings — signed out', () => {
+test.describe('/settings/profile — signed out', () => {
   test('no claim UI; the sign-in CTA renders instead', async ({ page }) => {
-    await page.goto('/settings');
+    await page.goto('/settings/profile');
 
     await expect(page.getByRole('link', { name: /sign in/i })).toBeVisible();
     await expect(page.getByText('Claim your username')).not.toBeVisible();
