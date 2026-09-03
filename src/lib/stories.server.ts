@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { getBrowserSupabase } from '@/lib/supabase/client';
 
 /**
  * Server-mode Stories (migration 0065). Pure async functions — the React layer
@@ -213,9 +214,34 @@ export function storyObjectKey(
  */
 const MEDIA_API = '/api/media';
 
+/**
+ * The caller's bearer token, asked of the client that actually HOLDS the session.
+ *
+ * WHY THE FALLBACK IS NOT BELT-AND-BRACES. This module is handed
+ * `supabase` from `@/lib/supabase` — a plain `createClient` singleton — while
+ * the session this app signs in with lives on `getBrowserSupabase()`, which is
+ * what `useAuth` and every working boundary consumer (`FeedSection`,
+ * `NightOutMedia`) read. Asking only the passed client returns null for a signed-
+ * in user, and the first thing that surfaces is a publish refused with "Sign in
+ * to share a story" while the person is demonstrably signed in. Caught by
+ * `add-story.spec.ts`, which is exactly the kind of wiring a unit test with a
+ * stubbed client cannot see.
+ *
+ * The passed client is still asked FIRST: it keeps the dependency explicit and
+ * injectable, and a caller that does hold a session is answered from it.
+ */
 async function accessToken(client: SupabaseClient): Promise<string | null> {
   try {
     const { data } = await client.auth.getSession();
+    const own = data?.session?.access_token ?? null;
+    if (own !== null) return own;
+  } catch {
+    // fall through to the browser session below
+  }
+  try {
+    const browser = getBrowserSupabase();
+    if (!browser) return null;
+    const { data } = await browser.auth.getSession();
     return data?.session?.access_token ?? null;
   } catch {
     return null;

@@ -278,27 +278,60 @@ export async function stubStories(
     await fulfillJson(200, state.untagResult)(route);
   });
 
-  // Storage. Upload and remove share a path prefix and are told apart by method.
-  await page.route('**/storage/v1/object/story-media**', async (route) => {
+  // THE MEDIA BOUNDARY, not Storage.
+  //
+  // These used to stub `**/storage/v1/object/story-media**` directly, because
+  // that is what `stories.server.ts` called. 0071 revoked the bucket policies
+  // that path depends on, and the module now goes through `/api/media/*` — so a
+  // stub aimed at Storage answers a request the app no longer makes, while the
+  // real route handler (which needs a service-role key the worktree env does not
+  // carry) answers 503. Stubbing the boundary is what keeps this suite testing
+  // the app's actual contract rather than a retired one.
+  //
+  // `state.uploads` still records the OBJECT KEY, because that is what the
+  // assertions are about — but the key is now the one the ROUTE mints and
+  // returns (`${owner}/${mediaId}`), which is exactly the value the app then
+  // hands to publish_story.
+  // ONE handler for the whole boundary, branching internally. Three separate
+  // page.route globs do NOT work here: Playwright matches newest-first, so a
+  // `**/api/media/*` registered last shadows `**/api/media/upload`, and the
+  // upload arrives at the removal branch. Matching once and branching on the
+  // path is the version that cannot be broken by registration order.
+  let mediaSeq = 0;
+  await page.route('**/api/media/**', async (route) => {
     const request = route.request();
-    if (request.method() === 'DELETE') {
-      const body = request.postDataJSON() as { prefixes?: string[] } | null;
-      state.removed.push(...(body?.prefixes ?? []));
-      await fulfillJson(200, [])(route);
+    const path = new URL(request.url()).pathname;
+
+    if (path.endsWith('/api/media/upload')) {
+      mediaSeq += 1;
+      const mediaId = `e2e-media-${mediaSeq}`;
+      const storagePath = `${YOU_ID}/${mediaId}`;
+      state.uploads.push(storagePath);
+      await fulfillJson(200, {
+        ok: true, mediaId, storagePath,
+        contentType: 'image/png', width: 1, height: 1, alsoReclaimed: 0,
+      })(route);
       return;
     }
-    const key = new URL(request.url()).pathname.split('/object/story-media/')[1] ?? '';
-    state.uploads.push(decodeURIComponent(key));
-    await fulfillJson(200, { Key: `story-media/${key}` })(route);
-  });
 
-  // Signing hands back a path under the storage origin; the <img> then fetches
-  // it, and that fetch is answered with real PNG bytes.
-  await page.route('**/storage/v1/object/sign/**', (route) =>
-    fulfillJson(200, {
-      signedURL: '/object/authenticated/story-media/signed.png?token=e2e',
-    })(route),
-  );
+    // Mint. The route decides the lifetime, so there is no expiresIn to
+    // honour — it hands back a URL, and the authenticated-object fetch below
+    // answers that with real PNG bytes.
+    if (path.endsWith('/url')) {
+      await fulfillJson(200, {
+        ok: true, url: '/object/authenticated/story-media/signed.png?token=e2e',
+      })(route);
+      return;
+    }
+
+    if (request.method() === 'DELETE') {
+      state.removed.push(path.split('/').pop() ?? '');
+      await fulfillJson(200, { ok: true })(route);
+      return;
+    }
+
+    await fulfillJson(404, { ok: false, error: 'not_found' })(route);
+  });
   await page.route('**/storage/v1/object/authenticated/**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'image/png', body: PNG_1X1 });
   });
