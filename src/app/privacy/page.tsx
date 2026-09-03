@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   description: 'How Next Bar handles your data.',
 };
 
-const UPDATED = 'August 20, 2026';
+const UPDATED = 'September 3, 2026';
 
 export default function PrivacyPage(): JSX.Element {
   return (
@@ -51,7 +51,13 @@ export default function PrivacyPage(): JSX.Element {
             <li>
               <strong>If you create an account:</strong> your email address,
               a username you choose, your bar ratings, rankings, and who you
-              follow — stored with our database provider (Supabase).
+              follow — plus everything you post: stories and the photos in
+              them, the bar and people you tag on a story, groups you join
+              and messages you send there, night outs you plan or join, and
+              the &ldquo;I&apos;m here&rdquo; presence pin you share with
+              friends (a bar you pick by hand — never GPS — and it expires
+              at 4:00&nbsp;AM). All of it is stored with our database provider
+              (Supabase) so it works across devices.
             </li>
             <li>
               <strong>If you join the waitlist:</strong> your email, the
@@ -106,9 +112,13 @@ export default function PrivacyPage(): JSX.Element {
         <Block title="Deleting your data">
           Signed-out data can be wiped any time from Settings → Clear all
           ratings, or by clearing your browser storage. Signed in, go to
-          Settings → Delete account: it permanently removes your login,
-          profile, ratings, rankings, and follows — everything, immediately.
-          Prefer to ask a human? Email us and we&apos;ll do it for you.
+          Settings → Delete account: it permanently and immediately removes
+          your login, profile, ratings, rankings, follows, stories, group
+          memberships and messages, night outs, and presence pins. Photos
+          you uploaded stop being reachable through the app at the same
+          moment; the underlying files are permanently erased from storage
+          by a scheduled cleanup that runs within 24 hours. Prefer to ask a
+          human? Email us and we&apos;ll do it for you.
         </Block>
 
         <Block title="Contact">

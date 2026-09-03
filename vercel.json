@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/media/reclaim",
+      "schedule": "0 9 * * *"
+    }
+  ]
+}

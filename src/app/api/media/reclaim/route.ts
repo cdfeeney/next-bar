@@ -37,11 +37,40 @@ import {
  */
 export const runtime = 'nodejs';
 
-function isServiceKey(token: string, serviceKey: string): boolean {
+function tokenMatches(token: string, secret: string): boolean {
   const presented = Buffer.from(token);
-  const expected = Buffer.from(serviceKey);
+  const expected = Buffer.from(secret);
   if (presented.length !== expected.length) return false;
   return timingSafeEqual(presented, expected);
+}
+
+/**
+ * GET /api/media/reclaim — the scheduled tick. `vercel.json` points a daily
+ * cron here; Vercel invokes crons with GET and `Authorization: Bearer
+ * ${CRON_SECRET}` (the platform's own env var — NOT the service key, which
+ * this way never appears in deployment config). Same bounded global sweep as
+ * the service-key POST. No CRON_SECRET configured = no scheduled path at all.
+ */
+export async function GET(request: Request): Promise<NextResponse> {
+  const secret = process.env.CRON_SECRET;
+  const token = bearerToken(request);
+  if (secret === undefined || secret === '' || token === null || !tokenMatches(token, secret)) {
+    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+  }
+
+  const env = readMediaEnv();
+  if (env === null) {
+    return NextResponse.json({ ok: false, error: 'unavailable' }, { status: 503 });
+  }
+
+  const admin = adminClient(env);
+  const swept = await sweepReclaimable(admin, admin);
+  return NextResponse.json({
+    ok: true,
+    scope: 'all',
+    reclaimed: swept.reclaimed.length,
+    orphanedPaths: swept.orphaned,
+  });
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -61,7 +90,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   // what makes it global: 0066's functions widen from "this account's media" to
   // "all media" exactly when `auth.uid()` is null, and a service-role client is
   // the only client for which it is.
-  if (isServiceKey(token, env.serviceKey)) {
+  if (tokenMatches(token, env.serviceKey)) {
     const swept = await sweepReclaimable(admin, admin);
     return NextResponse.json({
       ok: true,

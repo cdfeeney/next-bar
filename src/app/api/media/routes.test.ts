@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The three media routes, exercised as routes.
@@ -66,7 +66,7 @@ vi.mock('@/lib/media/uploadBody', () => ({
 const { DELETE } = await import('./[mediaId]/route');
 const { GET } = await import('./[mediaId]/url/route');
 const { POST } = await import('./upload/route');
-const { POST: RECLAIM } = await import('./reclaim/route');
+const { POST: RECLAIM, GET: RECLAIM_CRON } = await import('./reclaim/route');
 
 const ENV = { url: 'https://example.test', anonKey: 'anon', serviceKey: 'service' };
 
@@ -647,6 +647,72 @@ describe('POST /api/media/reclaim', () => {
       new Request('https://app.test/api/media/reclaim', { method: 'POST' }),
     );
     expect(response.status).toBe(503);
+  });
+});
+
+/**
+ * The scheduled path. vercel.json runs this daily; Vercel authenticates its
+ * own cron requests with `Authorization: Bearer ${CRON_SECRET}`. This is what
+ * makes "bytes die with the last reference" true without anyone remembering
+ * to call the sweep by hand.
+ */
+describe('GET /api/media/reclaim (cron)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  function cronRequest(bearer?: string) {
+    return new Request('https://app.test/api/media/reclaim', {
+      method: 'GET',
+      headers: bearer === undefined ? {} : { authorization: `Bearer ${bearer}` },
+    });
+  }
+
+  it('refuses everything when no CRON_SECRET is configured', async () => {
+    vi.stubEnv('CRON_SECRET', '');
+    bearerToken.mockReturnValue('anything');
+    const response = await RECLAIM_CRON(cronRequest('anything'));
+    expect(response.status).toBe(401);
+  });
+
+  it('refuses a wrong bearer', async () => {
+    vi.stubEnv('CRON_SECRET', 'cron-secret');
+    bearerToken.mockReturnValue('not-the-secret');
+    const response = await RECLAIM_CRON(cronRequest('not-the-secret'));
+    expect(response.status).toBe(401);
+  });
+
+  it('runs the GLOBAL sweep for the cron secret, on the admin client only', async () => {
+    vi.stubEnv('CRON_SECRET', 'cron-secret');
+    readMediaEnv.mockReturnValue(ENV);
+    bearerToken.mockReturnValue('cron-secret');
+    const remove = vi.fn(async (paths: string[]) => ({
+      data: paths.map((name) => ({ name })),
+      error: null,
+    }));
+    const admin = db({}, { remove }).client;
+    admin.rpc = vi.fn(async (name: string) => (
+      name === 'claim_orphan_paths'
+        ? {
+          data: [{
+            media_id: 'm-old',
+            bucket_id: 'story-media',
+            storage_path: 'deleted-account/photo.jpg',
+          }],
+          error: null,
+        }
+        : { data: [], error: null }
+    ));
+    adminClient.mockReturnValue(admin);
+
+    const response = await RECLAIM_CRON(cronRequest('cron-secret'));
+
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      scope: 'all',
+      reclaimed: 1,
+    });
+    expect(callerClient).not.toHaveBeenCalled();
+    expect(verifiedUserId).not.toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith(['deleted-account/photo.jpg']);
   });
 });
 
