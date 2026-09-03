@@ -215,33 +215,27 @@ export function storyObjectKey(
 const MEDIA_API = '/api/media';
 
 /**
- * The caller's bearer token, asked of the client that actually HOLDS the session.
+ * The caller's bearer token — from THE CLIENT THIS OPERATION USES, and only it.
  *
- * WHY THE FALLBACK IS NOT BELT-AND-BRACES. This module is handed
- * `supabase` from `@/lib/supabase` — a plain `createClient` singleton — while
- * the session this app signs in with lives on `getBrowserSupabase()`, which is
- * what `useAuth` and every working boundary consumer (`FeedSection`,
- * `NightOutMedia`) read. Asking only the passed client returns null for a signed-
- * in user, and the first thing that surfaces is a publish refused with "Sign in
- * to share a story" while the person is demonstrably signed in. Caught by
- * `add-story.spec.ts`, which is exactly the kind of wiring a unit test with a
- * stubbed client cannot see.
+ * A CROSS-CLIENT FALLBACK LIVED HERE BRIEFLY AND WAS WRONG. It read the token
+ * from `getBrowserSupabase()` when the passed client had no session, which made
+ * publish "work" while splitting the operation across two identities: the bytes
+ * went up under the browser session and `publish_story` then ran on the passed
+ * client, which had none. The visible symptom was fixed and the actual defect —
+ * a caller handing this module a session-less client — was hidden. Worse, with a
+ * stale account in one client and a different account in the other, bytes could
+ * be uploaded as one identity and published as another; nothing here re-checks
+ * `input.authorId` against whichever bearer was chosen.
+ * Codex independent review, 2026-09-02, CRITICAL.
  *
- * The passed client is still asked FIRST: it keeps the dependency explicit and
- * injectable, and a caller that does hold a session is answered from it.
+ * The fix is at the caller: `storyStore` now passes `getBrowserSupabase()`, so
+ * upload, mint, RPC and removal are all one authenticated identity. This
+ * function asks that client and nothing else — a null here is an honest "not
+ * signed in", which is exactly what the caller must surface.
  */
 async function accessToken(client: SupabaseClient): Promise<string | null> {
   try {
     const { data } = await client.auth.getSession();
-    const own = data?.session?.access_token ?? null;
-    if (own !== null) return own;
-  } catch {
-    // fall through to the browser session below
-  }
-  try {
-    const browser = getBrowserSupabase();
-    if (!browser) return null;
-    const { data } = await browser.auth.getSession();
     return data?.session?.access_token ?? null;
   } catch {
     return null;
@@ -395,7 +389,12 @@ export async function publishStory(
         const orphans = await cleanup();
         return {
           ok: false, reason: 'failed', orphans,
-          message: 'The second photo could not be uploaded. Nothing was shared.',
+          // The size-specific message applies to whichever image was too large,
+          // not only the first: a user told "could not be uploaded" about an
+          // oversized second photo has no idea what to change.
+          message: insetUpload !== null && 'tooLarge' in insetUpload
+            ? 'That second photo is too large. Nothing was shared.'
+            : 'The second photo could not be uploaded. Nothing was shared.',
         };
       }
     }
@@ -698,14 +697,25 @@ async function removeBytes(
     let removed = false;
     for (let attempt = 0; attempt < 2 && !removed; attempt += 1) {
       try {
-        const response = await fetch(`${MEDIA_API}/${mediaId}`, {
+        // `?scope=everywhere` IS REQUIRED. A bare `DELETE /api/media/:id` is
+        // refused with 400 by the route, which accepts only `?destination=<id>`
+        // (retire one reference) or `?scope=everywhere` (remove the media and
+        // its bytes). This function is the orphan path — bytes uploaded for a
+        // story that was never published, or whose row is already soft-deleted —
+        // so there is no destination to retire and `everywhere` is the correct
+        // verb. Sending the bare form silently 400'd EVERY cleanup: failed
+        // publication, failed inset upload and Undo all leaked their bytes,
+        // while the stubs answered 200 and both gates stayed green.
+        // Codex independent review, 2026-09-02, CRITICAL.
+        const response = await fetch(`${MEDIA_API}/${mediaId}?scope=everywhere`, {
           method: 'DELETE',
           headers: { Authorization: `Bearer ${token}` },
         });
-        // 404 is DONE, not failed: the bytes are not there to remove, which is
-        // the outcome this call exists to reach. Retrying it manufactures an
-        // orphan report for an object that is already gone.
-        if (response.ok || response.status === 404) removed = true;
+        // ONLY 2xx COUNTS AS REMOVED. A 404 was briefly treated as "already
+        // gone"; the route never emits a semantic 404 for absent bytes (it
+        // answers 400/401/403/500/200), so that rule could only ever have
+        // converted a misrouted or undeployed route into a silent success.
+        if (response.ok) removed = true;
       } catch {
         // fall through to the retry, then to the orphan report
       }

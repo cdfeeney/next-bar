@@ -325,6 +325,19 @@ export async function stubStories(
     }
 
     if (request.method() === 'DELETE') {
+      // THE STUB ENFORCES THE ROUTE'S REAL CONTRACT. A bare DELETE with neither
+      // `?destination=` nor `?scope=everywhere` is a 400 in the real handler.
+      // This stub used to answer 200 regardless, which is precisely why a
+      // green suite coexisted with a client that malformed every cleanup call.
+      // A stub more permissive than the thing it stands in for does not test
+      // the client, it exonerates it.
+      const query = new URL(request.url()).searchParams;
+      const scoped = query.get('scope') === 'everywhere';
+      const destination = query.get('destination');
+      if ((!scoped && destination === null) || (scoped && destination !== null)) {
+        await fulfillJson(400, { ok: false, error: 'bad_request' })(route);
+        return;
+      }
       state.removed.push(path.split('/').pop() ?? '');
       await fulfillJson(200, { ok: true })(route);
       return;

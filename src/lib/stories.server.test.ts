@@ -143,6 +143,17 @@ function installBoundary(opts: {
       return reply(o?.status ?? 200, o?.body ?? { ok: true, url: 'https://signed.example/x' });
     }
     if (method === 'DELETE') {
+      // The real route refuses a DELETE carrying neither `?scope=everywhere`
+      // nor `?destination=`. Answering 200 to the bare form is how this suite
+      // stayed green over a client that malformed every cleanup call
+      // (Codex independent review, 2026-09-02, CRITICAL) — so the stub now
+      // enforces the contract rather than excusing it.
+      const q = new URL(href, 'http://t').searchParams;
+      const scoped = q.get('scope') === 'everywhere';
+      const destination = q.get('destination');
+      if ((!scoped && destination === null) || (scoped && destination !== null)) {
+        return reply(400, { ok: false, error: 'bad_request' });
+      }
       const o = opts.del;
       return reply(o?.status ?? 200, o?.body ?? { ok: true });
     }
@@ -165,7 +176,9 @@ const urlCalls = (): string[] =>
 const deleteIds = (): string[] =>
   (fetchMock?.mock.calls ?? [])
     .filter((c) => ((c[1] as any)?.method ?? '').toUpperCase() === 'DELETE')
-    .map((c) => String(c[0]).split('/').pop() as string);
+    // Strip the query — the id is the last PATH segment, and the call now
+    // carries the `?scope=everywhere` the route requires.
+    .map((c) => new URL(String(c[0]), 'http://t').pathname.split('/').pop() as string);
 
 const blob = (): Blob => new Blob(['x'], { type: 'image/jpeg' });
 
@@ -241,9 +254,28 @@ describe('publishStory', () => {
     if (!result.ok) expect(result.orphans).toEqual(['a/media-1']);
   });
 
-  it('treats a 404 from the boundary as removed, not as an orphan to report', async () => {
-    // The bytes are not there to delete, which IS the outcome this call wants.
-    // Reporting it as an orphan sends someone hunting an object already gone.
+  it('asks the boundary to remove the media EVERYWHERE, the only form it accepts', async () => {
+    // A bare `DELETE /api/media/:id` is a 400 at the real route. This asserts
+    // the scope is actually on the wire, because the previous version of this
+    // suite proved only that "a DELETE happened" — which a 400 also satisfies.
+    const { client } = clientStub({
+      rpc: { data: null, error: { message: 'boom', code: 'XX000' } },
+    });
+    const result = await publishStory(client, {
+      authorId: 'a', draftId: 'd', main: blob(), audience: 'friends',
+    });
+    expect(result.ok).toBe(false);
+    const del = (fetchMock.mock.calls as any[]).find(
+      (c) => (c[1]?.method ?? '').toUpperCase() === 'DELETE',
+    );
+    expect(String(del[0])).toContain('scope=everywhere');
+    if (!result.ok) expect(result.orphans).toEqual([]);
+  });
+
+  it('reports an orphan when the boundary refuses the removal, never a silent clean', async () => {
+    // 404 used to be read as "already gone". The route emits no semantic 404
+    // for absent bytes, so that rule could only ever have turned a misrouted or
+    // undeployed route into a false clean.
     installBoundary({ del: { status: 404, body: { ok: false, error: 'not_found' } } });
     const { client } = clientStub({
       rpc: { data: null, error: { message: 'boom', code: 'XX000' } },
@@ -252,7 +284,7 @@ describe('publishStory', () => {
       authorId: 'a', draftId: 'd', main: blob(), audience: 'friends',
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.orphans).toEqual([]);
+    if (!result.ok) expect(result.orphans).toEqual(['a/media-1']);
   });
 
   it('cleans up the first photo when the second of a pair fails to upload', async () => {

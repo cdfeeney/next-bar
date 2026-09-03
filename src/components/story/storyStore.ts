@@ -29,7 +29,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
-import { supabase } from '@/lib/supabase';
+// ONE CLIENT FOR THE WHOLE STORIES OPERATION, and it must be the one that holds
+// the session. This used to import the plain `@/lib/supabase` singleton — a bare
+// `createClient`, whose session lives in localStorage — while this app signs in
+// through `getBrowserSupabase()`, a `createBrowserClient` from @supabase/ssr
+// whose session lives in COOKIES. Different stores, so the plain client was
+// effectively anonymous: uploads went out under the browser session while
+// `publish_story` executed on a client with no session at all, and in the worst
+// case (a stale account in one client, a different account in the other) bytes
+// could be uploaded as one identity and published as another.
+// Codex independent review, 2026-09-02, CRITICAL.
+import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
   SIGNED_URL_MAX_SECONDS,
   deleteStory,
@@ -273,7 +283,7 @@ export function useStories(): UseStories {
     let cancelled = false;
     setStatus((current) => (current === 'ready' ? current : 'loading'));
     void (async () => {
-      const result = await fetchVisibleStories(supabase);
+      const result = await fetchVisibleStories(getBrowserSupabase());
       if (cancelled) return;
       if (!result.ok) {
         // An unreachable backend is NOT an empty feed. Saying "no stories"
@@ -482,7 +492,7 @@ export function useStories(): UseStories {
     if (youId === null) {
       return { ok: false, message: 'Sign in to add to your story.' };
     }
-    const result = await publishStory(supabase, {
+    const result = await publishStory(getBrowserSupabase(), {
       authorId: youId,
       draftId: newDraftId(),
       main: input.main,
@@ -506,7 +516,7 @@ export function useStories(): UseStories {
   }, [youId, refresh]);
 
   const removeItem = useCallback(async (id: string): Promise<ActionOutcome> => {
-    const result = await deleteStory(supabase, id);
+    const result = await deleteStory(getBrowserSupabase(), id);
     if (!result.ok) {
       reportOrphans('delete', result.orphans);
       return { ok: false, message: result.message };
@@ -519,7 +529,7 @@ export function useStories(): UseStories {
   }, [refresh]);
 
   const untagMe = useCallback(async (id: string): Promise<ActionOutcome> => {
-    const result = await removeMyStoryTag(supabase, id);
+    const result = await removeMyStoryTag(getBrowserSupabase(), id);
     if (!result.ok) return { ok: false, message: result.message };
     if (!result.value) {
       return { ok: false, message: 'You are not tagged in that story.' };
