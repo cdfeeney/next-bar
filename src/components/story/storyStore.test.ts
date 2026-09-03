@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { STORIES_SEEN_STORAGE_KEY, ageLabel, initialsFor, taggedLabel } from './storyStore';
 
@@ -12,6 +14,46 @@ import { STORIES_SEEN_STORAGE_KEY, ageLabel, initialsFor, taggedLabel } from './
  * `src/lib/storiesRls.live.test.ts` (authorisation, two identities, needs a
  * database and does not run in this gate).
  */
+
+/**
+ * THE CLIENT THIS STORE HANDS TO THE STORIES MODULE — pinned at the source.
+ *
+ * A source assertion rather than a behavioural one, deliberately, because the
+ * invariant IS an import choice and nothing observable distinguishes the two
+ * clients until a real session exists. The defect it guards (Codex independent
+ * review, 2026-09-02, CRITICAL) was exactly this: the store passed the plain
+ * `@/lib/supabase` singleton — `createClient`, session in localStorage — while
+ * the app signs in through `getBrowserSupabase()`, a `createBrowserClient` whose
+ * session lives in COOKIES. The operation then ran across TWO identities: bytes
+ * uploaded under the browser session, `publish_story` executed on a client with
+ * none. Three green gates could not see it, and a cross-client token fallback
+ * made the symptom disappear while leaving the split in place.
+ *
+ * So the thing worth pinning is that this file never again reaches for the
+ * session-less singleton.
+ */
+describe('the Supabase client the story store passes down', () => {
+  const source = readFileSync(path.join(__dirname, 'storyStore.ts'), 'utf8');
+
+  it('is the browser client that holds the session', () => {
+    expect(source).toContain("from '@/lib/supabase/client'");
+    expect(source).toContain('getBrowserSupabase');
+  });
+
+  it('is never the plain singleton, whose session lives somewhere else', () => {
+    // Matches `from '@/lib/supabase'` exactly — not the `/client` subpath.
+    expect(source).not.toMatch(/from '@\/lib\/supabase'/);
+  });
+
+  it('hands the SAME client to every call, so one operation is one identity', () => {
+    // Upload, mint, RPC and removal must not be split across clients again.
+    const calls = source.match(
+      /(fetchVisibleStories|publishStory|deleteStory|removeMyStoryTag)\(\s*([A-Za-z0-9_().]+)/g,
+    ) ?? [];
+    expect(calls.length).toBeGreaterThanOrEqual(4);
+    for (const call of calls) expect(call).toContain('getBrowserSupabase()');
+  });
+});
 
 describe('the surviving story storage key', () => {
   it('is the per-device read state and nothing else', () => {
