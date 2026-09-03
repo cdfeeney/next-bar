@@ -5,7 +5,8 @@ import type { Bar, ManhattanNeighborhood } from '@/types';
 import { useBars } from '@/lib/useBars';
 import { displayHood } from '@/lib/hoodDisplay';
 import { watchSearchVisibility } from '@/lib/searchBarAutoHide';
-import RatingBadge from '@/components/RatingBadge';
+import { RatingBadgeLabel } from '@/components/RatingBadge';
+import { useRatings } from '@/hooks/useRatings';
 import BarVisualTile from '@/components/BarVisualTile';
 
 type BarPickerProps = {
@@ -50,6 +51,10 @@ export default function BarPicker({
 }: BarPickerProps) {
   const [query, setQuery] = useState('');
   const bars = useBars();
+  // ONE ratings hydration for the whole list. A RatingBadge per row mounts a
+  // full useRatings each — at 2,107 production bars that was ~2,107 duplicate
+  // server fetches per picker open (net::ERR_INSUFFICIENT_RESOURCES).
+  const { getRating } = useRatings();
 
   // Auto-hide (opt-in): opacity/pointer-events only — layout is untouched, so
   // hiding can never reflow the list (which is what deferredCatalogSwap
@@ -135,7 +140,7 @@ export default function BarPicker({
                       <span className="font-display flex items-center gap-2 min-w-0">
                         <BarVisualTile bar={bar} size={32} />
                         <span className="truncate">{bar.name}</span>
-                        <RatingBadge barId={bar.id} />
+                        <RatingBadgeLabel rating={getRating(bar.id)} />
                       </span>
                       <span className="text-muted text-xs shrink-0">
                         {bar.address}

@@ -32,15 +32,23 @@ function labelFor(rating: Rating): string {
   }
 }
 
-export default function RatingBadge({ barId }: RatingBadgeProps) {
-  const { getRating } = useRatings();
-  const current = getRating(barId);
-
-  if (current === null) {
+/**
+ * Presentational badge for a rating the CALLER already holds. List surfaces
+ * (BarPicker: 2,107 rows) must use this with one `useRatings` at the list
+ * level — the hook variant below mounts a full ratings hydration per badge,
+ * which at picker scale meant ~2,107 duplicate server fetches per open.
+ */
+export function RatingBadgeLabel({ rating }: { rating: Rating | null }) {
+  if (rating === null) {
     return null;
   }
 
-  const classes = [BASE_BADGE_CLASSES, badgeClassesFor(current)].join(' ');
+  const classes = [BASE_BADGE_CLASSES, badgeClassesFor(rating)].join(' ');
 
-  return <span className={classes}>{labelFor(current)}</span>;
+  return <span className={classes}>{labelFor(rating)}</span>;
+}
+
+export default function RatingBadge({ barId }: RatingBadgeProps) {
+  const { getRating } = useRatings();
+  return <RatingBadgeLabel rating={getRating(barId)} />;
 }
