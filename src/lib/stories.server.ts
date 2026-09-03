@@ -24,27 +24,33 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * repository now DOES report it (see {@link reportOrphans}); dropping the
  * field was how the honest return value became a silent one.
  *
- * TWO OBLIGATIONS THIS LAYER DOES NOT DISCHARGE, recorded here because the
- * only thing worse than an unmet obligation is one that is written down as met:
+ * THE TWO OBLIGATIONS THIS LAYER USED TO LEAVE OPEN ARE NOW DISCHARGED, and the
+ * history matters because the gap outlived the migration that assumed it closed:
  *
- *   1. SERVER-SIDE RE-ENCODE. Nothing here decodes and re-encodes the uploaded
- *      object, so EXIF/GPS stripping depends on the capture pipeline having
- *      done it in the browser. That pipeline now fails closed rather than
- *      passing raw bytes through, and migration 0065 restricts the bucket to
- *      image MIME types, but a MODIFIED client can still upload original bytes
- *      with their metadata intact. Closing it needs an upload path that runs on
- *      a server (an edge function or a route handler); this build has none.
+ *   1. SERVER-SIDE RE-ENCODE (V8-R-STO-014). Bytes no longer leave this module
+ *      for Storage at all. They go to `POST /api/media/upload`, which decodes
+ *      and re-encodes server-side, so EXIF and GPS have no carrier in what is
+ *      stored — it no longer depends on the browser capture pipeline behaving,
+ *      and a modified client cannot post original bytes past it.
  *
- *   2. TTL IS CLAMPED HERE, NOT IN THE DATABASE. {@link signedUrlTtlSeconds}
- *      caps a URL at the story's remaining life, but the mint itself is a
- *      client call, and a client may pass any `expiresIn` it likes: Storage
- *      checks the SELECT policy at mint time, not the requested lifetime. So an
- *      authorised viewer can mint a long-lived URL while the story is still
- *      live and keep the bytes after expiry. The RLS change in 0065 shrinks the
- *      window (an expired or deleted story can no longer be signed at all, by
- *      anyone including its author) but does not kill an already-minted URL.
- *      Both a server-minted URL and the physical expiry sweep 0065's header
- *      records are required to close it properly.
+ *   2. THE TTL IS THE SERVER'S (V8-R-STO-015). The mint is
+ *      `GET /api/media/:id/url`, which accepts no `expiresIn` and caps at
+ *      whatever the media has left. {@link signedUrlTtlSeconds} still expresses
+ *      the ceiling we would ASK for, but it is no longer the only thing standing
+ *      between a viewer and a long-lived bearer URL, because the request is not
+ *      the authority any more.
+ *
+ * WHY THIS FILE WAS THE LAST ONE HOLDING THE OLD PATH. 0071 revoked the three
+ * legacy `story-media` policies on the stated assumption that its candidate also
+ * converted this module ("APPLY THIS ONLY WITH THAT CODE"). The migration
+ * shipped; the conversion did not. Production therefore ran a database that
+ * forbade the only upload path this file knew, every publish died on
+ * `new row violates row-level security policy`, and `stories` sat at 0 rows —
+ * while tsc, 2939 vitest tests and 704 e2e tests were all green, because the
+ * unit suite stubbed `client.storage` and asserted the OLD contract and the live
+ * RLS suites fail closed without a DATABASE_URL. A migration whose correctness
+ * depends on application code shipping alongside it is invisible to every gate
+ * that stubs the boundary between them.
  */
 
 /** Bucket created by migration 0065. Private: no anonymous object URL exists. */
@@ -182,6 +188,87 @@ export function storyObjectKey(
 }
 
 /**
+ * THE MEDIA BOUNDARY — the only way this module reaches Storage.
+ *
+ * WHY THIS EXISTS AT ALL. 0071 revoked the three legacy `story-media` policies
+ * (`owner writes own prefix`, `owner reads own prefix`, `audience reads
+ * referenced`) because uploads were supposed to have moved behind
+ * `POST /api/media/upload`, which decodes and re-encodes server-side so EXIF and
+ * GPS have no carrier in what is stored (V8-R-STO-014), and behind
+ * `GET /api/media/:id/url`, whose lifetime is the SERVER's (V8-R-STO-015).
+ * That migration shipped; THIS FILE DID NOT MOVE WITH IT. 0071's own header
+ * states the consequence — "Applied ahead of it, publication fails on the first
+ * upload" — and that is exactly what production was doing: every publish died on
+ * `new row violates row-level security policy`, `stories` sat at 0, and no gate
+ * could see it because the unit suite stubbed `client.storage` and the live RLS
+ * suites fail closed without a DATABASE_URL.
+ *
+ * WHY THE PATH AND NOT THE MEDIA ID. `send_group_message` takes a media id;
+ * `publish_story` takes `p_media_path`, and changing that signature is a
+ * migration this fix does not get to make. The path used is the one the ROUTE
+ * minted and returned (`${owner}/${mediaId}`), never one composed here — and
+ * `publish_story` independently refuses any path lacking a registered,
+ * non-reclaimed `media_objects` row it owns, so a client cannot invent one that
+ * passes. The trust boundary is the registry, not the string.
+ */
+const MEDIA_API = '/api/media';
+
+async function accessToken(client: SupabaseClient): Promise<string | null> {
+  try {
+    const { data } = await client.auth.getSession();
+    return data?.session?.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The media id inside a boundary-minted key. The route mints
+ * `${ownerId}/${mediaId}`, so the id is the second segment — no lookup needed.
+ * A key that is not that shape (a pre-0066 three-segment story key) has no media
+ * id, and says so rather than guessing.
+ */
+export function mediaIdFromPath(path: string): string | null {
+  const parts = path.split('/');
+  return parts.length === 2 && parts[1].length > 0 ? parts[1] : null;
+}
+
+type UploadedMedia = { mediaId: string; storagePath: string };
+
+/**
+ * One image through the boundary. Returns null on ANY failure — the caller's
+ * cleanup path is the same either way, and a 413 is reported to the user as a
+ * size problem by the caller that knows which image it was.
+ */
+async function uploadThroughBoundary(
+  token: string,
+  bytes: Blob,
+): Promise<UploadedMedia | { tooLarge: true } | null> {
+  try {
+    const form = new FormData();
+    form.append('file', bytes);
+    const response = await fetch(`${MEDIA_API}/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    if (response.status === 413) return { tooLarge: true };
+    const payload = (await response.json().catch(() => null)) as
+      | { ok?: boolean; mediaId?: string; storagePath?: string }
+      | null;
+    if (
+      !response.ok || payload?.ok !== true
+      || typeof payload.mediaId !== 'string' || typeof payload.storagePath !== 'string'
+    ) {
+      return null;
+    }
+    return { mediaId: payload.mediaId, storagePath: payload.storagePath };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Object keys that could not be removed, surfaced rather than dropped.
  *
  * The publish and delete paths deliberately RETURN orphan paths instead of
@@ -236,9 +323,16 @@ export async function publishStory(
 ): Promise<StoryResult<StoryRow>> {
   if (client === null) return unavailable();
 
-  const mainPath = storyObjectKey(input.authorId, input.draftId, 'main');
-  const insetPath = input.inset ? storyObjectKey(input.authorId, input.draftId, 'inset') : null;
+  // The paths are no longer composed here — the boundary mints them and hands
+  // them back, so they are only known AFTER each upload succeeds.
+  let mainPath: string | null = null;
+  let insetPath: string | null = null;
   const uploaded: string[] = [];
+
+  const token = await accessToken(client);
+  if (token === null) {
+    return { ok: false, reason: 'denied', message: 'Sign in to share a story. Nothing was shared.' };
+  }
 
   // Set the instant the RPC is issued. After that point a thrown error means
   // the OUTCOME IS UNKNOWN, not that publication failed — see the catch below.
@@ -252,26 +346,32 @@ export async function publishStory(
   };
 
   try {
-    const mainUpload = await client.storage
-      .from(STORY_BUCKET)
-      .upload(mainPath, input.main, { upsert: false, contentType: input.main.type || 'image/jpeg' });
-    if (mainUpload.error) {
-      return { ok: false, reason: 'failed', message: 'The photo could not be uploaded. Nothing was shared.' };
+    const mainUpload = await uploadThroughBoundary(token, input.main);
+    if (mainUpload === null || 'tooLarge' in mainUpload) {
+      return {
+        ok: false,
+        reason: 'failed',
+        message: mainUpload !== null && 'tooLarge' in mainUpload
+          ? 'That photo is too large. Nothing was shared.'
+          : 'The photo could not be uploaded. Nothing was shared.',
+      };
     }
+    mainPath = mainUpload.storagePath;
     uploaded.push(mainPath);
 
-    if (input.inset && insetPath !== null) {
-      const insetUpload = await client.storage
-        .from(STORY_BUCKET)
-        .upload(insetPath, input.inset, { upsert: false, contentType: input.inset.type || 'image/jpeg' });
-      if (insetUpload.error) {
+    if (input.inset) {
+      const insetUpload = await uploadThroughBoundary(token, input.inset);
+      if (insetUpload !== null && !('tooLarge' in insetUpload)) {
+        insetPath = insetUpload.storagePath;
+        uploaded.push(insetPath);
+      }
+      if (insetUpload === null || 'tooLarge' in insetUpload) {
         const orphans = await cleanup();
         return {
           ok: false, reason: 'failed', orphans,
           message: 'The second photo could not be uploaded. Nothing was shared.',
         };
       }
-      uploaded.push(insetPath);
     }
 
     rpcIssued = true;
@@ -425,16 +525,39 @@ async function fetchTags(
   return { byStory, ok: true };
 }
 
+/**
+ * Mint a signed URL THROUGH THE BOUNDARY.
+ *
+ * `createSignedUrl` leaned on the `story-media` SELECT policies 0071 revoked, so
+ * against a 0071 database it cannot sign at all — a published story would render
+ * with no photo. It was also the V8-R-STO-015 hole: Storage accepts whatever
+ * `expiresIn` the caller asks for, which made the server's 300-second ceiling a
+ * suggestion. The route asks `media_read_window` and caps the URL at whatever
+ * the media itself has left, so `ttlSeconds` is no longer ours to choose — it
+ * stays in the signature only because {@link signedUrlTtlSeconds} still bounds
+ * what we'd ASK for, and the server is free to return less.
+ */
 async function signUrl(
   client: SupabaseClient,
   path: string,
   ttlSeconds: number,
 ): Promise<string | null> {
+  const mediaId = mediaIdFromPath(path);
+  // A pre-boundary three-segment key has no registry id and therefore no legal
+  // way to be signed any more. Null renders the missing-photo state, which is
+  // the honest answer for bytes nothing can authorize a read of.
+  if (mediaId === null) return null;
   try {
-    const { data, error } = await client.storage
-      .from(STORY_BUCKET)
-      .createSignedUrl(path, ttlSeconds);
-    return error ? null : (data?.signedUrl ?? null);
+    const token = await accessToken(client);
+    if (token === null) return null;
+    const response = await fetch(`${MEDIA_API}/${mediaId}/url`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const payload = (await response.json().catch(() => null)) as
+      | { ok?: boolean; url?: string }
+      | null;
+    if (!response.ok || payload?.ok !== true || typeof payload.url !== 'string') return null;
+    return payload.url;
   } catch {
     return null;
   }
@@ -534,15 +657,36 @@ async function removeBytes(
   client: SupabaseClient,
   paths: readonly string[],
 ): Promise<string[]> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const { error } = await client.storage.from(STORY_BUCKET).remove([...paths]);
-      if (!error) return [];
-    } catch {
-      // fall through to the retry, then to the orphan report
+  const token = await accessToken(client);
+  if (token === null) return [...paths];
+
+  // Per object, because the boundary deletes by media id — one failure must not
+  // report its siblings as orphans when they were removed cleanly.
+  const orphans: string[] = [];
+  for (const path of paths) {
+    const mediaId = mediaIdFromPath(path);
+    if (mediaId === null) {
+      orphans.push(path);
+      continue;
     }
+    let removed = false;
+    for (let attempt = 0; attempt < 2 && !removed; attempt += 1) {
+      try {
+        const response = await fetch(`${MEDIA_API}/${mediaId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        // 404 is DONE, not failed: the bytes are not there to remove, which is
+        // the outcome this call exists to reach. Retrying it manufactures an
+        // orphan report for an object that is already gone.
+        if (response.ok || response.status === 404) removed = true;
+      } catch {
+        // fall through to the retry, then to the orphan report
+      }
+    }
+    if (!removed) orphans.push(path);
   }
-  return [...paths];
+  return orphans;
 }
 
 /** Consent withdrawal by the TAGGED person. Never the author's call. */

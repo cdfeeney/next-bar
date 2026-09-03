@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   SIGNED_URL_MAX_SECONDS,
   STORY_BUCKET,
@@ -93,6 +93,13 @@ function clientStub(overrides: {
   };
   const rpc = vi.fn().mockResolvedValue(overrides.rpc ?? { data: null, error: null });
   const client = {
+    // The boundary routes authenticate with the caller's bearer token, so the
+    // module has to be able to ask the client for one.
+    auth: {
+      getSession: vi.fn().mockResolvedValue({
+        data: { session: { access_token: 'test-token' } }, error: null,
+      }),
+    },
     storage: { from: vi.fn(() => storage) },
     rpc,
     from: vi.fn(() => overrides.from ?? {}),
@@ -100,7 +107,71 @@ function clientStub(overrides: {
   return { client, storage, rpc };
 }
 
+/**
+ * The media boundary, stubbed at `fetch`.
+ *
+ * Every byte now travels `POST /api/media/upload` -> `{ mediaId, storagePath }`,
+ * signed URLs come from `GET /api/media/:id/url`, and removal is
+ * `DELETE /api/media/:id`. Stubbing fetch rather than the Supabase storage
+ * client is the point of the change: a test that can still reach
+ * `client.storage` cannot tell a converted module from an unconverted one.
+ */
+let fetchMock: ReturnType<typeof vi.fn>;
+let mediaSeq = 0;
+
+function installBoundary(opts: {
+  upload?: (n: number) => { status?: number; body?: unknown } | undefined;
+  url?: { status?: number; body?: unknown };
+  del?: { status?: number; body?: unknown };
+} = {}): void {
+  mediaSeq = 0;
+  fetchMock = vi.fn(async (input: any, init?: any) => {
+    const href = String(input);
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const reply = (status: number, body: unknown) =>
+      ({ ok: status >= 200 && status < 300, status, json: async () => body }) as any;
+
+    if (href.includes('/api/media/upload')) {
+      mediaSeq += 1;
+      const o = opts.upload?.(mediaSeq);
+      if (o) return reply(o.status ?? 200, o.body ?? { ok: false, error: 'server_error' });
+      const id = `media-${mediaSeq}`;
+      return reply(200, { ok: true, mediaId: id, storagePath: `a/${id}` });
+    }
+    if (href.includes('/url')) {
+      const o = opts.url;
+      return reply(o?.status ?? 200, o?.body ?? { ok: true, url: 'https://signed.example/x' });
+    }
+    if (method === 'DELETE') {
+      const o = opts.del;
+      return reply(o?.status ?? 200, o?.body ?? { ok: true });
+    }
+    return reply(404, { ok: false, error: 'not_found' });
+  });
+  vi.stubGlobal('fetch', fetchMock);
+}
+
+/** The `/api/media/upload` calls recorded this test. */
+const uploadCalls = (): unknown[][] =>
+  (fetchMock?.mock.calls ?? []).filter((c) => String(c[0]).includes('/api/media/upload'));
+
+/** The `GET /api/media/:id/url` mints recorded this test, as media ids. */
+const urlCalls = (): string[] =>
+  (fetchMock?.mock.calls ?? [])
+    .filter((c) => String(c[0]).endsWith('/url'))
+    .map((c) => String(c[0]).split('/').slice(-2)[0]);
+
+/** The `DELETE /api/media/:id` calls recorded this test, as media ids. */
+const deleteIds = (): string[] =>
+  (fetchMock?.mock.calls ?? [])
+    .filter((c) => ((c[1] as any)?.method ?? '').toUpperCase() === 'DELETE')
+    .map((c) => String(c[0]).split('/').pop() as string);
+
 const blob = (): Blob => new Blob(['x'], { type: 'image/jpeg' });
+
+// Every test gets a working boundary unless it asks for a broken one.
+beforeEach(() => installBoundary());
+afterEach(() => vi.unstubAllGlobals());
 
 describe('publishStory', () => {
   it('reports unavailable, never success, when Supabase is not configured', async () => {
@@ -124,22 +195,34 @@ describe('publishStory', () => {
     const result = await publishStory(client, {
       authorId: 'a', draftId: 'd', main: blob(), audience: 'friends',
     });
-    expect(storage.upload).toHaveBeenCalledTimes(1);
+    // THE BOUNDARY, NOT STORAGE. 0071 revoked the `story-media` INSERT policy, so
+    // a direct client upload cannot succeed against a 0071 database at all — it
+    // returns "new row violates row-level security policy" and the user is told
+    // the photo could not be uploaded. Bytes reach the bucket only through
+    // `POST /api/media/upload`, which re-encodes them server-side (V8-R-STO-014).
+    // This assertion used to require `storage.upload`, which is why a green suite
+    // coexisted with a feature that has never once worked in production.
+    expect(storage.upload).not.toHaveBeenCalled();
+    expect(uploadCalls()).toHaveLength(1);
+    // The path is the one the SERVER minted and handed back, never one this
+    // module composed: `publish_story` refuses any path without a registered,
+    // non-reclaimed `media_objects` row behind it.
     expect(rpc).toHaveBeenCalledWith('publish_story', expect.objectContaining({
-      p_media_path: 'a/d/main', p_media_kind: 'single', p_audience: 'friends',
+      p_media_path: 'a/media-1', p_media_kind: 'single', p_audience: 'friends',
     }));
     expect(result).toMatchObject({ ok: true, value: { id: 's1', authorId: 'a' } });
   });
 
   it('removes the uploaded bytes when publication fails — no orphan, no receipt', async () => {
-    const { client, storage } = clientStub({
+    const { client } = clientStub({
       rpc: { data: null, error: { message: 'boom', code: 'XX000' } },
     });
     const result = await publishStory(client, {
       authorId: 'a', draftId: 'd', main: blob(), audience: 'friends',
     });
     expect(result.ok).toBe(false);
-    expect(storage.remove).toHaveBeenCalledWith(['a/d/main']);
+    // Deleted by MEDIA ID through the boundary, not by object key off Storage.
+    expect(deleteIds()).toEqual(['media-1']);
     if (!result.ok) {
       expect(result.orphans).toEqual([]);
       expect(result.message).toMatch(/nothing was shared/i);
@@ -147,27 +230,49 @@ describe('publishStory', () => {
   });
 
   it('reports the leftover keys when cleanup itself fails, rather than hiding them', async () => {
+    installBoundary({ del: { status: 500, body: { ok: false } } });
     const { client } = clientStub({
       rpc: { data: null, error: { message: 'boom', code: 'XX000' } },
-      remove: { error: { message: 'cleanup failed' } },
     });
     const result = await publishStory(client, {
       authorId: 'a', draftId: 'd', main: blob(), audience: 'friends',
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.orphans).toEqual(['a/d/main']);
+    if (!result.ok) expect(result.orphans).toEqual(['a/media-1']);
+  });
+
+  it('treats a 404 from the boundary as removed, not as an orphan to report', async () => {
+    // The bytes are not there to delete, which IS the outcome this call wants.
+    // Reporting it as an orphan sends someone hunting an object already gone.
+    installBoundary({ del: { status: 404, body: { ok: false, error: 'not_found' } } });
+    const { client } = clientStub({
+      rpc: { data: null, error: { message: 'boom', code: 'XX000' } },
+    });
+    const result = await publishStory(client, {
+      authorId: 'a', draftId: 'd', main: blob(), audience: 'friends',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.orphans).toEqual([]);
   });
 
   it('cleans up the first photo when the second of a pair fails to upload', async () => {
-    const { client, storage } = clientStub();
-    storage.upload
-      .mockResolvedValueOnce({ error: null })
-      .mockResolvedValueOnce({ error: { message: 'no' } });
+    installBoundary({ upload: (n) => (n === 2 ? { status: 500, body: { ok: false } } : undefined) });
+    const { client } = clientStub();
     const result = await publishStory(client, {
       authorId: 'a', draftId: 'd', main: blob(), inset: blob(), audience: 'friends',
     });
     expect(result.ok).toBe(false);
-    expect(storage.remove).toHaveBeenCalledWith(['a/d/main']);
+    expect(deleteIds()).toEqual(['media-1']);
+  });
+
+  it('refuses without a session rather than uploading bytes it cannot attach', async () => {
+    const { client } = clientStub();
+    client.auth.getSession.mockResolvedValue({ data: { session: null }, error: null });
+    const result = await publishStory(client, {
+      authorId: 'a', draftId: 'd', main: blob(), audience: 'friends',
+    });
+    expect(result.ok).toBe(false);
+    expect(uploadCalls()).toHaveLength(0);
   });
 
   it('surfaces a non-mutual custom recipient as a denial the user can act on', async () => {
@@ -188,10 +293,10 @@ describe('publishStory', () => {
 describe('fetchVisibleStories', () => {
   it('signs each story for no longer than that story has left', async () => {
     const rows = [
-      { id: 'long', author_id: 'a', bar_id: null, caption: null, media_path: 'a/1/main',
+      { id: 'long', author_id: 'a', bar_id: null, caption: null, media_path: 'a/m1',
         inset_path: null, media_kind: 'single', audience: 'friends',
         created_at: iso(0), expires_at: iso(86_400_000) },
-      { id: 'short', author_id: 'a', bar_id: null, caption: null, media_path: 'a/2/main',
+      { id: 'short', author_id: 'a', bar_id: null, caption: null, media_path: 'a/m2',
         inset_path: null, media_kind: 'single', audience: 'friends',
         created_at: iso(0), expires_at: iso(10_000) },
     ];
@@ -203,14 +308,21 @@ describe('fetchVisibleStories', () => {
     }));
     const result = await fetchVisibleStories(client, NOW);
     expect(result.ok).toBe(true);
-    const ttls = storage.createSignedUrl.mock.calls.map((c) => c[1]);
-    expect(ttls).toContain(SIGNED_URL_MAX_SECONDS);
-    expect(ttls).toContain(10);
+    // THE LIFETIME IS NO LONGER OURS TO ASK FOR — that is V8-R-STO-015, and it
+    // is the point of routing through the boundary. Storage honoured whatever
+    // `expiresIn` the caller passed, so the 300-second ceiling this file used to
+    // assert was only ever a suggestion a modified client could ignore.
+    // `/api/media/:id/url` accepts no TTL and caps at what the media has left,
+    // so what is provable here is that each unexpired story was signed through
+    // the route. The ceiling arithmetic itself stays covered, as a pure
+    // function, by the `signedUrlTtlSeconds` block at the top of this file.
+    expect(urlCalls()).toHaveLength(2);
+    expect(urlCalls()).toEqual(['m1', 'm2']);
   });
 
   it('mints no URL at all for a story that has already expired', async () => {
     const rows = [
-      { id: 'gone', author_id: 'a', bar_id: null, caption: null, media_path: 'a/3/main',
+      { id: 'gone', author_id: 'a', bar_id: null, caption: null, media_path: 'a/m3',
         inset_path: null, media_kind: 'single', audience: 'friends',
         created_at: iso(-2000), expires_at: iso(-1000) },
     ];
@@ -221,7 +333,7 @@ describe('fetchVisibleStories', () => {
       })),
     }));
     const result = await fetchVisibleStories(client, NOW);
-    expect(storage.createSignedUrl).not.toHaveBeenCalled();
+    expect(urlCalls()).toHaveLength(0);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value[0].mediaUrl).toBeNull();
   });
@@ -239,10 +351,10 @@ describe('fetchVisibleStories', () => {
    */
   it('carries each story its own live tags', async () => {
     const rows = [
-      { id: 's1', author_id: 'a', bar_id: null, caption: null, media_path: 'a/1/main',
+      { id: 's1', author_id: 'a', bar_id: null, caption: null, media_path: 'a/m1',
         inset_path: null, media_kind: 'single', audience: 'friends',
         created_at: iso(0), expires_at: iso(60_000) },
-      { id: 's2', author_id: 'a', bar_id: null, caption: null, media_path: 'a/2/main',
+      { id: 's2', author_id: 'a', bar_id: null, caption: null, media_path: 'a/m2',
         inset_path: null, media_kind: 'single', audience: 'friends',
         created_at: iso(0), expires_at: iso(60_000) },
     ];
@@ -276,7 +388,7 @@ describe('fetchVisibleStories', () => {
 
   it('still renders the stories when the tag read fails', async () => {
     const rows = [
-      { id: 's1', author_id: 'a', bar_id: null, caption: null, media_path: 'a/1/main',
+      { id: 's1', author_id: 'a', bar_id: null, caption: null, media_path: 'a/m1',
         inset_path: null, media_kind: 'single', audience: 'friends',
         created_at: iso(0), expires_at: iso(60_000) },
     ];
@@ -314,7 +426,7 @@ describe('fetchVisibleStories', () => {
 describe('fetchVisibleStories — media honesty and clock authority', () => {
   const liveRow = () => ({
     id: 's1', author_id: 'a', bar_id: null, caption: null,
-    media_path: 'a/1/main', inset_path: null, media_kind: 'single',
+    media_path: 'a/m1', inset_path: null, media_kind: 'single',
     audience: 'friends', created_at: iso(0), expires_at: iso(10_000),
   });
 
@@ -333,9 +445,8 @@ describe('fetchVisibleStories — media honesty and clock authority', () => {
   });
 
   it('marks a story unsigned — not photo-less — when signing fails', async () => {
-    const { client } = clientStub({
-      createSignedUrl: { data: null, error: { message: 'signer down' } },
-    });
+    installBoundary({ url: { status: 500, body: { ok: false, error: 'server_error' } } });
+    const { client } = clientStub();
     client.from = vi.fn(() => ({
       select: vi.fn(() => ({ order: vi.fn().mockResolvedValue({ data: [liveRow()], error: null }) })),
     }));
@@ -375,12 +486,12 @@ describe('reportOrphans', () => {
 
   it('says which objects were left behind, and in which bucket', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    reportOrphans('publish', ['a/1/main', 'a/1/inset']);
+    reportOrphans('publish', ['a/m1', 'a/m1i']);
     expect(error).toHaveBeenCalledTimes(1);
     const line = String(error.mock.calls[0][0]);
     expect(line).toContain(STORY_BUCKET);
-    expect(line).toContain('a/1/main');
-    expect(line).toContain('a/1/inset');
+    expect(line).toContain('a/m1');
+    expect(line).toContain('a/m1i');
     expect(line).toContain('publish');
   });
 
@@ -415,20 +526,20 @@ describe('deleteStory', () => {
 
   it('removes the bytes while the story is still live, BEFORE the soft delete', async () => {
     const { client, storage, rpc } = withPreRead(
-      [{ media_path: 'a/1/main', inset_path: 'a/1/inset' }],
-      { rpc: { data: [{ media_path: 'a/1/main', inset_path: 'a/1/inset' }], error: null } },
+      [{ media_path: 'a/m1', inset_path: 'a/m1i' }],
+      { rpc: { data: [{ media_path: 'a/m1', inset_path: 'a/m1i' }], error: null } },
     );
     const result = await deleteStory(client, 's1');
     expect(result.ok).toBe(true);
-    expect(storage.remove).toHaveBeenCalledWith(['a/1/main', 'a/1/inset']);
+    expect(deleteIds()).toEqual(['m1', 'm1i']);
     // Ordering is the whole point: removal must precede delete_story.
-    expect(storage.remove.mock.invocationCallOrder[0])
+    expect(fetchMock.mock.invocationCallOrder[0])
       .toBeLessThan(rpc.mock.invocationCallOrder[0]);
   });
 
   it('tells the author honestly when the bytes went but the delete did not', async () => {
     const { client } = withPreRead(
-      [{ media_path: 'a/1/main', inset_path: null }],
+      [{ media_path: 'a/m1', inset_path: null }],
       { rpc: { data: null, error: { message: 'boom' } } },
     );
     const result = await deleteStory(client, 's1');
@@ -442,31 +553,37 @@ describe('deleteStory', () => {
     expect(result).toMatchObject({ ok: false, reason: 'denied' });
     // Nothing to remove: the pre-read found no row this caller may see, so no
     // byte removal was attempted against someone else's prefix.
-    expect(storage.remove).not.toHaveBeenCalled();
+    expect(deleteIds()).toEqual([]);
   });
 
   it('still succeeds but reports orphans when the byte removal fails', async () => {
+    installBoundary({ del: { status: 500, body: { ok: false } } });
     const { client } = withPreRead(
-      [{ media_path: 'a/1/main', inset_path: null }],
-      {
-        rpc: { data: [{ media_path: 'a/1/main', inset_path: null }], error: null },
-        remove: { error: { message: 'nope' } },
-      },
+      [{ media_path: 'a/m1', inset_path: null }],
+      { rpc: { data: [{ media_path: 'a/m1', inset_path: null }], error: null } },
     );
     const result = await deleteStory(client, 's1');
-    expect(result).toMatchObject({ ok: true, value: { orphans: ['a/1/main'] } });
+    expect(result).toMatchObject({ ok: true, value: { orphans: ['a/m1'] } });
   });
 
   it('retries a failed removal once before reporting an orphan', async () => {
     const { client, storage } = withPreRead(
-      [{ media_path: 'a/1/main', inset_path: null }],
-      { rpc: { data: [{ media_path: 'a/1/main', inset_path: null }], error: null } },
+      [{ media_path: 'a/m1', inset_path: null }],
+      { rpc: { data: [{ media_path: 'a/m1', inset_path: null }], error: null } },
     );
-    storage.remove
-      .mockResolvedValueOnce({ error: { message: 'transient' } })
-      .mockResolvedValueOnce({ error: null });
+    let call = 0;
+    installBoundary({ del: undefined });
+    // First DELETE fails transiently, the retry succeeds.
+    const inner = fetchMock as unknown as (i: any, n?: any) => Promise<any>;
+    vi.stubGlobal('fetch', vi.fn(async (input: any, init?: any) => {
+      if ((init?.method ?? '').toUpperCase() === 'DELETE') {
+        call += 1;
+        if (call === 1) throw new Error('transient');
+      }
+      return inner(input, init);
+    }));
     const result = await deleteStory(client, 's1');
-    expect(storage.remove).toHaveBeenCalledTimes(2);
+    expect(call).toBe(2);
     // The retry succeeded, so there is nothing to report.
     expect(result).toMatchObject({ ok: true, value: { orphans: [] } });
   });
@@ -477,13 +594,13 @@ describe('deleteStory', () => {
   // the row was already gone for every reader.
   it('reports success, not failure, when byte removal THROWS after the row is deleted', async () => {
     const { client, storage } = withPreRead(
-      [{ media_path: 'a/1/main', inset_path: null }],
-      { rpc: { data: [{ media_path: 'a/1/main', inset_path: null }], error: null } },
+      [{ media_path: 'a/m1', inset_path: null }],
+      { rpc: { data: [{ media_path: 'a/m1', inset_path: null }], error: null } },
     );
-    storage.remove.mockRejectedValue(new Error('network died'));
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network died'); }));
     const result = await deleteStory(client, 's1');
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.orphans).toEqual(['a/1/main']);
+    if (result.ok) expect(result.value.orphans).toEqual(['a/m1']);
   });
 });
 
