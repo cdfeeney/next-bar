@@ -19,12 +19,21 @@ export default function StoryFrame({
   barId,
   className = '',
   insetClassName = 'w-24',
+  fit = 'cover',
 }: {
   photo: StoryPhoto;
   barId: string | null;
   className?: string;
   /** Inset width — narrower inside a Feed card than inside the viewer. */
   insetClassName?: string;
+  /**
+   * How the MAIN photo meets the box. Feed cards and thumbnails crop to fill
+   * ('cover'); the full-screen viewer letterboxes instead ('contain') so a
+   * portrait phone box never crops a landscape photo's top edge — the tagged
+   * people at the top of a laptop-posted shot were being cut off on iPhone.
+   * The dual-shot inset always covers: it is a thumbnail by definition.
+   */
+  fit?: 'cover' | 'contain';
 }): JSX.Element {
   return (
     <div
@@ -32,7 +41,7 @@ export default function StoryFrame({
       data-photo-kind={photo.kind}
       className={`relative overflow-hidden bg-surface ${className}`}
     >
-      <Surface url={photo.main} barId={barId} state={photo.state} />
+      <Surface url={photo.main} barId={barId} state={photo.state} fit={fit} />
       {photo.kind === 'dual' ? (
         <div
           data-testid="story-frame-inset"
@@ -49,10 +58,12 @@ function Surface({
   url,
   barId,
   state = 'ok',
+  fit = 'cover',
 }: {
   url: string | null;
   barId: string | null;
   state?: 'ok' | 'expired' | 'unsigned';
+  fit?: 'cover' | 'contain';
 }): JSX.Element {
   // AN OUTAGE IS NOT AN ABSENT PHOTO. A failed signing used to fall through to
   // the decorative bar glyph below, which is the same thing a story with no
@@ -73,7 +84,15 @@ function Surface({
     // Plain <img>: the source is a capture-time data URL, which next/image
     // cannot optimise and would only re-encode.
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={url} alt="" className="w-full h-full object-cover" />;
+    return (
+      <img
+        src={url}
+        alt=""
+        className={`w-full h-full ${
+          fit === 'contain' ? 'object-contain' : 'object-cover'
+        }`}
+      />
+    );
   }
   const bar = barId !== null ? getBarById(barId) : undefined;
   const visual = bar ? barVisual(bar) : null;

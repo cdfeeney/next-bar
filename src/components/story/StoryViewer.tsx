@@ -319,6 +319,7 @@ export default function StoryViewer({
           barId={item.barId}
           className="absolute inset-0"
           insetClassName="w-28"
+          fit="contain"
         />
         <button
           type="button"
