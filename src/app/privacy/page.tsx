@@ -113,12 +113,14 @@ export default function PrivacyPage(): JSX.Element {
           Signed-out data can be wiped any time from Settings → Clear all
           ratings, or by clearing your browser storage. Signed in, go to
           Settings → Delete account: it permanently and immediately removes
-          your login, profile, ratings, rankings, follows, stories, group
-          memberships and messages, night outs, and presence pins. Photos
-          you uploaded stop being reachable through the app at the same
-          moment; the underlying files are permanently erased from storage
-          by a scheduled cleanup that runs within 24 hours. Prefer to ask a
-          human? Email us and we&apos;ll do it for you.
+          your login, profile, ratings, rankings, follows, stories, night
+          outs, presence pins, and group memberships. Messages you already
+          sent to a group stay visible to its members, with your name
+          detached. Photos you posted stop being reachable through the app
+          at the same moment; clearing the leftover files out of our
+          storage systems is a cleanup we run on our side — email us and
+          we&apos;ll scrub them right away and confirm. Prefer a human for
+          the whole thing? Email us and we&apos;ll do it for you.
         </Block>
 
         <Block title="Contact">
