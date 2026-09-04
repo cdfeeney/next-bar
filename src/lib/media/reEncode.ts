@@ -40,11 +40,20 @@ import { mediaFailure, type MediaResult } from './types';
  * the platform rather than by the check below, and the number here said
  * otherwise to anyone reading it.
  *
- * 4 MiB sits under the edge bound with room for multipart framing, so an
- * oversized upload is refused by OUR route — with our error shape — for as much
- * of the range as we can actually reach.
+ * THIS NUMBER IS NOT THE OPERATIVE BOUND and must not be lowered to "the real
+ * one". It is shared by every caller of `/api/media/upload`, and two of them —
+ * `GroupThread.onPickPhoto` and `NightOutMedia` — post the picked `File`
+ * unchanged, with no client re-encode (only story capture downscales, via
+ * `useCamera`'s 1440px pass). Tightening this to ~4 MiB therefore refuses
+ * uploads on those two surfaces that the edge would otherwise have accepted,
+ * to buy nothing: the platform already refuses everything above it, with the
+ * same 413 and the same message to the user. Codex caught exactly that
+ * regression on candidate 0855b78.
+ *
+ * So the value stays where the decode bound wants it, and the ceiling is
+ * recorded here rather than encoded here.
  */
-export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 
 /**
  * The ceiling on what comes OUT, which is a different number from what may come

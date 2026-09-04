@@ -315,8 +315,17 @@ describe('publishStory', () => {
   });
 
   it('surfaces a non-mutual custom recipient as a denial the user can act on', async () => {
+    // The message is the RPC's ACTUAL raise, not a placeholder. A stub that
+    // invents 'not mutual' proves only that a 42501 produced some denial — and
+    // the code now reads the text, so a fake one tests the wrong thing.
     const { client } = clientStub({
-      rpc: { data: null, error: { message: 'not mutual', code: '42501' } },
+      rpc: {
+        data: null,
+        error: {
+          message: 'publish_story: every custom recipient must be a mutual friend',
+          code: '42501',
+        },
+      },
     });
     const result = await publishStory(client, {
       authorId: 'a', draftId: 'd', main: blob(), audience: 'custom', audienceIds: ['b'],
@@ -697,5 +706,32 @@ describe('removeMyStoryTag', () => {
   it('does not claim success when the RPC errors', async () => {
     const { client } = clientStub({ rpc: { data: null, error: { message: 'no' } } });
     await expect(removeMyStoryTag(client, 's1')).resolves.toMatchObject({ ok: false, reason: 'failed' });
+  });
+});
+
+describe('publishStory — a refusal that is OURS is not blamed on the author', () => {
+  it('does not tell an author to fix their friend list when the path was rejected', async () => {
+    // `media_path is not owned by the caller` is a 42501 too, and it is OUR bug.
+    // Branching the MESSAGE off the errcode told that author "everyone you pick
+    // has to be a friend who follows you back" — a problem they do not have and
+    // cannot act on. The code still reads as a denial; the wording does not.
+    const { client } = clientStub({
+      rpc: {
+        data: null,
+        error: {
+          message: 'publish_story: media_path is not owned by the caller',
+          code: '42501',
+        },
+      },
+    });
+    const result = await publishStory(client, {
+      authorId: 'a', draftId: 'd', main: blob(), audience: 'friends',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('denied');
+      expect(result.message).not.toMatch(/follows you back/i);
+      expect(result.message).toMatch(/could not be published/i);
+    }
   });
 });

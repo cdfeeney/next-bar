@@ -313,7 +313,7 @@ export function reportOrphans(context: string, orphans: readonly string[] | unde
 /**
  * What `publish_story` refused, said to the author.
  *
- * The function raises ELEVEN distinct exceptions and every one of them arrived
+ * The function raises TWELVE distinct exceptions and every one of them arrived
  * as "The story could not be published". An author who tagged someone outside
  * their custom audience was told nothing useful across repeated attempts while
  * the server named the exact rule every single time.
@@ -328,6 +328,10 @@ export function reportOrphans(context: string, orphans: readonly string[] | unde
  * the raise before this layer sees it.
  */
 const AUTHOR_FIXABLE_REFUSALS: ReadonlyArray<readonly [string, string]> = [
+  [
+    'not authenticated',
+    'Your session expired. Sign in and try again. Nothing was shared.',
+  ],
   [
     'a custom audience needs at least one recipient',
     'Pick at least one person for a custom story. Nothing was shared.',
@@ -488,11 +492,15 @@ export async function publishStory(
       }
       return {
         ok: false,
+        // 42501 still means the DATABASE refused rather than failed, which is
+        // what the caller branches on. The MESSAGE no longer follows from the
+        // code, though: `media_path is not owned by the caller` is a 42501 too,
+        // and telling that author "everyone you pick has to be a friend" names a
+        // problem they do not have and cannot fix. Both mutual-friend refusals
+        // are matched by name above; anything else keeps the generic message.
         reason: denied ? 'denied' : 'failed',
         orphans,
-        message: named ?? (denied
-          ? 'Everyone you pick has to be a friend who follows you back. Nothing was shared.'
-          : 'The story could not be published. Nothing was shared.'),
+        message: named ?? 'The story could not be published. Nothing was shared.',
       };
     }
 
