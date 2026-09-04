@@ -226,31 +226,74 @@ describeLive('0077 — orphan sweep forward progress (staging, rolled back)', ()
     });
   });
 
-  it('an unrelated signed-in user can neither read nor reclaim ownerless media', async () => {
+  it('an unrelated signed-in user can claim neither population of ownerless media', async () => {
+    // TWO POPULATIONS, TWO VERBS. 0077 creates ownerless media in two shapes and
+    // they are reached by different functions, so testing one proves nothing
+    // about the other:
+    //
+    //   * UNREGISTERED — bytes with no media_objects row at all, which is what
+    //     the old ON DELETE CASCADE produced. Reached by claim_orphan_paths.
+    //   * REGISTERED with a null owner — what ON DELETE SET NULL produces from
+    //     now on. Reached by claim_media_for_removal.
+    //
+    // A stranger must get nothing from either, and the privileged sweep must get
+    // both — otherwise "the stranger got nothing" could just mean the fixtures
+    // were never claimable in the first place.
     await inRollback(async () => {
       await asOwner();
       await applyMigration();
       const stranger = await makeAccount();
-      await object(`${OWNERLESS(1)}/secret.jpg`, '40 days');
+
+      const unregistered = `${OWNERLESS(1)}/unregistered.jpg`;
+      const registered = `${OWNERLESS(2)}/registered.jpg`;
+      await object(unregistered, '40 days');
+      await object(registered, '40 days');
       await db.query(
-        `insert into public.media_objects (owner_id, bucket_id, storage_path)
-         values (null, 'story-media', $1)`,
-        [`${OWNERLESS(1)}/secret.jpg`],
+        // AGED PAST THE GRACE WINDOW, deliberately. claim_media_for_removal
+        // sweeps a row that never carried a destination only once it is more
+        // than 24 hours old — upload-then-publish means a fresh object
+        // legitimately has zero references while the composer is still open,
+        // and sweeping it would delete the photo out from under the person
+        // posting it. A `now()` fixture is therefore correctly ignored, which
+        // is what the first version of this test tripped over.
+        `insert into public.media_objects (owner_id, bucket_id, storage_path, created_at)
+         values (null, 'story-media', $1, now() - interval '40 days')`,
+        [registered],
       );
 
+      // ---- as the stranger ----
       await asUser(stranger);
-      // RLS compares owner_id = auth.uid(); NULL is not equal to anything, so an
-      // ownerless row matches no policy for any user.
+
+      // The registry read stays denied: RLS compares owner_id = auth.uid(), and
+      // NULL is not equal to anything, so an ownerless row matches no policy.
       const read = await db.query(
-        `select 1 from public.media_objects where storage_path = $1`,
-        [`${OWNERLESS(1)}/secret.jpg`],
+        `select 1 from public.media_objects where storage_path in ($1, $2)`,
+        [unregistered, registered],
       );
       expect(read.rowCount).toBe(0);
 
-      // And the sweep, run AS THAT USER, narrows to their own prefix — so a
-      // signed-in caller cannot use it to reach someone else's ownerless bytes.
-      const claimed = await sweep();
-      expect(claimed).not.toContain(`${OWNERLESS(1)}/secret.jpg`);
+      // Population 1, via claim_orphan_paths: narrows to the caller's OWN
+      // prefix, so a signed-in user cannot reach someone else's bytes.
+      expect(await sweep()).not.toContain(unregistered);
+
+      // Population 2, via claim_media_for_removal: its owner filter is
+      // `v_caller is null or m.owner_id = v_caller`, and `null = <stranger>` is
+      // NULL, so a null-owner row is invisible to every signed-in caller.
+      const strangerClaims = await db.query(
+        'select storage_path from public.claim_media_for_removal(null, 25)',
+      );
+      expect(strangerClaims.rows.map((r) => r.storage_path)).not.toContain(registered);
+
+      // ---- as the privileged sweep ----
+      // The same fixtures ARE claimable, which is what makes the two denials
+      // above mean something rather than describing unclaimable rows.
+      await asOwner();
+      expect(await sweep()).toContain(unregistered);
+
+      const sweepClaims = await db.query(
+        'select storage_path from public.claim_media_for_removal(null, 25)',
+      );
+      expect(sweepClaims.rows.map((r) => r.storage_path)).toContain(registered);
     });
   });
 
@@ -262,18 +305,52 @@ describeLive('0077 — orphan sweep forward progress (staging, rolled back)', ()
     expect(/^\s*begin;\s*$/mi.test(MIGRATION)).toBe(false);
     expect(/^\s*commit;\s*$/mi.test(MIGRATION)).toBe(false);
 
-    // An injected failure after the ledger insert must roll BOTH back.
+    // An injected failure after the ledger insert must roll BOTH back — and the
+    // test has to prove BOTH actually happened first, or it proves nothing.
+    //
+    // The previous version wrapped the whole thing in a bare `catch {}`, which
+    // swallowed any error: a migration that failed to apply, or a ledger insert
+    // that never ran, produced the same green as the case under test. That is
+    // the exact false-success shape this batch exists to remove, reproduced in
+    // the test written to prove it. The injected error is now asserted by
+    // identity, and setup failures reach the assertions instead of being eaten.
+    const INJECTED = 'injected failure after the ledger insert';
+    let caught: unknown = null;
+
     await db.query('BEGIN READ WRITE');
     try {
       await db.query(MIGRATION);
+      // The schema change really took effect inside this transaction...
+      const midColumn = await db.query(
+        `select is_nullable from information_schema.columns
+          where table_schema='public' and table_name='media_objects' and column_name='owner_id'`,
+      );
+      expect(midColumn.rows[0].is_nullable).toBe('YES');
+
       await db.query(
         `insert into public.schema_migrations (name, checksum)
          values ('0077_orphan_sweep_forward_progress.sql', 'rehearsal')`,
       );
-      throw new Error('injected failure after the ledger insert');
-    } catch {
+      // ...and so did the ledger row. Only now is there anything to roll back.
+      const midLedger = await db.query(
+        `select 1 from public.schema_migrations where name like '0077%'`,
+      );
+      expect(midLedger.rowCount).toBe(1);
+
+      throw new Error(INJECTED);
+    } catch (error) {
+      caught = error;
+    } finally {
+      // ALWAYS, including on a setup failure — otherwise a broken run leaves an
+      // open transaction on staging.
       await db.query('ROLLBACK');
     }
+
+    // The failure that arrived must be the one we injected. An assertion error
+    // from the two mid-transaction checks lands here instead and names itself,
+    // rather than passing as "something threw, so rollback worked".
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe(INJECTED);
 
     const ledger = await db.query(
       `select 1 from public.schema_migrations where name like '0077%'`,
@@ -282,7 +359,7 @@ describeLive('0077 — orphan sweep forward progress (staging, rolled back)', ()
       `select is_nullable from information_schema.columns
         where table_schema='public' and table_name='media_objects' and column_name='owner_id'`,
     );
-    // Neither half survived: no ledger row, and owner_id is still NOT NULL.
+    // Both halves are back to baseline: no ledger row, owner_id still NOT NULL.
     expect(ledger.rowCount).toBe(0);
     expect(column.rows[0].is_nullable).toBe('NO');
   });
