@@ -396,10 +396,23 @@ export default function NightOutMedia({
           body,
         });
         const uploaded = response.ok
-          ? ((await response.json()) as { ok?: unknown; mediaId?: unknown })
+          ? ((await response.json().catch(() => null)) as
+              | { ok?: unknown; mediaId?: unknown }
+              | null)
           : null;
         if (!uploaded || uploaded.ok !== true || typeof uploaded.mediaId !== 'string') {
-          setNotice("That photo didn't upload — try again in a moment.");
+          // A 413 IS NOT TRANSIENT, so "try again in a moment" is the one piece
+          // of advice guaranteed not to work. The platform caps the request
+          // body before this app's route runs — measured against production
+          // 2026-09-03: 3.70MB -> 200, 4.73MB -> 413
+          // FUNCTION_PAYLOAD_TOO_LARGE from the edge — and that refusal arrives
+          // as PLAIN TEXT, so the parse above cannot be what detects it. The
+          // status is. `GroupThread.onPickPhoto` already reads it this way.
+          setNotice(
+            response.status === 413
+              ? 'That photo is too large to upload. Try a smaller one.'
+              : "That photo didn't upload — try again in a moment.",
+          );
           return;
         }
 
