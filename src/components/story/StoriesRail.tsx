@@ -59,7 +59,14 @@ export default function StoriesRail({
           the rail and the browser scrolls each cell into view. */}
       <ul
         data-carousel
-        className="flex gap-4 overflow-x-auto pb-1 -mx-6 px-6"
+        // pt-1 IS LOAD-BEARING, not symmetry for its own sake. An active ring
+        // is `ring-2 ring-offset-2`, i.e. 4px painted OUTSIDE the avatar's box
+        // on every side, and `overflow-x-auto` makes this a scroll container on
+        // BOTH axes — so it clips top and bottom too. With `pb-1` alone the
+        // bottom 4px survived and the top 4px was cut, which is the cropped
+        // circle the operator reported. Overflow clips at the padding box, so
+        // the padding is the room the stroke paints into.
+        className="flex gap-4 overflow-x-auto pt-1 pb-1 -mx-6 px-6"
       >
         {you ? (
           <YourCell
@@ -170,24 +177,35 @@ function YourCell({
         {hasStory ? (
           // 44x44 starting at x=56 — the avatar's right edge — and inside the
           // cell's own 56px height, so the rail's horizontal scroller never
-          // clips it. `-ml-2` pulls only the 18px mark back over the avatar's
-          // lower-right corner; the button's own box stays clear of it.
+          // clips it. The mark is drawn INSIDE this box, so the target and the
+          // thing the user aims at are the same object.
           <button
             type="button"
             data-testid="add-story"
             onClick={onAddStory}
             aria-label={RAIL_ADD_LABEL}
-            className="absolute left-14 top-3 w-11 h-11 flex items-end justify-start rounded-full touch-manipulation"
+            // NOT `rounded-full`. A circular hit area on a 44x44 box excludes
+            // its own corners, and the mark sits in the bottom-left one — so
+            // the badge was inside the button's BOX and outside its hit
+            // region, and a tap on it fell through to the wrapper. Measured:
+            // badge at (80,252), circle centre (102,248) r=22, distance 23.9.
+            // The button paints nothing, so squaring it changes no pixel and
+            // makes the whole 44x44 target real.
+            className="absolute left-14 top-3 w-11 h-11 flex items-end justify-start touch-manipulation"
           >
-            {/* pointer-events-none is what makes the negative margin safe. The
-                button's BOX starts at the avatar's right edge, but its child
-                mark is pulled 8px back over the avatar's lower-right corner —
-                and an overflowing child is still hit-testable, so those 8px
-                were painting over the avatar while invoking Add Story. The two
-                previous attempts at this finding both measured the BUTTONS and
-                so both passed while the mark kept stealing the corner. The
-                mark is decoration; the 44x44 button beside it is the target. */}
-            <span className="-ml-2 flex pointer-events-none">
+            {/* THE MARK SITS INSIDE ITS OWN BUTTON. It used to be pulled 8px
+                back over the avatar's lower-right corner, on the reasoning
+                that the mark is decoration and the 44x44 box beside it is the
+                target — which fixed the mark STEALING taps by making the thing
+                you see and the thing you hit two different objects. That is
+                the same bug pointing the other way, and the operator hit it:
+                "I click the button and it doesn't let me post", because a tap
+                aimed at the badge landed on the avatar and opened their story.
+                No overhang, so every pixel of the mark adds and every pixel of
+                the avatar opens. pointer-events-none stays: the mark is inside
+                the button either way, and it keeps the button the single
+                hit-testable object. */}
+            <span className="flex pointer-events-none">
               <PlusBadge />
             </span>
           </button>

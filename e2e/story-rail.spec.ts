@@ -344,13 +344,19 @@ test.describe('Stories — signed in', () => {
     expect(stub.tags).toHaveLength(1);
   });
 
-  test('the plus mark never steals a tap meant for your own story', async ({ page }) => {
-    // GEOMETRY, at the pixel that matters. The add button's BOX starts at the
-    // avatar's right edge, but its 18px mark is pulled 8px back over the
-    // avatar's lower-right corner — and an overflowing child is hit-testable,
-    // so those 8px opened CAPTURE while painting over the avatar. Two earlier
-    // rounds measured the BUTTONS and passed while the mark kept stealing the
-    // corner, which is why this test clicks the mark itself.
+  test('the plus you can SEE is the plus you can tap, and the avatar keeps its own pixels', async ({ page }) => {
+    // THE DESIGN CHANGED HERE, on operator evidence, and the old assertion is
+    // why the defect survived. This test used to require that the mark's left
+    // edge belong to the AVATAR — the mark was declared decoration and the real
+    // target was the 44px box beside it. That fixed the mark stealing taps by
+    // making the visible thing and the tappable thing two different objects,
+    // which is a bug in the other direction: the operator reported "I click the
+    // button and it doesn't let me post", because a tap aimed at the badge
+    // landed on the avatar and OPENED their story instead of the composer.
+    //
+    // The rule now is the one a user can actually predict: every pixel of the
+    // mark adds to your story, every pixel of the avatar opens it, and the two
+    // never overlap.
     await stubStories(page, {
       following: [],
       stories: [story({ id: 'y1', author_id: YOU_ID, created_at: ago(2) })],
@@ -369,40 +375,78 @@ test.describe('Stories — signed in', () => {
       throw new Error('rail cells not laid out');
     }
 
-    // The two TARGETS do not overlap at all, and the add target is still a
-    // real one.
+    // The two TARGETS still do not overlap, and the add target is still real.
     expect(addBox.x).toBeGreaterThanOrEqual(avatarBox.x + avatarBox.width - 0.5);
     expect(addBox.width).toBeGreaterThanOrEqual(44);
     expect(addBox.height).toBeGreaterThanOrEqual(44);
 
-    // The MARK, though, really does overhang the avatar — that is the design,
-    // and it is why this finding kept coming back.
-    expect(badgeBox.x).toBeLessThan(avatarBox.x + avatarBox.width);
+    // NEW: the mark no longer overhangs the avatar. It sits INSIDE its own
+    // button, so what you aim at is what you hit.
+    expect(badgeBox.x).toBeGreaterThanOrEqual(addBox.x - 0.5);
+    expect(badgeBox.x + badgeBox.width).toBeLessThanOrEqual(addBox.x + addBox.width + 0.5);
 
-    // So the assertion is about hit-testing, not about boxes: at the pixel
-    // where the mark overhangs the avatar, what receives the tap must not be
-    // the add button. Asserted with elementFromPoint rather than a click,
-    // because the avatar is a CIRCLE — Chromium hit-tests border-radius and
-    // WebKit is laxer, so a raw click at a corner pixel answers differently on
-    // the two engines while the defect itself is engine-independent.
-    const owner = await page.evaluate(({ x, y }) => {
+    // Hit-tested rather than merely measured, and at the badge's LEFT edge —
+    // the pixel the old design gave to the avatar. elementFromPoint rather than
+    // a click because the avatar is a circle and the two engines hit-test
+    // border-radius differently, while the defect is engine-independent.
+    const ownerAtBadge = await page.evaluate(({ x, y }) => {
+      const element = document.elementFromPoint(x, y);
+      if (element === null) return 'nothing';
+      if (element.closest('[data-testid="add-story"]') !== null) return 'add';
+      if (element.closest('[data-testid="story-rail-your-story"]') !== null) return 'story';
+      return element.getAttribute('data-testid') ?? element.tagName.toLowerCase();
+    }, { x: badgeBox.x + 2, y: badgeBox.y + badgeBox.height / 2 });
+    expect(ownerAtBadge).toBe('add');
+
+    // And the avatar's own lower-right corner still opens the story, which is
+    // the regression the previous version of this test existed to prevent.
+    const ownerAtAvatarCorner = await page.evaluate(({ x, y }) => {
       const element = document.elementFromPoint(x, y);
       if (element === null) return 'nothing';
       if (element.closest('[data-testid="add-story"]') !== null) return 'add';
       if (element.closest('[data-testid="story-rail-your-story"]') !== null) return 'story';
       return element.getAttribute('data-testid') ?? element.tagName.toLowerCase();
     }, {
-      // Just inside the mark's left edge, vertically centred on it: the strip
-      // that used to paint over the avatar AND swallow its taps.
-      x: badgeBox.x + 2,
-      y: badgeBox.y + badgeBox.height / 2,
+      x: avatarBox.x + avatarBox.width / 2,
+      y: avatarBox.y + avatarBox.height - 4,
     });
-    expect(owner).not.toBe('add');
+    expect(ownerAtAvatarCorner).toBe('story');
 
-    // And the avatar itself still opens the story rather than capture.
-    await yourStory.click();
-    await expect(page.getByTestId('story-viewer')).toBeVisible();
-    await expect(page.getByTestId('capture-modes')).toHaveCount(0);
+    // Tapping the mark reaches CAPTURE, which is the thing the operator could
+    // not do. Asserted through a real click, not geometry.
+    await add.click();
+    await expect(page.getByTestId('capture-modes')).toBeVisible();
+  });
+
+  test('the story ring is not clipped by the rail it sits in', async ({ page }) => {
+    // An ACTIVE ring is `ring-2 ring-offset-2` — 4px painted OUTSIDE the 56px
+    // avatar box on every side — and the rail is `overflow-x-auto`, which makes
+    // the block axis a scroll container too, so it clips top and bottom as
+    // well. The scroller carried `pb-1` and no top padding, so the bottom 4px
+    // survived and the top 4px was cut. Operator: "the top of the circle for
+    // story is still cropped". It only shows once a story exists, because the
+    // ring is only drawn when active.
+    //
+    // Measured as a GAP, not as a box: the stroke is a box-shadow and does not
+    // appear in getBoundingClientRect, so the assertion is that the avatar
+    // leaves at least the stroke's width between itself and the clip edge.
+    const RING_OUTSET = 4;
+    await stubStories(page, {
+      following: [],
+      stories: [story({ id: 'y1', author_id: YOU_ID, created_at: ago(2) })],
+    });
+    await openSocial(page);
+
+    const ring = page.getByTestId('story-ring').first();
+    await expect(ring).toHaveAttribute('data-active', 'true');
+    const ringBox = await ring.boundingBox();
+    const clipTop = await page.locator('[data-carousel]').evaluate(
+      // Overflow clips at the PADDING box, so padding-top is room the stroke
+      // may legally paint into; the border box top is the clip edge.
+      (el) => el.getBoundingClientRect().top,
+    );
+    if (ringBox === null) throw new Error('rail not laid out');
+    expect(ringBox.y - clipTop).toBeGreaterThanOrEqual(RING_OUTSET);
   });
 
   test('the page under an open story dialog is inert', async ({ page }) => {
