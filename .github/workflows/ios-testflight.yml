@@ -65,5 +65,43 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: |
+          # CHOOSE THE LAUNCHER, THEN RUN THE LANE EXACTLY ONCE.
+          #
+          # This was `bundle exec fastlane ios beta 2>/dev/null || fastlane ios beta`,
+          # which is three problems in one line:
+          #
+          #   1. `|| fastlane ios beta` re-runs the WHOLE build-and-upload lane
+          #      after ANY failure, including a failure that happened after the
+          #      IPA was already uploaded. A retry then races an upload that may
+          #      well have succeeded, and TestFlight is not a safe place to guess.
+          #   2. `2>/dev/null` discards the first attempt's stderr — the only
+          #      record of why it failed — so the log shows the second failure
+          #      and never the first.
+          #   3. There is no Gemfile in this repository, so `bundle exec` fails
+          #      immediately on EVERY run. The fallback was not an occasional
+          #      safety net; it was the actual code path, taken every time, with
+          #      a silent failure in front of it.
+          #
+          # So: decide which launcher is real BEFORE running anything, say which
+          # one was chosen, and run once with stderr intact. The step's exit
+          # status is fastlane's own.
+          set -euo pipefail
           export ASC_KEY_PATH="$HOME/asc/AuthKey.p8"
-          bundle exec fastlane ios beta 2>/dev/null || fastlane ios beta
+
+          if [ -f Gemfile ] && bundle check >/dev/null 2>&1; then
+            echo "fastlane launcher: bundle exec (Gemfile present and satisfied)"
+            bundle exec fastlane ios beta
+          else
+            echo "fastlane launcher: system fastlane (no satisfied Gemfile)"
+            fastlane ios beta
+          fi
+
+      # A FAILED LANE IS NOT AUTOMATICALLY A FAILED UPLOAD. The build and the
+      # upload are one lane, so a non-zero exit can mean the IPA never built, or
+      # that it uploaded and something after it failed. Re-running blind is how
+      # a duplicate build reaches TestFlight. This says so where the person
+      # deciding will actually be looking.
+      - name: Explain what to check before retrying
+        if: failure()
+        run: |
+          echo "::warning::The TestFlight lane failed. Check App Store Connect for a build with number ${{ github.run_number }} BEFORE re-running this workflow — the upload may have completed even though the lane did not."
