@@ -104,7 +104,7 @@ function Cell({
   return (
     <li
       className={`shrink-0 flex flex-col gap-1.5 ${
-        wide ? 'w-[100px] items-start' : 'w-16 items-center'
+        wide ? 'w-[6.25rem] items-start' : 'w-16 items-center'
       }`}
     >
       {children}
@@ -149,13 +149,16 @@ function YourCell({
           not overlap at all, so every point of the avatar opens your story and
           every point of the plus adds to it. Anything less than full
           separation leaves a strip of the avatar that silently does the other
-          thing, which is what the first attempt at this still had. Only the
-          18px MARK is pulled back over the avatar's corner, by a negative
-          margin, so the badge keeps the position the reference draws it in
-          without extending the button's box. */}
+          thing, which is what the first attempt at this still had.
+
+          NEITHER BUTTON IS ROUNDED-FULL, and that is a hit-test decision,
+          not a visual one: both paint nothing, the visible circle is the Ring
+          inside, and a circular hit area on a square box excludes its own
+          corners — which is exactly where a badge sits. That cost the operator
+          a working add control twice over, once per branch. */}
       <span
         data-testid="story-rail-you"
-        className={`relative block h-14 ${hasStory ? 'w-[100px]' : 'w-14'}`}
+        className={`relative block h-14 ${hasStory ? 'w-[6.25rem]' : 'w-14'}`}
       >
         {/* The avatar keeps its own 56px positioning box so the pin badge
             stays anchored to the avatar's corner rather than to the widened
@@ -165,7 +168,7 @@ function YourCell({
             type="button"
             data-testid={hasStory ? 'story-rail-your-story' : 'add-story'}
             onClick={hasStory ? onOpen : onAddStory}
-            className="block w-14 h-14 rounded-full touch-manipulation"
+            className="block w-14 h-14 touch-manipulation"
             aria-label={hasStory ? 'Your story' : RAIL_ADD_LABEL}
           >
             <Ring active={hasStory}>

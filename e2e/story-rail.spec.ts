@@ -398,9 +398,9 @@ test.describe('Stories — signed in', () => {
     }, { x: badgeBox.x + 2, y: badgeBox.y + badgeBox.height / 2 });
     expect(ownerAtBadge).toBe('add');
 
-    // And the avatar's own lower-right corner still opens the story, which is
+    // And the avatar's own bottom edge, mid-width, still opens the story —
     // the regression the previous version of this test existed to prevent.
-    const ownerAtAvatarCorner = await page.evaluate(({ x, y }) => {
+    const ownerAtAvatarBottom = await page.evaluate(({ x, y }) => {
       const element = document.elementFromPoint(x, y);
       if (element === null) return 'nothing';
       if (element.closest('[data-testid="add-story"]') !== null) return 'add';
@@ -410,7 +410,17 @@ test.describe('Stories — signed in', () => {
       x: avatarBox.x + avatarBox.width / 2,
       y: avatarBox.y + avatarBox.height - 4,
     });
-    expect(ownerAtAvatarCorner).toBe('story');
+    expect(ownerAtAvatarBottom).toBe('story');
+
+    // AND THE AVATAR IS STILL CLICKED FOR REAL. Hit-testing proves ownership,
+    // not that the handler behind it is the right one — a swapped onOpen would
+    // satisfy every assertion above. Codex caught that this rewrite had dropped
+    // the real click the old test carried.
+    await yourStory.click();
+    await expect(page.getByTestId('story-viewer')).toBeVisible();
+    await expect(page.getByTestId('capture-modes')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('story-viewer')).toHaveCount(0);
 
     // Tapping the mark reaches CAPTURE, which is the thing the operator could
     // not do. Asserted through a real click, not geometry.
@@ -439,6 +449,12 @@ test.describe('Stories — signed in', () => {
 
     const ring = page.getByTestId('story-ring').first();
     await expect(ring).toHaveAttribute('data-active', 'true');
+    // The stroke must actually BE there. Asserting only the gap would stay
+    // green if the ring classes were deleted outright, which is the failure
+    // this test is supposed to make impossible.
+    const shadow = await ring.evaluate((el) => getComputedStyle(el).boxShadow);
+    expect(shadow).not.toBe('none');
+
     const ringBox = await ring.boundingBox();
     const clipTop = await page.locator('[data-carousel]').evaluate(
       // Overflow clips at the PADDING box, so padding-top is room the stroke
