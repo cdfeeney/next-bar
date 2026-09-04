@@ -310,6 +310,52 @@ export function reportOrphans(context: string, orphans: readonly string[] | unde
   );
 }
 
+/**
+ * What `publish_story` refused, said to the author.
+ *
+ * The function raises ELEVEN distinct exceptions and every one of them arrived
+ * as "The story could not be published". An author who tagged someone outside
+ * their custom audience was told nothing useful across repeated attempts while
+ * the server named the exact rule every single time.
+ *
+ * Only the refusals the AUTHOR can act on are phrased here. The rest
+ * ("media_path is not owned by the caller", "names no uploaded object") are OUR
+ * bugs, not their mistake, and a user cannot do anything with them — they keep
+ * the generic message and the raw text goes to the log instead, so nothing is
+ * swallowed in either direction.
+ *
+ * Matched on a fragment rather than the whole string because PostgREST wraps
+ * the raise before this layer sees it.
+ */
+const AUTHOR_FIXABLE_REFUSALS: ReadonlyArray<readonly [string, string]> = [
+  [
+    'a custom audience needs at least one recipient',
+    'Pick at least one person for a custom story. Nothing was shared.',
+  ],
+  [
+    'every custom recipient must be a mutual friend',
+    'Everyone you pick has to be a friend who follows you back. Nothing was shared.',
+  ],
+  [
+    'you can only tag friends who follow you back',
+    'You can only tag friends who follow you back. Nothing was shared.',
+  ],
+  [
+    "everyone you tag must be in a custom story's audience",
+    'Everyone you tag has to be in the story audience too. Nothing was shared.',
+  ],
+  [
+    'those bytes have already been reclaimed',
+    'That photo expired before the story was shared. Pick it again. Nothing was shared.',
+  ],
+];
+
+function refusalMessage(raw: string | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const hit = AUTHOR_FIXABLE_REFUSALS.find(([fragment]) => raw.includes(fragment));
+  return hit === undefined ? null : hit[1];
+}
+
 function unavailable<T>(): StoryResult<T> {
   return {
     ok: false,
@@ -399,6 +445,24 @@ export async function publishStory(
       }
     }
 
+    // A TAG IMPLIES AN INVITATION. `publish_story` refuses a custom story whose
+    // tag list names anyone outside its audience, and the composer let the
+    // author build exactly that — an hour of 403s that named the rule the author
+    // was never shown. Tagging someone into a story they cannot see is not a
+    // thing an author means, so the audience widens to cover the tags rather
+    // than the publish failing.
+    //
+    // This cannot turn a legal publish into a refused one: the same function
+    // constrains tags to mutual friends already, which is the identical test it
+    // applies to audience members. The author is excluded — they are not their
+    // own mutual friend, and tagging yourself must not refuse the post.
+    const audienceIds = input.audience === 'custom'
+      ? Array.from(new Set([
+          ...(input.audienceIds ?? []),
+          ...(input.tagIds ?? []).filter((id) => id !== input.authorId),
+        ]))
+      : (input.audienceIds ?? []);
+
     rpcIssued = true;
     const { data, error } = await client.rpc('publish_story', {
       p_media_path: mainPath,
@@ -407,7 +471,7 @@ export async function publishStory(
       p_bar_id: input.barId ?? null,
       p_caption: input.caption ?? null,
       p_audience: input.audience,
-      p_audience_ids: input.audienceIds ?? [],
+      p_audience_ids: audienceIds,
       p_tag_ids: input.tagIds ?? [],
     });
 
@@ -415,13 +479,20 @@ export async function publishStory(
       const orphans = await cleanup();
       // 42501 is the RPC's own "not a mutual friend" / "not your object" refusal.
       const denied = typeof error?.code === 'string' && error.code === '42501';
+      const named = refusalMessage(error?.message);
+      if (named === null && typeof error?.message === 'string') {
+        // The server named something this layer has no phrasing for and the
+        // author is about to be told only "could not be published". Logged so
+        // the cause survives somewhere, which is what did not happen before.
+        console.error(`[stories] publish refused: ${error.message}`);
+      }
       return {
         ok: false,
         reason: denied ? 'denied' : 'failed',
         orphans,
-        message: denied
+        message: named ?? (denied
           ? 'Everyone you pick has to be a friend who follows you back. Nothing was shared.'
-          : 'The story could not be published. Nothing was shared.',
+          : 'The story could not be published. Nothing was shared.'),
       };
     }
 

@@ -29,8 +29,22 @@ import { mediaFailure, type MediaResult } from './types';
  * storing the original."
  */
 
-/** Cap on accepted upload size. Rejected before any decode is attempted. */
-export const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
+/**
+ * Cap on accepted upload size. Rejected before any decode is attempted.
+ *
+ * NOT A FREE CHOICE — the platform bounds the request body before this route
+ * ever runs. Measured against production on 2026-09-03: a 3.70 MB body returned
+ * 200 and a 4.73 MB body returned 413 `FUNCTION_PAYLOAD_TOO_LARGE` from the
+ * edge, so the real ceiling is ~4.5 MB. This constant was 12 MiB, which was
+ * unreachable fiction: every value between ~4.5 MB and 12 MiB was refused by
+ * the platform rather than by the check below, and the number here said
+ * otherwise to anyone reading it.
+ *
+ * 4 MiB sits under the edge bound with room for multipart framing, so an
+ * oversized upload is refused by OUR route — with our error shape — for as much
+ * of the range as we can actually reach.
+ */
+export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 
 /**
  * The ceiling on what comes OUT, which is a different number from what may come

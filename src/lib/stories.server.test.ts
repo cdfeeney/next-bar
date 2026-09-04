@@ -182,6 +182,13 @@ const deleteIds = (): string[] =>
 
 const blob = (): Blob => new Blob(['x'], { type: 'image/jpeg' });
 
+/** A row shaped like what `publish_story` returns, for tests about the CALL. */
+const storyRow = () => ({
+  id: 's1', author_id: 'a', bar_id: null, caption: null,
+  media_path: 'a/media-1', inset_path: null, media_kind: 'single',
+  audience: 'custom', created_at: iso(0), expires_at: iso(86_400_000),
+});
+
 // Every test gets a working boundary unless it asks for a broken one.
 beforeEach(() => installBoundary());
 afterEach(() => vi.unstubAllGlobals());
@@ -318,6 +325,51 @@ describe('publishStory', () => {
     if (!result.ok) {
       expect(result.reason).toBe('denied');
       expect(result.message).toMatch(/follows you back/i);
+    }
+  });
+
+  it('adds tagged people to a custom audience, so a tag cannot refuse the post', async () => {
+    // `publish_story` refuses a custom story that tags anyone outside its
+    // audience (0066). The composer could build exactly that, and the author
+    // was told only that publication failed. A tag is an invitation now.
+    const { client, rpc } = clientStub({ rpc: { data: storyRow(), error: null } });
+    const result = await publishStory(client, {
+      authorId: 'a', draftId: 'd', main: blob(), audience: 'custom',
+      audienceIds: ['b'], tagIds: ['c', 'b', 'a'],
+    });
+    expect(result.ok).toBe(true);
+    const sent = rpc.mock.calls[0][1] as { p_audience_ids: string[] };
+    // 'b' is not duplicated, and the AUTHOR is not added — they are not their
+    // own mutual friend, so folding 'a' in would refuse the post it is fixing.
+    expect([...sent.p_audience_ids].sort()).toEqual(['b', 'c']);
+  });
+
+  it('leaves the audience alone for a friends story, where the ids are not read', async () => {
+    const { client, rpc } = clientStub({ rpc: { data: storyRow(), error: null } });
+    await publishStory(client, {
+      authorId: 'a', draftId: 'd', main: blob(), audience: 'friends', tagIds: ['c'],
+    });
+    const sent = rpc.mock.calls[0][1] as { p_audience_ids: string[] };
+    expect(sent.p_audience_ids).toEqual([]);
+  });
+
+  it('tells the author WHICH rule the server refused, not "could not be published"', async () => {
+    const { client } = clientStub({
+      rpc: {
+        data: null,
+        error: {
+          message: "publish_story: everyone you tag must be in a custom story's audience",
+          code: '42501',
+        },
+      },
+    });
+    const result = await publishStory(client, {
+      authorId: 'a', draftId: 'd', main: blob(), audience: 'custom', audienceIds: ['b'],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toMatch(/in the story audience too/i);
+      expect(result.message).not.toMatch(/could not be published/i);
     }
   });
 });
