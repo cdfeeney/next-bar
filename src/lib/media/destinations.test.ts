@@ -260,10 +260,13 @@ describe('claimMediaForRemoval — the atomic claim', () => {
       error: null,
     });
 
-    await expect(claimMediaForRemoval(client, null)).resolves.toEqual([
-      { mediaId: 'm1', storagePath: 'u1/a.jpg', claimedAt: null },
-      { mediaId: 'm2', storagePath: 'u1/b.jpg', claimedAt: null },
-    ]);
+    await expect(claimMediaForRemoval(client, null)).resolves.toEqual({
+      ok: true,
+      value: [
+        { mediaId: 'm1', storagePath: 'u1/a.jpg', claimedAt: null },
+        { mediaId: 'm2', storagePath: 'u1/b.jpg', claimedAt: null },
+      ],
+    });
   });
 
   it('passes the media id through for a targeted claim', async () => {
@@ -279,19 +282,37 @@ describe('claimMediaForRemoval — the atomic claim', () => {
   // somebody else got there first. It is not an error and it must not read as
   // permission.
   it('claims nothing when the database declines', async () => {
+    // SUCCESS WITH NOTHING ELIGIBLE. This is the case that must stay
+    // distinguishable from the two failures below — it is the whole point of
+    // the return type change.
     await expect(claimMediaForRemoval(rpcClient({ data: [], error: null }), 'm1'))
-      .resolves.toEqual([]);
+      .resolves.toEqual({ ok: true, value: [] });
   });
 
-  it('claims nothing when the RPC errors', async () => {
+  it('reports FAILURE when the RPC errors, not an empty sweep', async () => {
+    // Previously [] — identical to 'nothing eligible', which is how the
+    // scheduled route came to answer 200 ok:true over a cleanup that never ran.
     await expect(
       claimMediaForRemoval(rpcClient({ data: null, error: { message: 'down' } }), 'm1'),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'failed',
+      message: 'Media could not be claimed for removal.',
+    });
+  });
+
+  it('reports FAILURE when the client throws', async () => {
+    const client = { rpc: vi.fn(async () => { throw new Error('socket'); }) } as never;
+    const result = await claimMediaForRemoval(client, 'm1');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('failed');
   });
 
   it('claims nothing on an unexpected answer shape', async () => {
+    // A shape we cannot read is not an ERROR from the database's point of
+    // view — it answered. It yields a successful empty claim list.
     await expect(claimMediaForRemoval(rpcClient({ data: { nope: 1 }, error: null }), null))
-      .resolves.toEqual([]);
+      .resolves.toEqual({ ok: true, value: [] });
   });
 
   it('drops a row that names no path, rather than deleting an empty key', async () => {
@@ -302,13 +323,19 @@ describe('claimMediaForRemoval — the atomic claim', () => {
       ],
       error: null,
     });
-    await expect(claimMediaForRemoval(client, null)).resolves.toEqual([
-      { mediaId: 'm2', storagePath: 'u1/b.jpg', claimedAt: null },
-    ]);
+    await expect(claimMediaForRemoval(client, null)).resolves.toEqual({
+      ok: true,
+      value: [{ mediaId: 'm2', storagePath: 'u1/b.jpg', claimedAt: null }],
+    });
   });
 
-  it('claims nothing with no client at all', async () => {
-    await expect(claimMediaForRemoval(null, 'm1')).resolves.toEqual([]);
+  it('reports UNAVAILABLE with no client at all', async () => {
+    const result = await claimMediaForRemoval(null, 'm1');
+    expect(result).toEqual({
+      ok: false,
+      reason: 'unavailable',
+      message: expect.any(String),
+    });
   });
 });
 
@@ -366,10 +393,13 @@ describe('claimOrphanPaths — bytes the registry never saw', () => {
       ],
       error: null,
     });
-    await expect(claimOrphanPaths(client)).resolves.toEqual([
-      { mediaId: 'm1', storagePath: 'u1/old.jpg', claimedAt: null },
-      { mediaId: 'm2', storagePath: 'u1/older.jpg', claimedAt: null },
-    ]);
+    await expect(claimOrphanPaths(client)).resolves.toEqual({
+      ok: true,
+      value: [
+        { mediaId: 'm1', storagePath: 'u1/old.jpg', claimedAt: null },
+        { mediaId: 'm2', storagePath: 'u1/older.jpg', claimedAt: null },
+      ],
+    });
   });
 
   // A row with no media id is not a claim, and treating it as one would delete
@@ -379,15 +409,38 @@ describe('claimOrphanPaths — bytes the registry never saw', () => {
       data: [{ bucket_id: 'story-media', storage_path: 'u1/old.jpg' }],
       error: null,
     });
-    await expect(claimOrphanPaths(client)).resolves.toEqual([]);
+    await expect(claimOrphanPaths(client)).resolves.toEqual({ ok: true, value: [] });
   });
 
-  it('claims nothing when the lookup errors', async () => {
+  // SUCCESS WITH AN EMPTY BUCKET. Kept distinct from the two failures below,
+  // because conflating them is the defect.
+  it('reports SUCCESS when there are genuinely no orphans', async () => {
+    await expect(claimOrphanPaths(rpcClient({ data: [], error: null })))
+      .resolves.toEqual({ ok: true, value: [] });
+  });
+
+  it('reports FAILURE when the lookup errors, not an empty bucket', async () => {
     await expect(claimOrphanPaths(rpcClient({ data: null, error: { message: 'x' } })))
-      .resolves.toEqual([]);
+      .resolves.toEqual({
+        ok: false,
+        reason: 'failed',
+        message: 'Orphan objects could not be claimed.',
+      });
   });
 
-  it('claims nothing with no client at all', async () => {
-    await expect(claimOrphanPaths(null)).resolves.toEqual([]);
+  it('reports FAILURE when the client throws', async () => {
+    const client = { rpc: vi.fn(async () => { throw new Error('socket'); }) } as never;
+    const result = await claimOrphanPaths(client);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('failed');
+  });
+
+  it('reports UNAVAILABLE with no client at all', async () => {
+    const result = await claimOrphanPaths(null);
+    expect(result).toEqual({
+      ok: false,
+      reason: 'unavailable',
+      message: expect.any(String),
+    });
   });
 });

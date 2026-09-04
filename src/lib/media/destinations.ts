@@ -143,23 +143,31 @@ function claimRows(data: unknown): MediaClaim[] {
  * survived, someone else already claimed it, or the object is not the caller's.
  * There is no "probably safe" answer any more, only a claim or nothing.
  *
- * FAILS CLOSED: an error or a throw yields no claims, so nothing is deleted.
+ * FAILS CLOSED, AND NOW SAYS SO. An error or a throw still yields no claims, so
+ * nothing is deleted — that half was always right. The half that was wrong: it
+ * returned the SAME empty array as "the database checked and nothing is
+ * eligible". A sweep that could not run at all was therefore indistinguishable
+ * from a clean one, and the scheduled route answered 200 `ok: true` over a
+ * cleanup that never happened. Deletion stays safe on failure; the failure now
+ * travels with it.
  */
 export async function claimMediaForRemoval(
   client: SupabaseClient | null,
   mediaId: string | null,
   limit?: number,
-): Promise<MediaClaim[]> {
-  if (client === null) return [];
+): Promise<MediaResult<MediaClaim[]>> {
+  if (client === null) return mediaUnavailable();
   try {
     const { data, error } = await client.rpc('claim_media_for_removal', {
       p_media_id: mediaId,
       p_limit: limit ?? SWEEP_BATCH,
     });
-    if (error) return [];
-    return claimRows(data);
+    if (error) {
+      return mediaFailure('failed', 'Media could not be claimed for removal.');
+    }
+    return { ok: true, value: claimRows(data) };
   } catch {
-    return [];
+    return mediaFailure('failed', 'Media could not be claimed for removal.');
   }
 }
 
@@ -215,21 +223,26 @@ export async function releaseMediaClaim(
  * back is a CLAIM with the same guarantees as any other, and both halves of the
  * sweep are now one mechanism.
  *
- * FAILS CLOSED: an error or a throw yields no claims, so nothing is deleted.
+ * FAILS CLOSED, AND NOW SAYS SO — same change, same reason, as
+ * {@link claimMediaForRemoval}. An orphan population we could not READ is not
+ * an empty one, and reporting it as empty is precisely how a bucket fills up
+ * behind a green cron.
  */
 export async function claimOrphanPaths(
   client: SupabaseClient | null,
   limit?: number,
-): Promise<MediaClaim[]> {
-  if (client === null) return [];
+): Promise<MediaResult<MediaClaim[]>> {
+  if (client === null) return mediaUnavailable();
   try {
     const { data, error } = await client.rpc('claim_orphan_paths', {
       p_limit: limit ?? SWEEP_BATCH,
     });
-    if (error) return [];
-    return claimRows(data);
+    if (error) {
+      return mediaFailure('failed', 'Orphan objects could not be claimed.');
+    }
+    return { ok: true, value: claimRows(data) };
   } catch {
-    return [];
+    return mediaFailure('failed', 'Orphan objects could not be claimed.');
   }
 }
 

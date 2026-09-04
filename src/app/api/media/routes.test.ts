@@ -714,6 +714,54 @@ describe('GET /api/media/reclaim (cron)', () => {
     expect(verifiedUserId).not.toHaveBeenCalled();
     expect(remove).toHaveBeenCalledWith(['deleted-account/photo.jpg']);
   });
+
+  /**
+   * THE CRON MUST NOT REPORT A CLEAN SWEEP IT DID NOT PERFORM.
+   *
+   * Both claim helpers failed closed by returning an empty list, which the
+   * sweep could not tell apart from 'nothing was eligible' — so a run whose
+   * RPCs errored produced 200 ok:true, the platform recorded a green
+   * invocation, and nothing was cleaned. Silent, scheduled, and self-reporting
+   * as healthy is the worst combination available.
+   */
+  it('answers 500 when the sweep could not check, instead of a green 200', async () => {
+    vi.stubEnv('CRON_SECRET', 'cron-secret');
+    readMediaEnv.mockReturnValue(ENV);
+    bearerToken.mockReturnValue('cron-secret');
+    const remove = vi.fn(async (paths: string[]) => ({
+      data: paths.map((name) => ({ name })),
+      error: null,
+    }));
+    const admin = db({}, { remove }).client;
+    admin.rpc = vi.fn(async () => ({ data: null, error: { message: 'down' } }));
+    adminClient.mockReturnValue(admin);
+
+    const response = await RECLAIM_CRON(cronRequest('cron-secret'));
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: 'sweep_incomplete',
+      unchecked: ['claim_media_for_removal', 'claim_orphan_paths'],
+    });
+    // Failing closed is unchanged — an unreadable claim still deletes nothing.
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('still answers 200 for a sweep that ran and found nothing', async () => {
+    // The distinction this change exists to make: an empty bucket is a success.
+    vi.stubEnv('CRON_SECRET', 'cron-secret');
+    readMediaEnv.mockReturnValue(ENV);
+    bearerToken.mockReturnValue('cron-secret');
+    const admin = db({}).client;
+    admin.rpc = vi.fn(async () => ({ data: [], error: null }));
+    adminClient.mockReturnValue(admin);
+
+    const response = await RECLAIM_CRON(cronRequest('cron-secret'));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, reclaimed: 0 });
+  });
 });
 
 describe('GET /api/media/:mediaId/url', () => {

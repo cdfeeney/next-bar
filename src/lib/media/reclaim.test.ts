@@ -102,6 +102,7 @@ describe('claimAndRemove — nothing is deleted that was not claimed', () => {
     await expect(claimAndRemove(caller, admin, 'm1')).resolves.toEqual({
       reclaimed: ['u1/a.jpg'],
       orphaned: [],
+      unchecked: [],
     });
     expect(remove).toHaveBeenCalledWith(['u1/a.jpg']);
   });
@@ -115,6 +116,7 @@ describe('claimAndRemove — nothing is deleted that was not claimed', () => {
     await expect(claimAndRemove(caller, admin, 'm1')).resolves.toEqual({
       reclaimed: [],
       orphaned: [],
+      unchecked: [],
     });
     expect(remove).not.toHaveBeenCalled();
   });
@@ -129,6 +131,7 @@ describe('claimAndRemove — nothing is deleted that was not claimed', () => {
     await expect(claimAndRemove(caller, admin, 'm1')).resolves.toEqual({
       reclaimed: [],
       orphaned: ['u1/a.jpg'],
+      unchecked: [],
     });
     expect(rpc).toHaveBeenCalledWith('release_media_claim', { p_media_id: 'm1', p_claimed_at: CLAIM_STAMP });
   });
@@ -155,7 +158,7 @@ describe('claimAndRemove — nothing is deleted that was not claimed', () => {
     const { admin, rpc } = adminWith((paths) => paths.filter((p) => p === 'u1/a.jpg'));
 
     const result = await claimAndRemove(caller, admin, null);
-    expect(result).toEqual({ reclaimed: ['u1/a.jpg'], orphaned: ['u1/b.jpg'] });
+    expect(result).toEqual({ reclaimed: ['u1/a.jpg'], orphaned: ['u1/b.jpg'], unchecked: [] });
     expect(released(rpc)).toEqual(['m2']);
   });
 });
@@ -171,6 +174,7 @@ describe('sweepReclaimable — the tick that actually runs', () => {
     await expect(sweepReclaimable(caller, admin)).resolves.toEqual({
       reclaimed: ['u1/registered.jpg', 'u1/legacy.jpg'],
       orphaned: [],
+      unchecked: [],
     });
     // Two removals, because the two populations are obtained differently: one
     // already had a registry row, the other was adopted into one first.
@@ -189,6 +193,7 @@ describe('sweepReclaimable — the tick that actually runs', () => {
     await expect(sweepReclaimable(caller, admin)).resolves.toEqual({
       reclaimed: ['u1/legacy.jpg'],
       orphaned: [],
+      unchecked: [],
     });
   });
 
@@ -206,6 +211,7 @@ describe('sweepReclaimable — the tick that actually runs', () => {
     await expect(sweepReclaimable(caller, admin)).resolves.toEqual({
       reclaimed: [],
       orphaned: ['u1/legacy.jpg'],
+      unchecked: [],
     });
     expect(released(rpc)).toEqual(['m9']);
   });
@@ -217,6 +223,7 @@ describe('sweepReclaimable — the tick that actually runs', () => {
     await expect(sweepReclaimable(caller, admin)).resolves.toEqual({
       reclaimed: [],
       orphaned: [],
+      unchecked: [],
     });
     expect(remove).not.toHaveBeenCalled();
   });
@@ -280,5 +287,87 @@ describe('a claim is released ONLY on positive proof the bytes survived', () => 
 
     expect(released(rpc)).toEqual([]);
     expect(result.reclaimed).toEqual(['u1/a.jpg']);
+  });
+});
+
+/**
+ * A SWEEP THAT COULD NOT CHECK IS NOT A CLEAN SWEEP.
+ *
+ * Both claim helpers used to fail closed by returning an empty list, which is
+ * byte-identical to "the database looked and nothing was eligible". The sweep
+ * had no way to express the difference, so a scheduled run whose RPCs errored
+ * produced `{ reclaimed: [], orphaned: [] }` — a clean bill of health — and the
+ * cron route answered 200 `ok: true` over cleanup that never happened.
+ *
+ * Deletion behaviour is unchanged and deliberately re-asserted here: failing
+ * closed still means nothing is removed. What is new is that the caller is told.
+ */
+describe('a sweep reports what it could NOT check', () => {
+  it('flags the registered half when its claim RPC errors, and deletes nothing', async () => {
+    const caller = callerWith({
+      claim_media_for_removal: { data: null, error: { message: 'down' } },
+      claim_orphan_paths: { data: [], error: null },
+    });
+    const { admin, remove } = adminWith((paths) => paths);
+
+    const result = await sweepReclaimable(caller, admin);
+
+    expect(result.unchecked).toEqual(['claim_media_for_removal']);
+    expect(result.reclaimed).toEqual([]);
+    // Failing closed is unchanged: an unreadable claim deletes nothing.
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('flags the orphan half when ITS claim RPC errors', async () => {
+    const caller = callerWith({
+      claim_media_for_removal: { data: [], error: null },
+      claim_orphan_paths: { data: null, error: { message: 'down' } },
+    });
+    const { admin, remove } = adminWith((paths) => paths);
+
+    const result = await sweepReclaimable(caller, admin);
+
+    expect(result.unchecked).toEqual(['claim_orphan_paths']);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('flags BOTH halves when both fail, rather than stopping at the first', async () => {
+    // The two calls cover different populations. Short-circuiting after the
+    // first failure would report one unreadable population and leave the other
+    // silently unexamined.
+    const caller = callerWith({
+      claim_media_for_removal: { data: null, error: { message: 'down' } },
+      claim_orphan_paths: { data: null, error: { message: 'down' } },
+    });
+    const result = await sweepReclaimable(caller, adminWith((paths) => paths).admin);
+
+    expect(result.unchecked).toEqual(['claim_media_for_removal', 'claim_orphan_paths']);
+  });
+
+  it('reports a THROWN claim as unchecked, not as an empty sweep', async () => {
+    const caller = {
+      rpc: vi.fn(async (name: string) => {
+        if (name === 'claim_media_for_removal') throw new Error('socket hang up');
+        return { data: [], error: null };
+      }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+
+    const result = await sweepReclaimable(caller, adminWith((paths) => paths).admin);
+
+    expect(result.unchecked).toEqual(['claim_media_for_removal']);
+  });
+
+  it('reports NOTHING unchecked when both halves ran and found nothing', async () => {
+    // The case that must stay distinguishable from all four above, and the one
+    // a green cron is entitled to report.
+    const caller = callerWith({
+      claim_media_for_removal: { data: [], error: null },
+      claim_orphan_paths: { data: [], error: null },
+    });
+
+    const result = await sweepReclaimable(caller, adminWith((paths) => paths).admin);
+
+    expect(result).toEqual({ reclaimed: [], orphaned: [], unchecked: [] });
   });
 });

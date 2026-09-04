@@ -51,6 +51,44 @@ function tokenMatches(token: string, secret: string): boolean {
  * this way never appears in deployment config). Same bounded global sweep as
  * the service-key POST. No CRON_SECRET configured = no scheduled path at all.
  */
+/**
+ * One answer shape for all three sweeps, so none of them can quietly report a
+ * cleanup that did not happen.
+ *
+ * A sweep whose claim RPC errored or threw used to be indistinguishable from a
+ * clean one — both produced empty lists — and this route answered 200
+ * `ok: true` over it. For the CRON that is the worst possible combination: the
+ * platform records a green invocation, nobody is paged, and the bucket grows.
+ * 500 is right because the work was not done and the caller should retry or
+ * alert, not because the request was malformed.
+ */
+function sweptResponse(
+  scope: 'all' | 'own',
+  swept: { reclaimed: string[]; orphaned: string[]; unchecked: string[] },
+): NextResponse {
+  if (swept.unchecked.length > 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: 'sweep_incomplete',
+        scope,
+        // What DID land is still reported: some bytes really are gone, and a
+        // caller retrying needs to know the run was partial rather than void.
+        reclaimed: swept.reclaimed.length,
+        orphanedPaths: swept.orphaned,
+        unchecked: swept.unchecked,
+      },
+      { status: 500 },
+    );
+  }
+  return NextResponse.json({
+    ok: true,
+    scope,
+    reclaimed: swept.reclaimed.length,
+    orphanedPaths: swept.orphaned,
+  });
+}
+
 export async function GET(request: Request): Promise<NextResponse> {
   const secret = process.env.CRON_SECRET;
   const token = bearerToken(request);
@@ -65,12 +103,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   const admin = adminClient(env);
   const swept = await sweepReclaimable(admin, admin);
-  return NextResponse.json({
-    ok: true,
-    scope: 'all',
-    reclaimed: swept.reclaimed.length,
-    orphanedPaths: swept.orphaned,
-  });
+  return sweptResponse('all', swept);
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -92,12 +125,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   // the only client for which it is.
   if (tokenMatches(token, env.serviceKey)) {
     const swept = await sweepReclaimable(admin, admin);
-    return NextResponse.json({
-      ok: true,
-      scope: 'all',
-      reclaimed: swept.reclaimed.length,
-      orphanedPaths: swept.orphaned,
-    });
+    return sweptResponse('all', swept);
   }
 
   const userId = await verifiedUserId(admin, token);
@@ -106,10 +134,5 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const swept = await sweepReclaimable(callerClient(env, token), admin);
-  return NextResponse.json({
-    ok: true,
-    scope: 'own',
-    reclaimed: swept.reclaimed.length,
-    orphanedPaths: swept.orphaned,
-  });
+  return sweptResponse('own', swept);
 }

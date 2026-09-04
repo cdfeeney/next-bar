@@ -150,6 +150,12 @@ async function sweepRest(
 ): Promise<{ alsoReclaimed: number }> {
   try {
     const swept = await sweepReclaimable(caller, admin);
+    // Rides along on a deletion, so it must not fail the deletion. Logged for
+    // the same reason as the upload path: an incomplete sweep that says nothing
+    // is the defect being fixed here, not a quieter version of success.
+    if (swept.unchecked.length > 0) {
+      console.error(`[media/delete] sweep incomplete: ${swept.unchecked.join(', ')}`);
+    }
     return { alsoReclaimed: swept.reclaimed.length };
   } catch (error) {
     console.error(

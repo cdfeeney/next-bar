@@ -55,15 +55,37 @@ export type SweepResult = {
    * still says so, which is the only safe direction to be wrong in.
    */
   orphaned: string[];
+  /**
+   * WHAT THE SWEEP COULD NOT CHECK — the difference between "nothing was
+   * eligible" and "we never found out", which this type could not previously
+   * express at all.
+   *
+   * Both claim calls failed closed by returning an empty list, so a sweep whose
+   * RPCs errored or threw was byte-identical to a sweep that ran cleanly over an
+   * empty bucket: `reclaimed: [], orphaned: []`. The scheduled route reported
+   * 200 `ok: true` over it, which is the shape of a cron that looks healthy for
+   * as long as it takes someone to notice the bucket growing.
+   *
+   * Empty means every step the sweep attempted actually completed. Non-empty
+   * means at least one did not, and NOTHING may be concluded about the
+   * population it covered — not that it was clean, not that it was empty.
+   */
+  unchecked: string[];
 };
 
-const EMPTY: SweepResult = { reclaimed: [], orphaned: [] };
+const EMPTY: SweepResult = { reclaimed: [], orphaned: [], unchecked: [] };
 
 function merge(a: SweepResult, b: SweepResult): SweepResult {
   return {
     reclaimed: [...a.reclaimed, ...b.reclaimed],
     orphaned: [...a.orphaned, ...b.orphaned],
+    unchecked: [...a.unchecked, ...b.unchecked],
   };
+}
+
+/** A claim step that failed: nothing deleted, and the population unknown. */
+function unchecked(what: string): SweepResult {
+  return { reclaimed: [], orphaned: [], unchecked: [what] };
 }
 
 /**
@@ -82,7 +104,12 @@ export async function claimAndRemove(
   mediaId: string | null,
   limit: number = SWEEP_BATCH,
 ): Promise<SweepResult> {
-  return removeClaims(admin, await claimMediaForRemoval(caller, mediaId, limit));
+  const claims = await claimMediaForRemoval(caller, mediaId, limit);
+  // A claim step that did not complete deletes nothing AND concludes nothing.
+  // Falling through with an empty list here is what let a failed sweep report
+  // itself as a clean one.
+  if (!claims.ok) return unchecked('claim_media_for_removal');
+  return removeClaims(admin, claims.value);
 }
 
 /**
@@ -231,6 +258,16 @@ async function removeClaims(
     orphaned: attempt.conclusive
       ? [...failed].filter((path) => stillPresent.has(path))
       : [...failed],
+    // An INCONCLUSIVE removal is the same class of thing as a failed claim: the
+    // sweep did not establish what happened, so the caller must not read this
+    // run as a completed one. Reclaimed is already emptied above for exactly
+    // this case — this is what stops that empty list being mistaken for "there
+    // was nothing to reclaim".
+    //
+    // Per-path probe failures are deliberately NOT listed here. Those are
+    // already handled conservatively (the stamp stands, the sweep revisits the
+    // path), so surfacing them would mark an otherwise complete run incomplete.
+    unchecked: attempt.conclusive ? [] : ['reclaim_bytes'],
   };
 }
 
@@ -247,6 +284,12 @@ export async function sweepReclaimable(
   limit: number = SWEEP_BATCH,
 ): Promise<SweepResult> {
   const claimed = await claimAndRemove(caller, admin, null, limit);
-  const orphans = await removeClaims(admin, await claimOrphanPaths(caller, limit));
+  // Both halves are attempted even when the first could not check: they cover
+  // different populations, and skipping the second would turn one unreadable
+  // population into two.
+  const orphanClaims = await claimOrphanPaths(caller, limit);
+  const orphans = orphanClaims.ok
+    ? await removeClaims(admin, orphanClaims.value)
+    : unchecked('claim_orphan_paths');
   return merge(claimed, orphans);
 }

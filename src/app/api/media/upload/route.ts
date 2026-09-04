@@ -40,6 +40,14 @@ async function sweepAfterUpload(
 ): Promise<number> {
   try {
     const swept = await sweepReclaimable(caller, admin, EVENT_SWEEP_LIMIT);
+    // This sweep rides along on someone's upload, so a failed one must NOT fail
+    // their request — but it must not vanish either. The scheduled route answers
+    // 500 for the same condition; here the only honest channel is the log.
+    if (swept.unchecked.length > 0) {
+      console.error(
+        `[media/upload] post-upload sweep incomplete: ${swept.unchecked.join(', ')}`,
+      );
+    }
     return swept.reclaimed.length;
   } catch (error) {
     console.error(
