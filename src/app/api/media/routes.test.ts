@@ -762,6 +762,51 @@ describe('GET /api/media/reclaim (cron)', () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ ok: true, reclaimed: 0 });
   });
+
+  /**
+   * THE PROBE FAILURE PATH, END TO END. Storage omits the object from its
+   * removal report and the presence lookup that would settle whether the bytes
+   * survived then fails. The claim helpers all succeeded, so this is NOT the
+   * failure covered above — the sweep ran, and simply does not know what
+   * happened. It used to answer 200 ok:true.
+   */
+  it('answers 500 when a presence probe failed, even though every claim succeeded', async () => {
+    vi.stubEnv('CRON_SECRET', 'cron-secret');
+    readMediaEnv.mockReturnValue(ENV);
+    bearerToken.mockReturnValue('cron-secret');
+    // Removal reports nothing removed; the follow-up listing errors.
+    const remove = vi.fn(async () => ({ data: [], error: null }));
+    const list = vi.fn(async () => ({ data: null, error: { message: 'list unavailable' } }));
+    const admin = db({}, { remove }).client;
+    admin.storage = { from: () => ({ remove, list }) };
+    admin.rpc = vi.fn(async (name: string) => (
+      name === 'claim_media_for_removal'
+        ? {
+          data: [{
+            media_id: 'm1',
+            bucket_id: 'story-media',
+            storage_path: 'u1/a.jpg',
+            claimed_at: '2026-09-04T00:00:00.000Z',
+          }],
+          error: null,
+        }
+        : { data: [], error: null }
+    ));
+    adminClient.mockReturnValue(admin);
+
+    const response = await RECLAIM_CRON(cronRequest('cron-secret'));
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: 'sweep_incomplete',
+      unchecked: ['presence_unknown:u1/a.jpg'],
+      reclaimed: 0,
+    });
+    // The claim is NOT handed back on an unknown outcome.
+    const releases = admin.rpc.mock.calls.filter((c: unknown[]) => c[0] === 'release_media_claim');
+    expect(releases).toHaveLength(0);
+  });
 });
 
 describe('GET /api/media/:mediaId/url', () => {

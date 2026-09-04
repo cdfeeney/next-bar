@@ -47,12 +47,24 @@
 -- eligibility rules are untouched: 24 hours old, no live story, no unclaimed or
 -- in-flight registry row.
 --
+-- THE RUNNER OWNS THE TRANSACTION — this file must NOT contain `begin;` or
+-- `commit;`, and every applied migration in this repository (0074, 0075, 0076)
+-- correctly contains neither.
+--
+-- `scripts/apply-migration-set.ts` issues `BEGIN READ WRITE`, executes each
+-- migration UNCHANGED, inserts its `public.schema_migrations` row, and only
+-- then COMMITs — so one transaction owns both the schema change and the ledger
+-- entry. A `commit;` inside this file would end that transaction early: the
+-- schema change would land, the ledger row would be written outside it, and a
+-- later failure could no longer roll the schema back. The ledger would then
+-- disagree with the database, which is the one state this scheme exists to
+-- prevent. An earlier revision of this file carried both statements.
+--
 -- RLS IS SAFE UNDER A NULL OWNER. Every policy and verb compares
 -- `owner_id = auth.uid()`, which is NULL — and therefore false — for an
 -- ownerless row. No user gains read or delete access to a deleted account's
 -- media; only the service-role sweep can reach it, which is the intent.
 
-begin;
 
 -------------------------------------------------------------------------------
 -- 1. A deleted account's media keeps its row, so the sweep can still see it.
@@ -214,4 +226,3 @@ comment on function public.claim_orphan_paths(integer) is
 revoke all on function public.claim_orphan_paths(integer) from public, anon;
 grant execute on function public.claim_orphan_paths(integer) to authenticated;
 
-commit;

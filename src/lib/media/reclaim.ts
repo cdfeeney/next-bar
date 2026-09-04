@@ -264,10 +264,23 @@ async function removeClaims(
     // this case — this is what stops that empty list being mistaken for "there
     // was nothing to reclaim".
     //
-    // Per-path probe failures are deliberately NOT listed here. Those are
-    // already handled conservatively (the stamp stands, the sweep revisits the
-    // path), so surfacing them would mark an otherwise complete run incomplete.
-    unchecked: attempt.conclusive ? [] : ['reclaim_bytes'],
+    // AND A FAILED PRESENCE PROBE IS THE SAME THING AGAIN. An earlier version of
+    // this comment argued the opposite — that a probe failure is "already
+    // handled conservatively" and listing it would mark an otherwise complete
+    // run incomplete. Handling it conservatively is real (the stamp stands, the
+    // bytes stay, the sweep revisits the path) but it is not the same as
+    // KNOWING the outcome, and the advisor reproduced what the difference costs:
+    // Storage omits the object from its removal report, the presence lookup then
+    // fails, and the path falls out of all three lists — excluded from
+    // `reclaimed` by `!probe.unknown`, excluded from `orphaned` because it is not
+    // in `stillPresent` — leaving `{ reclaimed: [], orphaned: [], unchecked: [] }`
+    // and a scheduled route reporting success over an unknown outcome.
+    //
+    // Conservative behaviour is unchanged. What changes is that the caller is
+    // told the run was incomplete rather than clean.
+    unchecked: attempt.conclusive
+      ? [...probe.unknown].map((path) => `presence_unknown:${path}`)
+      : ['reclaim_bytes'],
   };
 }
 

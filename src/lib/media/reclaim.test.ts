@@ -371,3 +371,69 @@ describe('a sweep reports what it could NOT check', () => {
     expect(result).toEqual({ reclaimed: [], orphaned: [], unchecked: [] });
   });
 });
+
+/**
+ * A FAILED PRESENCE PROBE IS AN UNKNOWN OUTCOME, NOT A CLEAN ONE.
+ *
+ * Reproduced by the advisor: Storage omits the object from its removal report,
+ * the presence lookup that would settle whether the bytes survived then fails,
+ * and the path falls out of every list — excluded from `reclaimed` because its
+ * presence is unknown, excluded from `orphaned` because it was never proven
+ * present. The sweep returned `{ reclaimed: [], orphaned: [], unchecked: [] }`
+ * and the scheduled route reported success over an outcome nobody established.
+ *
+ * The conservative half was already right and is re-asserted below: the claim is
+ * NOT released and the bytes are NOT counted as reclaimed. Only the reporting
+ * changes.
+ */
+describe('an unknown removal outcome is reported, not rounded down to success', () => {
+  it('marks the path unchecked when the presence probe fails', async () => {
+    const caller = callerWith({
+      claim_media_for_removal: claimed([['m1', 'u1/a.jpg']]),
+      claim_orphan_paths: { data: [], error: null },
+    });
+    // Storage omits the object from its report AND the follow-up listing fails.
+    const { admin, rpc } = adminWith(() => [], { listFails: true });
+
+    const result = await sweepReclaimable(caller, admin);
+
+    expect(result.unchecked).toEqual(['presence_unknown:u1/a.jpg']);
+    // Unchanged, and the point of the conservative design: nothing is claimed as
+    // reclaimed, and the stamp is NOT handed back on an outcome we do not know.
+    expect(result.reclaimed).toEqual([]);
+    expect(released(rpc)).toEqual([]);
+  });
+
+  it('marks it unchecked when the presence probe THROWS', async () => {
+    const caller = callerWith({
+      claim_media_for_removal: claimed([['m1', 'u1/a.jpg']]),
+      claim_orphan_paths: { data: [], error: null },
+    });
+    const remove = vi.fn(async () => ({ data: [], error: null }));
+    const list = vi.fn(async () => { throw new Error('network'); });
+    const rpc = vi.fn(async () => ({ data: true, error: null }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const admin = { storage: { from: () => ({ remove, list }) }, rpc } as any;
+
+    const result = await sweepReclaimable(caller, admin);
+
+    expect(result.unchecked).toEqual(['presence_unknown:u1/a.jpg']);
+    expect(result.reclaimed).toEqual([]);
+    expect(released(rpc)).toEqual([]);
+  });
+
+  it('still reports a clean run when the probe SUCCEEDS and the bytes are gone', async () => {
+    // The case that must stay a success, so the flag above cannot be read as
+    // "any sweep touching storage is now incomplete".
+    const caller = callerWith({
+      claim_media_for_removal: claimed([['m1', 'u1/a.jpg']]),
+      claim_orphan_paths: { data: [], error: null },
+    });
+    const { admin } = adminWith((paths) => paths);
+
+    const result = await sweepReclaimable(caller, admin);
+
+    expect(result.unchecked).toEqual([]);
+    expect(result.reclaimed).toEqual(['u1/a.jpg']);
+  });
+});
