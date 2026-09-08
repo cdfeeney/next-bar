@@ -29,7 +29,7 @@ test(`street travel cards at ${textSize}% text (${coarse ? 'approximate' : 'prec
       return { id, destination: { lat: bar.lat, lng: bar.lng },
         walking: { seconds: [600, 800, 900, 901, 1320][i], meters: 1000 + i * 100 },
         driving: { seconds: 300, meters: 2000 } };
-    }).filter(r => r && r.walking.seconds <= 900);
+    }).filter((r: { walking: { seconds: number } } | null) => r && r.walking.seconds <= 900);
     return route.fulfill({ json: { routes, checked: body.ids.length, limited: false, incomplete: false } });
   });
   await page.goto('/');
