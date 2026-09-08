@@ -7,7 +7,7 @@
  *  3. The bottom nav shows an enlarged "Next Bar?" action in the center.
  */
 
-import { test, expect } from './helpers/test';
+import { test, expect } from './helpers/catalogTest';
 import { denyGeolocation, grantGeolocation } from './helpers/geo';
 
 test.describe('Home — location-first', () => {

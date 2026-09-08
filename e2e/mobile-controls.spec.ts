@@ -232,6 +232,10 @@ test.describe('mobile controls are reachable', () => {
       // layout bug.
       await page.waitForLoadState('domcontentloaded');
       await expect(page.locator('main')).toBeVisible({ timeout: 15_000 });
+      // A catalog swap after scrolling moves the bottom of the picker.
+      // The saved WebKit trace placed its final page response inside the old
+      // 500ms measurement pause. Measure only after the list has settled.
+      await expect(page.getByText(/Loading the Manhattan catalog/)).toHaveCount(0, { timeout: 15_000 });
       await page.waitForTimeout(1_000);
     }
 

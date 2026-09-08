@@ -68,7 +68,7 @@ describe('bounded route search', () => {
     expect(result.routes.every(r => r.walking!.seconds > 900)).toBe(true);
   });
   it('never pads an empty cab band with walkable or unknown routes', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(matrix([900, null, 600, 800, 400])));
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => matrix([900, null, 600, 800, 400])));
     const result = await searchRoutes(origin, bars, 'driving', false, 'key', signal());
     expect(result.routes).toEqual([]);
     expect(result.checked).toBe(15);

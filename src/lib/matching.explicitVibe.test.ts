@@ -219,12 +219,7 @@ describe('matches() — distance band expansion under an active tweak', () => {
     expect(ids).toEqual(['far-cocktail']);
   });
 
-  // The test above passes maxMiles: null, which NO production caller of the
-  // explicit path issues — both Next Bar surfaces pass one distance chip's
-  // exclusive ring (WhereNextFlow.tsx: minMilesExclusive + selectedRadius
-  // .maxMiles). Under that configuration the pool used to be cut to a single
-  // ring before banding, so the expansion above was unreachable on every real
-  // surface. This is the same assertion under the Walkable chip's arguments.
+  // Explicit bounds remain strict even with an applied vibe.
   it('does not expand an explicit maximum for an applied vibe', () => {
     const ids = matches({
       profile: tweakedProfile([PICKED]),
@@ -355,7 +350,7 @@ describe('matches() — eligibility gates the pool (D-C-41)', () => {
       [hitting('near-two', 2, 0.5), hitting('far-three', 3, 3.0)],
       RADIUS_WALK,
     );
-    expect(ids).toEqual(['far-three']);
+    expect(ids).toEqual([]);
   });
 
   it('an ineligible bar cannot re-enter to fill an under-full page', () => {

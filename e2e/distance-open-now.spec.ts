@@ -14,7 +14,7 @@
  * by missing data.
  */
 
-import { test, expect } from './helpers/test';
+import { test, expect } from './helpers/catalogTest';
 import { denyGeolocation } from './helpers/geo';
 import { bars } from '../src/lib/bars';
 import { haversineMiles } from '../src/lib/distance';
@@ -112,16 +112,16 @@ test.describe('E3.2 distance chips', () => {
     // route times are disabled. It must not reuse the nearest-15 walk shortlist.
     await expect(cards.locator('h3')).not.toHaveText(walkBatch);
     await expectDistanceBand(cards, null, RADIUS_CAB);
-    await expect(cards.first().getByText('Drive time unavailable')).toBeVisible();
+    await expect(cards.first()).toContainText(/Drive ~/);
     await expect(page).toHaveURL('/');
 
     await anywhere.click();
     await expect(anywhere).toHaveAttribute('aria-pressed', 'true');
     await page.getByText('About travel times', { exact: true }).click();
-    await expect(page.getByText('Matching across the full service area.', { exact: true })).toBeVisible();
+    await expect(page.getByText('Beyond 4 miles straight-line, within the service area.', { exact: true })).toBeVisible();
     await expect(cards).toHaveCount(5);
-    await expectDistanceBand(cards, null, null);
-    await expect(cards.first().getByText('Walk time unavailable')).toBeVisible();
+    await expectDistanceBand(cards, RADIUS_CAB, null);
+    await expect(cards.first()).toContainText(/Walk ~/);
     await walkable.click();
     await expect(cards.locator('h3')).toHaveText(walkBatch);
   });

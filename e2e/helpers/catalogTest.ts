@@ -1,6 +1,7 @@
 import { test as base, expect, type Route } from './test';
 import { bars } from '../../src/lib/bars';
 import type { Bar } from '../../src/types';
+import { haversineMiles } from '../../src/lib/distance';
 
 type Row = Record<string, unknown> & { id: string };
 
@@ -89,6 +90,25 @@ export { fulfillCatalog };
 export const test = base.extend({
   page: async ({ page }, use) => {
     await page.route(CATALOG_ROUTE, fulfillCatalog);
+    // Deterministic route estimates for catalog-based UI tests. Provider
+    // behavior is covered by routeSearch tests and separate live acceptance.
+    await page.route('**/api/travel', async route => {
+      if (route.request().method() === 'GET') return route.fulfill({ json: { enabled: true } });
+      const { origin, ids, band } = route.request().postDataJSON();
+      const routes = (ids as string[]).flatMap(id => {
+        const bar = bars.find(b => b.id === id);
+        if (!bar) return [];
+        const miles = haversineMiles(origin, bar);
+        const seconds = Math.ceil(miles * 1200);
+        if (band === 'walkable' && seconds > 900 ||
+            band === 'cab' && (seconds <= 900 || miles > 4) ||
+            band === 'anywhere' && miles <= 4) return [];
+        return [{ id, destination: { lat: bar.lat, lng: bar.lng },
+          walking: { seconds, meters: miles * 1609.344 },
+          driving: { seconds: Math.ceil(miles * 240), meters: miles * 1609.344 } }];
+      }).slice(0, 5);
+      return route.fulfill({ json: { routes, checked: ids.length, limited: ids.length === 15, incomplete: false } });
+    });
     await use(page);
   },
 });

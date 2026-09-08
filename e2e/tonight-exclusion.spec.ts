@@ -10,7 +10,7 @@
  * open-now filter permissive.
  */
 
-import { test, expect } from './helpers/test';
+import { test, expect } from './helpers/catalogTest';
 import { denyGeolocation } from './helpers/geo';
 
 const FRIDAY_11PM = new Date('2026-07-24T23:00:00');
