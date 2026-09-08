@@ -273,10 +273,35 @@ every path — matching the goal's stored tier, no upgrade required.
 | Browser — run 1 (`7366b06`) | `node scripts/run-e2e-release.mjs` | **2 failed** / 2 skipped / 718 passed, 11.7m. Both failures the clock-dependent fixture of §6a. |
 | Browser — A/B late arm | same, `--grep` one test | 2 failed, exit 1 — clock pinned 23:30 |
 | Browser — A/B early arm | same, `--grep` one test | 6 passed, exit 0 — clock pinned 20:00 |
-| Browser — run 2 (corrected candidate) | `node scripts/run-e2e-release.mjs` | *filled in below* |
+| Browser — run 2 (corrected candidate `c5e16a0`) | `node scripts/run-e2e-release.mjs` | exit 0 — **720 passed / 2 skipped / 0 failed**, 11.6m, iPhone 13 + Pixel 7, 3 workers, 0 retries, HTML reporter kept |
 
 Every command ran under `bounded-run.mjs`. Exit codes are the verbatim tool
 results, not narration.
+
+### One harness-level obstacle, reported rather than worked around
+
+The goal's **stored** verification spec is
+`node scripts/run-e2e-release.mjs` with `timeout_ms: 1800000`. That spec cannot
+be executed by the pinned runtime: `assertVerificationSpec`
+(`lib/goal-store.mjs:634`) caps a verification timeout at **900,000 ms**, while
+`runStructuredVerification` (`lib/v3-enforcement.mjs:184`) requires the run to
+match the stored `executable`, `args` **and** `timeout_ms` exactly. Both doors
+were tried and both refused, verbatim:
+
+```
+--timeout-ms 1800000 → {"error":"BAD_INPUT","message":"verification timeout must be 1..900000 ms"}
+--timeout-ms  900000 → {"error":"BAD_INPUT","message":"verification must exactly match the stored executable, arguments, and timeout"}
+```
+
+This is the stranded-spec case the runtime documents as row 99, and its repair
+(`amend-verification`) is marked **attended**, so this unattended lane did not
+take it — amending would retire the spec, and the CLI also refuses an amend once
+a candidate is frozen. The browser gate was therefore run directly, under
+`bounded-run.mjs`, and its result recorded as behavioral evidence: the same
+command, the same build, the same two viewports. **What is missing is the
+store's certificate, not the run.** An attended `amend-verification` to a
+timeout of ≤900,000 ms (the measured run takes 11.6m ≈ 700,000 ms, so 900,000
+is sufficient) is the one action needed before finalization.
 
 ### Browser-run configuration and its limits
 
