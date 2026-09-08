@@ -28,8 +28,10 @@ no V7 key was renamed away), and when any frozen V7 key loses its read path.
 
 Two `next-bar:`-prefixed strings are deliberately absent below because they are
 `window` CustomEvent names carrying no data at rest —
-`next-bar:ratings:server-update` and `next-bar:pairwise:local-update`. The guard
-classifies them explicitly; adding a third broadcast is a deliberate edit there.
+`next-bar:ratings:server-update` and `next-bar:presence-changed`. A third,
+`next-bar:pairwise:local-update`, was retired with its last dispatcher and is no
+longer classified by the guard. The guard classifies broadcasts explicitly;
+adding another is a deliberate edit there.
 
 | Exact key | Storage | Current purpose and owner | V8 continuity rule |
 | --- | --- | --- | --- |
