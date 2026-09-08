@@ -1,0 +1,2 @@
+# Never package the retired Google photo cache, even if a legacy script regenerates it.
+public/bar-photos/

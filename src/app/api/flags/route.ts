@@ -13,9 +13,10 @@ import { NextResponse } from 'next/server';
  * no-redeploy kill switch on Vercel. Environment-variable changes apply
  * only to NEW deployments — an existing deployment keeps the value it was
  * created with, so flipping GOOGLE_MEDIA_RUNTIME_ENABLED requires a new
- * deployment to take effect. The IMMEDIATE hard spending stop is Google
- * Cloud's SKU quota cap on the browser key (set it to zero), which needs
- * no deployment at all. A true runtime store (e.g. Edge Config) is a
+ * deployment to take effect. This flag cannot stop use of a copied key.
+ * Provider-side restrictions and verified project quotas control that risk;
+ * do not assume a per-key daily quota or an immediate dollar cap exists.
+ * A true runtime store (e.g. Edge Config) is a
  * possible future transport and must be separately authorized.
  *
  * FAIL-CLOSED by construction: the variable must be exactly '1' to enable;

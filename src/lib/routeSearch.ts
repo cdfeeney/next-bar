@@ -30,7 +30,7 @@ export function parseMatrix(value: unknown, count: number): (RouteEstimate | nul
 async function matrix(origin: Coords, bars: RouteDestination[], mode: TravelMode, key: string, signal: AbortSignal) {
   const profile = mode === 'walking' ? 'foot-walking' : 'driving-car';
   // Fixed host, server-only key; explicit indices avoid an NxN matrix bill.
-  const response = await fetch(`https://api.openrouteservice.org/v2/matrix/${profile}`, {
+  const response = await fetch(`https://api.heigit.org/openrouteservice/v2/matrix/${profile}`, {
     method: 'POST', cache: 'no-store', signal,
     headers: { Authorization: key, 'Content-Type': 'application/json' },
     body: JSON.stringify({

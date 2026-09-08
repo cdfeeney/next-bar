@@ -20,6 +20,11 @@ describe('bounded route search', () => {
     expect(result.checked).toBe(10);
     expect(result.routes.every(r => r.walking!.seconds <= 900)).toBe(true);
     expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher.mock.calls.map(c => c[0])).toEqual([
+      'https://api.heigit.org/openrouteservice/v2/matrix/foot-walking',
+      'https://api.heigit.org/openrouteservice/v2/matrix/foot-walking',
+      'https://api.heigit.org/openrouteservice/v2/matrix/driving-car',
+    ]);
     const payloads = fetcher.mock.calls.map(c => JSON.parse(c[1].body));
     expect(payloads.every(p => p.sources.length === 1 && p.destinations.length === 5)).toBe(true);
     expect(payloads[0].locations[0]).toEqual([-74, 40.75]);

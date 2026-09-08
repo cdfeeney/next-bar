@@ -1,82 +1,86 @@
-# Google-live media — cost control and key runbook
+﻿# Google media: credentials and cost controls
 
-Written 2026-08-06 alongside the google-live wiring. Companion to
-`docs/UI-KIT-BUILD-PLAN.md`; this file corrects one operational premise and
-records the runbooks that depend on it.
+Updated 2026-09-08. Supersedes the earlier claims of a per-key daily UI Kit
+cap, an immediate quota kill switch, and ResultCard being the sole billing
+surface. Actual Google Cloud account settings remain unverified.
 
-## Billing surfaces in this release
+## What this release requests
 
-**ResultCard is the SOLE live-Google billing surface.** Its widget carries
-`lightbox-preferred`, so photo expansion happens inside Google's own
-lightbox — BarLightbox (the app's hours/details/actions dialog) renders no
-Google widget and must stay that way: a second widget per bar would bill
-twice for the same content (independent review BLOCK, 2026-08-06; pinned by
-`BarLightbox.noGoogle.test.tsx`).
+ResultCard and the opened BarLightbox both mount live Places UI Kit widgets.
+Each component request can consume a UI Kit Query billing event; the second
+widget is not free because it displays the same place. Five result widgets
+plus one details widget can therefore make six requests. Lazy loading can
+reduce requests; remounts and refreshes can add them.
 
-**Google Cloud's SKU metrics are the authoritative usage and cost meter.**
-The in-app signals — the session meter in `placesUiKit` and the advisory
-`/api/media-metric` log lines (surface enum only, same-origin,
-rate-limited) — exist for fast operator visibility in Vercel logs and can
-undercount (dropped beacons, ad-blockers). Reconcile spend against the
-Google console, never against the app's own numbers.
+The current global UI Kit Query price includes 10,000 free events monthly,
+then $1 per 1,000 in the first paid tier. Usage is aggregated across projects
+on the billing account. Do not budget as if every key/project gets its own
+free allowance. Other SKUs, taxes and account-specific terms are separate.
+[Google pricing](https://developers.google.com/maps/billing-and-pricing/pricing).
 
-## The control model — what stops spend, and how fast
+The session counters and `/api/media-metric` are diagnostic estimates. They
+cannot meter copied-key traffic or enforce an account spending limit.
+Use Cloud Billing for charges; quota metrics are not billing truth.
 
-**Verified operational fact (operator, 2026-08-06): Vercel environment-
-variable changes apply only to NEW deployments.** An existing deployment
-keeps every env value it was created with. Therefore:
+## Establish identity before changing credentials
 
-| Control | What it does | Takes effect |
-|---|---|---|
-| **Google Cloud SKU quota cap** on the browser key (Places UI Kit / Maps JS requests-per-day; set to 0 to kill) | **The immediate hard spending stop.** Enforced by Google regardless of what any deployment does; widgets degrade to the glyph per the documented failure table. | Minutes, **no deployment** |
-| Google Cloud **billing budget + alert** | Financial backstop and detection; does not block by itself. | Continuous |
-| `GOOGLE_MEDIA_RUNTIME_ENABLED` via `/api/flags` | Server-decided, fail-closed **per-deployment permission gate**. Keeps the verdict out of client bundles and off the spoofable client; absent variable = disabled. | **Next deployment only** |
-| `NEXT_PUBLIC_GOOGLE_MEDIA` | Build-time **eligibility** (inlined into bundles). | Next deployment (new build) |
-| `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | Which browser key ships. | Next deployment |
+`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` is a configuration variable, not a Google
+credential display name. Its value becomes public in built browser output.
+Record the actual credential resource ID/display name, Google project ID,
+billing account, serving deployment and environment. Compare key values
+privately; never paste them into chat, logs or source control. A missing key
+in downloaded chunks is inconclusive identity evidence.
 
-**Incident order:** cap the SKU quota at Google first (immediate), then flip
-`GOOGLE_MEDIA_RUNTIME_ENABLED=0` and redeploy (durable), then investigate.
-Do not treat the flag flip as the emergency brake — it is the parking brake.
+The browser credential must differ from any private ingestion credential
+(`GOOGLE_MAPS_API_KEY`). Keep website restrictions on the actual production
+origins and API restrictions on only the services the accepted UI Kit flow
+needs. Do not enable Places API (New) for the rejected raw-photo experiment.
+[Google security guidance](https://developers.google.com/maps/api-security-best-practices).
 
-A true no-redeploy runtime store (e.g. Vercel Edge Config) is a possible
-future transport for this gate. **It is deliberately NOT part of this
-release and requires separate authorization.**
+Reconcile existing development credentials before creating another. A local
+development key stays out of production only if production is built without
+it. Allowing localhost does not identify one computer. Separate keys in one
+project share its quotas and do not create separate spending caps.
 
-## Key separation — never reuse the private key
+## Controls and their limits
 
-Two Maps keys exist and must never converge:
+| Control | What it establishes |
+| --- | --- |
+| Website and API restrictions | Reduce accepted misuse; the browser key is still visible. |
+| Verified project quotas | Limit requests over the actual metric's time window. Google documents UI Kit Query at 6,000 queries/minute/project by default; inspect adjustable metrics in the selected project. Do not assume a daily or per-key cap exists. |
+| Billing budget and alerts | Notify; do not stop usage or charges. Billing information can lag up to 48 hours. |
+| `GOOGLE_MEDIA_RUNTIME_ENABLED=0` | Disables widgets for a new deployment. Existing Vercel deployments retain their environment; copied-key use is unaffected. |
+| `NEXT_PUBLIC_GOOGLE_MEDIA=0` | Disables eligibility in the next build; copied-key use is unaffected. |
 
-- `GOOGLE_MAPS_API_KEY` — **server-private**, used only by ingest scripts
-  (`scripts/refresh-places.mjs:128`, `scripts/verify-glm-sweep.mjs:33`).
-  Never referrer-restricted, never shipped to a client, never set as a
-  `NEXT_PUBLIC_*` variable.
-- `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` — **browser key**, public by nature (it
-  ships in the client bundle; `src/lib/placesUiKit.ts:22` is the only
-  reader). MUST be a separate key, HTTP-referrer-restricted to the exact
-  serving origins, with the SKU quota cap above.
+Before launch, record the owner's spending target, every allowed billable
+service, each enforced quota name/value/window, and the resulting worst-case
+usage estimate with headroom. A per-minute limit permits sustained traffic
+every minute; it is not a small monthly budget. Verify applied settings and
+propagation, not just a submitted adjustment. Google cautions that quota and
+billing metrics can differ; do not promise an exact dollar ceiling.
+[UI Kit quotas](https://developers.google.com/maps/documentation/javascript/usage-and-billing),
+[cost controls](https://developers.google.com/maps/billing-and-pricing/manage-costs).
 
-Reusing the private key's value as the public one would ship an
-unrestricted, quota-uncapped key to every browser. When configuring an
-environment, verify the two variables hold **different** key values.
+During confirmed abuse, identify the affected credential/services and use
+provider-side controls to stop accepted use, accepting the affected feature's
+outage. A quota of zero is an option only if that actual metric permits it;
+verify enforcement. Credential revocation or disabling the affected service
+can interrupt all clients that rely on it. No fixed immediate propagation time
+or reversal of accrued charges is promised. Follow with a deployment disabling
+widgets. Do not rely on app flags as protection against a copied key.
 
-## Browser-key rotation runbook
+Rotate only when warranted. For a planned rotation, deploy and verify the
+restricted replacement, account for old clients/deployments, then retire the
+old key after reviewing its use. An actively abused credential may need faster
+revocation. App Check support for this exact UI Kit flow remains unverified.
 
-Rotation is overlap-then-revoke, never cut-then-replace — installed PWAs
-serve cached bundles containing the OLD key for as long as their cache
-lives, and revoking it early breaks their photos mid-session.
+## Retired assets
 
-1. **Create** the replacement browser key in Google Cloud with identical
-   restrictions: HTTP referrers for the exact serving origins, Places UI
-   Kit + Maps JS APIs only, the same SKU quota cap.
-2. **Deploy**: set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` to the new key in the
-   target Vercel environment and create a new deployment (per the table
-   above, the env change does nothing without one).
-3. **Verify** on the new deployment: photos render, the request meter
-   attributes normally, and the served bundle references the new key.
-4. **Retain the old key** through the PWA cache-overlap period — installed
-   clients keep executing old bundles until their service-worker cache
-   turns over; both keys are live during this window. Watch both keys'
-   usage in the Google console; the old key's traffic decaying to zero is
-   the signal the overlap is done.
-5. **Revoke** the old key only after its traffic is zero (or the accepted
-   residual), and record the rotation date here.
+The 3,435 cached Google photos were removed from `public/bar-photos` on
+2026-09-08 (203,771,178 bytes). Git and Vercel ignore rules prevent accidental
+repackaging; middleware continues returning 404 for old URLs. Historical
+manual ingestion scripts can recreate that folder and must not be used to
+restore the retired cache. No runtime consumer requires these files.
+
+This reduces future deployment output. It does not delete retained Vercel
+deployments or reverse storage usage already recorded.

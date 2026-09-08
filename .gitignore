@@ -20,3 +20,6 @@ scripts/data/
 # OSM Overpass response cache (dev reconnaissance, not source)
 .osm-cache/
 .site-cache/
+
+# Retired Google photo cache; live UI Kit replaces these assets.
+/public/bar-photos/
