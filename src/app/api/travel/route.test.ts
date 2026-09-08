@@ -17,11 +17,13 @@ beforeEach(() => {
   mocks.lookup.mockReset(); mocks.search.mockReset();
 });
 afterEach(() => vi.unstubAllEnvs());
-it('defaults off and refuses production even with a key', async () => {
+it('defaults off and requires a key, including in production', async () => {
+  vi.stubEnv('VERCEL_ENV', 'production');
   vi.stubEnv('NEXT_BAR_ROUTING_ENABLED', '');
   expect(await (await GET()).json()).toEqual({ enabled: false });
   expect((await POST(request(valid))).status).toBe(503);
-  vi.stubEnv('NEXT_BAR_ROUTING_ENABLED', 'true'); vi.stubEnv('VERCEL_ENV', 'production');
+  vi.stubEnv('NEXT_BAR_ROUTING_ENABLED', 'true'); vi.stubEnv('ORS_API_KEY', '');
+  expect(await (await GET()).json()).toEqual({ enabled: false });
   expect((await POST(request(valid))).status).toBe(503);
   expect(mocks.lookup).not.toHaveBeenCalled();
 });
@@ -34,7 +36,9 @@ it('rejects bad origins, duplicate/oversized IDs and bodies before catalog/provi
   expect((await POST(request({ ...valid, padding: 'x'.repeat(9000) }))).status).toBe(413);
   expect(mocks.lookup).not.toHaveBeenCalled(); expect(mocks.search).not.toHaveBeenCalled();
 });
-it('resolves destinations from the catalog rather than trusting client coordinates', async () => {
+it.each(['preview', 'production'])('routes in opted-in %s using catalog destinations rather than client coordinates', async environment => {
+  vi.stubEnv('VERCEL_ENV', environment);
+  expect(await (await GET()).json()).toEqual({ enabled: true });
   mocks.lookup.mockResolvedValue({ data: [{ id: 'one', lat: 40.76, lng: -73.99 }], error: null });
   mocks.search.mockResolvedValue({ routes: [], checked: 1, limited: false, incomplete: false });
   const result = await POST(request({ ...valid, destination: { lat: 1, lng: 1 } }));

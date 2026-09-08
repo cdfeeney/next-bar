@@ -8,10 +8,9 @@ export const dynamic = 'force-dynamic';
 const perIp = createIpRateLimiter({ limit: 6, windowMs: 60_000 });
 const perInstance = createIpRateLimiter({ limit: 20, windowMs: 60_000 });
 function enabled(): boolean {
-  // Pilot only. Production needs measured quality, terms and an account-level
-  // hard quota. ponytail: warm-instance limits are NOT a distributed spend cap.
-  return process.env.NEXT_BAR_ROUTING_ENABLED === 'true' &&
-    process.env.VERCEL_ENV !== 'production' && !!process.env.ORS_API_KEY;
+  // Explicit opt-in in every environment; provider quotas bound account usage.
+  // ponytail: warm-instance limits are NOT a distributed spend cap.
+  return process.env.NEXT_BAR_ROUTING_ENABLED === 'true' && !!process.env.ORS_API_KEY;
 }
 function reply(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store' } });

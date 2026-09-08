@@ -1,2 +1,10 @@
 # Never package the retired Google photo cache, even if a legacy script regenerates it.
 public/bar-photos/
+
+# Local test artifacts and credentials are not deployment inputs.
+test-results/
+playwright-report/
+*.log
+tsconfig.tsbuildinfo
+.env
+.env.*
