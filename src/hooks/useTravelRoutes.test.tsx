@@ -69,3 +69,27 @@ it.each([60_000, 120_000])('restoring candidates after %i ms preserves the origi
   expect(result.current.status).toBe('ready');
   expect(fetcher).toHaveBeenCalledTimes(3);
 });
+it('ignores a previous travel selection answering after the current one', async () => {
+  const complete: ((r: Response) => void)[] = [];
+  const fetcher = vi.fn().mockResolvedValueOnce(new Response('{"enabled":true}'))
+    .mockImplementation(() => new Promise<Response>(resolve => { complete.push(resolve); }));
+  vi.stubGlobal('fetch', fetcher);
+  const answer = (driving: number) => new Response(JSON.stringify({ ...data,
+    routes: [{ ...data.routes[0], driving: { seconds: driving, meters: 1200 } }] }));
+  // Walkable, then Worth a cab: a different mode and walkable-only flag is a
+  // different search, so the walkable answer can never stand in for it — not
+  // while the cab search is still running, and not when it lands after.
+  const { result, rerender } = renderHook(
+    ({ mode, walkable }: { mode: 'walking' | 'driving'; walkable: boolean }) =>
+      useTravelRoutes(origin, [bar], mode, walkable),
+    { initialProps: { mode: 'walking', walkable: true } as { mode: 'walking' | 'driving'; walkable: boolean } },
+  );
+  await waitFor(() => expect(result.current.status).toBe('loading'));
+  rerender({ mode: 'driving', walkable: false });
+  expect(complete).toHaveLength(2);
+  await act(async () => complete[1](answer(222)));
+  expect(result.current.data?.routes[0].driving?.seconds).toBe(222);
+  await act(async () => complete[0](answer(111)));
+  expect(result.current.data?.routes[0].driving?.seconds).toBe(222);
+  expect(result.current.status).toBe('ready');
+});

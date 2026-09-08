@@ -98,3 +98,153 @@ test('routing disabled never invents minutes or transmits a location', async ({ 
   await expect(cards.filter({ hasText: /~\d+ min/ })).toHaveCount(0);
   expect(posts).toBe(0);
 });
+
+/**
+ * D-C-40 / V8-R-NXT-008 — travel selections recompute the search.
+ *
+ * The HOME surface ranks with no tags and no rating history
+ * (WhereNextFlow's autoProfile), so the cascade scores every bar equally and
+ * falls through to its last tie-breaker, exact miles. Before this coverage
+ * existed, Walkable, Worth a cab and Anywhere all re-derived the same nearest
+ * five and the chips were decorative here. The seeded path
+ * (distance-open-now.spec.ts) ranks on the seed bar's own tags and never had
+ * that collapse, which is why it stayed green throughout.
+ *
+ * The catalog spans the three existing scopes. One degree of latitude is
+ * ~69 miles, so the offset names the band and no new threshold is invented.
+ */
+const bandOrigin = { lat: 40.751, lng: -73.99 };
+const at = (id: string, name: string, miles: number) => ({
+  id, name, lat: bandOrigin.lat + miles / 69, lng: bandOrigin.lng,
+  tags: ['pub'], neighborhood: 'Chelsea', price_tier: 2, hours: null,
+  place_id: null, business_status: 'OPERATIONAL', last_verified: '2026-09-06',
+});
+// rowsToCatalog rejects a catalog under 100 rows outright, so the walk band
+// carries the filler: 90 bars inside RADIUS_WALK, then the two outer bands.
+const bandRows = [
+  ...Array.from({ length: 90 }, (_, i) => at(`near-${i}`, `Near ${i}`, 0.05 + i * 0.01)),
+  ...Array.from({ length: 5 }, (_, i) => at(`cab-${i}`, `Cab ${i}`, 2.5 + i * 0.1)),
+  ...Array.from({ length: 5 }, (_, i) => at(`far-${i}`, `Far ${i}`, 8 + i * 0.1)),
+];
+/**
+ * Route payload for whatever the client actually asked about. The BUNDLED
+ * catalog renders before the Supabase refresh lands, so the first search can
+ * ask about bars this fixture has never heard of — answering only for the ones
+ * it knows keeps that transient state from reading as a routing failure.
+ */
+const isBandBar = (id: string) => bandRows.some((row) => row.id === id);
+const bandRoutes = (ids: string[]) => ({
+  routes: ids.filter(isBandBar).slice(0, 5).map((id) => {
+    const bar = bandRows.find((row) => row.id === id)!;
+    return {
+      id, destination: { lat: bar.lat, lng: bar.lng },
+      walking: { seconds: 600, meters: 1000 }, driving: { seconds: 300, meters: 2000 },
+    };
+  }),
+  checked: ids.length, limited: false, incomplete: false,
+});
+/** The most recent search that ran against this fixture's catalog. */
+const lastBandSearch = (posted: string[][]) =>
+  posted.filter((ids) => ids.every(isBandBar)).slice(-1)[0];
+const headings = (cards: import('@playwright/test').Locator) => cards.locator('h3');
+// Exact headings, not substrings: /Near 1/ also matches "Near 10".
+const top = (label: string, from = 0) =>
+  Array.from({ length: 5 }, (_, i) => `${i + 1}. ${label} ${from + i}`);
+const NEAR_TOP = top('Near');
+const CAB_TOP = top('Cab');
+const FAR_TOP = top('Far');
+
+async function seedBandCatalog(page: import('@playwright/test').Page) {
+  await grantGeolocation(page.context(), {
+    latitude: bandOrigin.lat, longitude: bandOrigin.lng,
+  });
+  await page.route('**/rest/v1/bars?*', (route) => route.fulfill({ json: bandRows }));
+}
+
+test('each travel selection searches its own band and keeps nearer bars behind it', async ({ page }) => {
+  await seedBandCatalog(page);
+  const posted: string[][] = [];
+  await page.route('**/api/travel', async (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { enabled: true } });
+    const ids = route.request().postDataJSON().ids as string[];
+    posted.push(ids);
+    return route.fulfill({ json: bandRoutes(ids) });
+  });
+  await page.goto('/');
+  const cards = page.locator('article').filter({ hasText: 'Vibe match' });
+  await expect(cards).toHaveCount(5);
+  const group = page.getByRole('group', { name: 'Search radius' });
+  await expect(headings(cards)).toHaveText(NEAR_TOP);
+
+  await group.getByRole('button', { name: 'Worth a cab' }).click();
+  await expect(headings(cards)).toHaveText(CAB_TOP);
+  // Wider is not an exclusive ring: the walkable bars stay in the pool behind
+  // the band the chip names, so a selection whose own band is empty still
+  // answers instead of emptying the page.
+  expect(lastBandSearch(posted)).toContain('near-0');
+  expect(lastBandSearch(posted).some((id) => id.startsWith('far-'))).toBe(false);
+
+  await group.getByRole('button', { name: 'Anywhere' }).click();
+  await expect(headings(cards)).toHaveText(FAR_TOP);
+  expect(lastBandSearch(posted)).toContain('near-0');
+
+  // Returning to a selection returns its own results, not the last ones shown.
+  await group.getByRole('button', { name: 'Walkable' }).click();
+  await expect(headings(cards)).toHaveText(NEAR_TOP);
+
+  // History refresh deals the NEXT batch of the CURRENT selection: the bars
+  // already shown do not come back wearing fresh route times.
+  await page.getByRole('button', { name: '↻ Run it again' }).click();
+  await expect(headings(cards)).toHaveText(top('Near', 5));
+});
+
+test('a rapid selection change is never overwritten by the previous selection answering late', async ({ page }) => {
+  await seedBandCatalog(page);
+  const gate: { release: (() => void) | null } = { release: null };
+  await page.route('**/api/travel', async (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { enabled: true } });
+    const ids = route.request().postDataJSON().ids as string[];
+    // Hold the cab search open so Anywhere can overtake it mid-flight.
+    if (ids.some((id) => id.startsWith('cab-')) && !ids.some((id) => id.startsWith('far-'))) {
+      await new Promise<void>((resolve) => { gate.release = resolve; });
+    }
+    return route.fulfill({ json: bandRoutes(ids) });
+  });
+  await page.goto('/');
+  const cards = page.locator('article').filter({ hasText: 'Vibe match' });
+  const group = page.getByRole('group', { name: 'Search radius' });
+  await expect(cards).toHaveCount(5);
+
+  await group.getByRole('button', { name: 'Worth a cab' }).click();
+  await expect.poll(() => gate.release !== null).toBe(true);
+  await group.getByRole('button', { name: 'Anywhere' }).click();
+  await expect(headings(cards)).toHaveText(FAR_TOP);
+
+  gate.release!();
+  // The abandoned cab answer must not replace what Anywhere is showing.
+  await expect(headings(cards)).toHaveText(FAR_TOP);
+  await expect(cards.first()).toContainText('Walk ~10 min');
+  await expect(group.getByRole('button', { name: 'Anywhere' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('a selection whose routing fails says so instead of carrying the last selection forward', async ({ page }) => {
+  await seedBandCatalog(page);
+  await page.route('**/api/travel', async (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { enabled: true } });
+    const ids = route.request().postDataJSON().ids as string[];
+    if (ids.some((id) => id.startsWith('far-'))) return route.fulfill({ status: 500, body: 'nope' });
+    return route.fulfill({ json: bandRoutes(ids) });
+  });
+  await page.goto('/');
+  const cards = page.locator('article').filter({ hasText: 'Vibe match' });
+  await expect(cards.first()).toContainText('Walk ~10 min');
+
+  await page.getByRole('group', { name: 'Search radius' })
+    .getByRole('button', { name: 'Anywhere' }).click();
+  await expect(page.getByText('Travel times unavailable. Walkable is not confirmed.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Recalculate from this starting point' })).toBeVisible();
+  // The failed selection still shows ITS OWN band, with no minutes invented
+  // and none inherited from the selection that did resolve.
+  await expect(headings(cards)).toHaveText(FAR_TOP);
+  await expect(cards.filter({ hasText: /~\d+ min/ })).toHaveCount(0);
+});

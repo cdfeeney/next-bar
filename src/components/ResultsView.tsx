@@ -140,7 +140,23 @@ export default function ResultsView({
         // filter — quiz/planning surfaces (no hideClosedNow) never bias.
         biasNow: filterNow ?? undefined,
       });
-      if (!nearbyCandidates) return preferred.slice(0, ROUTE_CANDIDATE_CAP);
+      if (!nearbyCandidates) {
+        // D-C-40: the chip picks which band is searched FIRST. Without this a
+        // wider selection returns the very same five bars — exact miles is the
+        // cascade's last tie-breaker (V8 P1), so the home surface's untagged,
+        // unrated profile scores every bar equally and an inclusive wider pool
+        // just re-derives the nearest ones. Nearer bars stay eligible BEHIND
+        // the named band (broader modes are not exclusive rings), so a chip
+        // whose own band is empty still answers instead of emptying the page.
+        // Bands reuse RADIUS_WALK/RADIUS_CAB; no new threshold.
+        const selectedBandFloor = maxMiles === RADIUS_CAB ? RADIUS_WALK : RADIUS_CAB;
+        const inSelectedBand = (bar: { lat: number; lng: number }): boolean =>
+          haversineMiles(userCoords, bar) > selectedBandFloor;
+        return [
+          ...preferred.filter(inSelectedBand),
+          ...preferred.filter((b) => !inSelectedBand(b)),
+        ].slice(0, ROUTE_CANDIDATE_CAP);
+      }
       // Bound route lookups by proximity without erasing taste/applied-vibe order.
       const nearbyIds = new Set([...preferred]
         .sort((a, b) => haversineMiles(userCoords, a) - haversineMiles(userCoords, b))
