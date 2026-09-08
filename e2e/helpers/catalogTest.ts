@@ -88,6 +88,9 @@ export const CATALOG_ROUTE = /\/rest\/v1\/bars(\?|$)/;
 export { fulfillCatalog };
 
 export const test = base.extend({
+  // A controlling service worker bypasses page routes after reload.
+  // These tests own deterministic network fixtures; SW tests use helpers/test.
+  serviceWorkers: 'block',
   page: async ({ page }, use) => {
     await page.route(CATALOG_ROUTE, fulfillCatalog);
     // Deterministic route estimates for catalog-based UI tests. Provider

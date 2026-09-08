@@ -230,7 +230,10 @@ export default function WhereNextFlow() {
   const [shownIds, setShownIds] = useState<readonly string[]>([]);
   const lastRankedRef = useRef<string[]>([]);
   const [rankedEmpty, setRankedEmpty] = useState(false);
-  const handleRanked = useCallback((ids: string[]): void => {
+  const handleRanked = useCallback((ids: string[], settled: boolean): void => {
+    // Pending or failed route checks are not an exhausted history. Keep the
+    // last confirmed page so repeated taps during a lookup stay idempotent.
+    if (!settled) { setRankedEmpty(false); return; }
     lastRankedRef.current = ids;
     setRankedEmpty(ids.length === 0);
   }, []);

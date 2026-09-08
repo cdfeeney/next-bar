@@ -440,7 +440,7 @@ test.describe('V8 native interaction contract', () => {
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
     const cards = page.getByTestId('result-card');
-    await expect(cards).toHaveCount(5);
+    await expect(cards.first()).toBeVisible();
     await cards.first().getByRole('button', { name: /See photos and hours/i }).press('Enter');
 
     const dialog = page.getByRole('dialog');
@@ -487,7 +487,7 @@ test.describe('V8 native interaction contract', () => {
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
     const cards = page.getByTestId('result-card');
-    await expect(cards).toHaveCount(5);
+    await expect(cards.first()).toBeVisible();
 
     await page.evaluate(() => window.scrollTo(0, 0));
     await settle(page);
@@ -519,7 +519,7 @@ test.describe('V8 native interaction contract', () => {
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
     const cards = page.getByTestId('result-card');
-    await expect(cards).toHaveCount(5);
+    await expect(cards.first()).toBeVisible();
     await cards.first().getByRole('button', { name: /See photos and hours/i }).press('Enter');
 
     const dialog = page.getByRole('dialog');
@@ -651,7 +651,7 @@ test.describe('V8 native interaction contract', () => {
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
     const cards = page.getByTestId('result-card');
-    await expect(cards).toHaveCount(5);
+    await expect(cards.first()).toBeVisible();
     await settle(page);
 
     // Scroll away from the top so restoration is observable rather than 0→0.

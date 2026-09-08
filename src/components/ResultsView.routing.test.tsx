@@ -2,6 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { Bar, VibeProfile } from '@/types';
 import ResultsView from './ResultsView';
+import type { TravelSearch } from '@/lib/travelTime';
 import { RADIUS_CAB, RADIUS_WALK } from '@/lib/constants';
 
 const { bars, routing, ratings } = vi.hoisted(() => ({
@@ -12,7 +13,7 @@ const { bars, routing, ratings } = vi.hoisted(() => ({
     blurb: '', lastVerified: '2026-09-07',
   })),
   ratings: [],
-  routing: vi.fn(() => ({ status: 'loading', calculate: vi.fn(), data: undefined })),
+  routing: vi.fn((): { status: string; calculate: () => void; data?: TravelSearch } => ({ status: 'loading', calculate: vi.fn() })),
 }));
 vi.mock('@/lib/useBars', () => ({ useBars: () => bars }));
 vi.mock('@/hooks/useRatings', () => ({ useRatings: () => ({ ratings }) }));
@@ -83,4 +84,15 @@ it('selects bands before routing and never shows unconfirmed inner-band candidat
   expect(anywhere.map(b => b.id)).toEqual(['bar-17']);
   rerender(<ResultsView profile={profile} location={location} maxMiles={null} nearbyFirst />);
   expect(screen.getAllByRole('article')[0]).toHaveTextContent('Bar 5');
+});
+
+it('distinguishes pending routes from a confirmed empty search for refresh history', () => {
+  const onRanked = vi.fn();
+  const profile: VibeProfile = { tags: [], archetype: '', preferredNeighborhoods: [] };
+  const { rerender } = render(<ResultsView {...props} profile={profile} onRanked={onRanked} />);
+  expect(onRanked).toHaveBeenLastCalledWith([], false);
+  routing.mockReturnValueOnce({ status: 'ready', calculate: vi.fn(),
+    data: { routes: [], checked: 15, limited: true, incomplete: false } });
+  rerender(<ResultsView {...props} profile={profile} onRanked={onRanked} />);
+  expect(onRanked).toHaveBeenLastCalledWith([], true);
 });

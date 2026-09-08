@@ -23,7 +23,7 @@ test.describe('Home — location-first', () => {
       timeout: 15_000,
     });
     await expect(page.getByText('Near you', { exact: true })).toBeVisible();
-    expect(await page.locator('article').count()).toBeGreaterThan(0);
+    await expect(page.getByTestId('result-card').first()).toBeVisible();
 
     // The manual seed prompt is NOT the surface shown when we can locate you.
     await expect(

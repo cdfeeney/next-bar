@@ -68,6 +68,7 @@ async function toggleChip(
 async function applyTweak(page: Page): Promise<void> {
   await page.getByRole('button', { name: /^Apply$/ }).click();
   await expect(page.getByRole('heading', { name: /Your next/i })).toBeVisible();
+  await expect(cards(page).first()).toBeVisible();
 }
 
 /** Every badge's text, whitespace-normalised. */
@@ -122,6 +123,7 @@ test.describe('D-C-41 — explicit vibe eligibility and the match badge', () => 
     await toggleChip(page, 'Setting', 'Speakeasy');
     await applyTweak(page);
 
+    await expect(cards(page).first()).toBeVisible();
     const count = await cards(page).count();
     expect(count).toBeGreaterThan(0);
     await expect(badges(page)).toHaveCount(count);
@@ -146,6 +148,7 @@ test.describe('D-C-41 — explicit vibe eligibility and the match badge', () => 
     await toggleChip(page, 'Drink', 'Cocktails');
     await applyTweak(page);
 
+    await expect(cards(page).first()).toBeVisible();
     const count = await cards(page).count();
     expect(count).toBeGreaterThan(0);
     await expect(badges(page)).toHaveCount(count);
@@ -176,6 +179,7 @@ test.describe('D-C-41 — explicit vibe eligibility and the match badge', () => 
 
     // Whatever the widening/narrowing did to the pool, the gate held: every
     // card still carries a badge and none of them is a 0/N pad.
+    await expect(cards(page).first()).toBeVisible();
     const count = await cards(page).count();
     expect(count).toBeGreaterThan(0);
     await expect(badges(page)).toHaveCount(count);

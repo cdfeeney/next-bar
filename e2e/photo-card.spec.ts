@@ -57,9 +57,9 @@ test.describe('Hero result card', () => {
     const heading = cards.first().getByRole('heading');
     await expect(heading).toBeVisible();
 
-    // Without an activated route service, never substitute straight-line minutes.
-    await expect(cards.first().getByText('Walk time unavailable')).toBeVisible();
-    await expect(cards.first().getByText('Drive time unavailable')).toBeVisible();
+    // The catalog fixture supplies confirmed routes; disabled routing has its own distance test.
+    await expect(cards.first().getByText(/^Walk ~/)).toBeVisible();
+    await expect(cards.first().getByText(/^Drive ~/)).toBeVisible();
 
     // Tap the hero → lightbox (carousel + hours).
     await cards

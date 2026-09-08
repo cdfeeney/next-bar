@@ -199,7 +199,7 @@ test('a rapid selection change is never overwritten by the previous selection an
     if (route.request().method() === 'GET') return route.fulfill({ json: { enabled: true } });
     const ids = route.request().postDataJSON().ids as string[];
     // Hold the cab search open so Anywhere can overtake it mid-flight.
-    if (ids.some((id) => id.startsWith('cab-')) && !ids.some((id) => id.startsWith('far-'))) {
+    if (route.request().postDataJSON().band === 'cab') {
       await new Promise<void>((resolve) => { gate.release = resolve; });
     }
     return route.fulfill({ json: bandRoutes(ids, route.request().postDataJSON().band) });

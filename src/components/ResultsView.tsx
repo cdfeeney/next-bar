@@ -45,7 +45,7 @@ type ResultsViewProps = {
    * source of truth for any companion surface (quiz map highlights,
    * MED-11: the parent must NOT recompute matches with different inputs).
    */
-  onRanked?: (ids: string[]) => void;
+  onRanked?: (ids: string[], settled: boolean) => void;
   /** Planning phase (operator 2026-07-27): cards carry a "Send" share. */
   showShare?: boolean;
 };
@@ -173,6 +173,7 @@ export default function ResultsView({
   // recompute. Signature guard: fire only when the id SEQUENCE changes —
   // never on mere array-identity churn (belt-and-braces against the
   // render-loop class above).
+  const rankedSettled = nearbyCandidates || band === 'anywhere' || travel.status === 'ready' || candidates.length === 0;
   const lastRankedSigRef = useRef('');
   // Ref-carried callback (DeepSeek review): an inline-lambda parent must
   // not re-trigger the effect on every render — only a ranked change does.
@@ -180,11 +181,11 @@ export default function ResultsView({
   onRankedRef.current = onRanked;
   useEffect(() => {
     const ids = ranked.map((b) => b.id);
-    const sig = ids.join(',');
+    const sig = JSON.stringify([ids, rankedSettled]);
     if (sig === lastRankedSigRef.current) return;
     lastRankedSigRef.current = sig;
-    onRankedRef.current?.(ids);
-  }, [ranked]);
+    onRankedRef.current?.(ids, rankedSettled);
+  }, [ranked, rankedSettled]);
 
   // MED-14: a Pass tap yanks the card out from under the finger — give it
   // an 8s undo window. Detect "newly passed AND was on screen" by diffing

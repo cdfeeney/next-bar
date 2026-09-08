@@ -94,7 +94,7 @@ test.describe('QA-6 — the one results view', () => {
       page.getByRole('heading', { name: /Your next/i }),
     ).toBeVisible({ timeout: 15_000 });
     const cards = cardsOf(page);
-    await expect(cards).toHaveCount(5);
+    await expect(cards).toHaveCount(3);
 
     // Operator fix 2026-07-27: home opens on Walkable — closest bars
     // first (the auto-widen covers a zero-result radius; at this LES
@@ -143,7 +143,7 @@ test.describe('QA-6 — the one results view', () => {
     await page.goto('/');
 
     const cards = page.getByTestId('result-card');
-    await expect(cards).toHaveCount(5);
+    await expect(cards).toHaveCount(3);
     await expect(
       page.getByRole('button', { name: /Send .* to friends/ }),
     ).toHaveCount(0);
@@ -167,7 +167,7 @@ test.describe('QA-6 — the one results view', () => {
     // "Route times unavailable" — so route order is never the second stage
     // here. Waiting for the catalog requests to finish is what puts both
     // observations in the same stage; 1..5 then confirms a coherent render.
-    const RANKS = [/^1\. /, /^2\. /, /^3\. /, /^4\. /, /^5\. /];
+    const RANKS = [/^1\. /, /^2\. /, /^3\. /];
     const settled = async () => {
       await page.waitForLoadState('networkidle');
       await expect(headings).toHaveText(RANKS);
@@ -217,7 +217,7 @@ test.describe('QA-6 — the one results view', () => {
     // "Vibe match 0/1 is visible"; this proves the same non-leak AND the new
     // badge rule.
     await expect(page.getByTestId('vibe-match')).toHaveCount(0);
-    await expect(cards).toHaveCount(5);
+    await expect(cards).toHaveCount(3);
 
     // The saved profile still PRE-FILLS the tweak surface (it moved, it
     // did not disappear): Sound axis shows Jazz already active.

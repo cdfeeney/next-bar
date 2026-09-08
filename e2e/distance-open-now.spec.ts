@@ -23,35 +23,7 @@ import { RADIUS_CAB, RADIUS_WALK } from '../src/lib/constants';
 const LATE_EVENING = new Date('2026-07-24T23:00:00'); // Fri 11pm — bars open
 const EARLY_MORNING = new Date('2026-07-27T09:00:00'); // Mon 9am — bars closed
 
-/**
- * Pin the app to its BUNDLED catalog for this spec.
- *
- * Every distance assertion below resolves a rendered card's heading against
- * `bars` from src/lib — but CatalogRefresh replaces that bundle with the full
- * Supabase `bars` table after hydration, and the served catalog is far larger
- * than the bundled core. A card sourced only from the server then resolves to
- * `undefined`, and the `!` below used to hand that straight to haversineMiles:
- * on 2026-08-18 the gate failed with `Cannot read properties of undefined
- * (reading 'lat')` at src/lib/distance.ts:8, naming product code for what was
- * a test-fixture mismatch, on "Lobby Bar at Hotel Chelsea" — a venue that
- * exists in the database and nowhere in src/.
- *
- * Whether it fired at all depended on whether the swap beat the assertion, so
- * the spec was only reliable in the degraded no-Supabase state. Blocking the
- * fetch makes the rendered set exactly the set this spec can reason about, in
- * every environment. The distance assertions keep their full strength; what
- * goes away is the race, not the coverage. Catalog SIZE is another spec's
- * subject — this one is about the radius chips.
- *
- * E3.3 must NOT use this. Its subject is LIVE open/closed badges, and the
- * bundled core carries no hours: pinning it renders no "Open ·" badge at all
- * and the positive control fails 6/6 (measured 2026-08-18). Register the route
- * per test, not in the shared seed.
- */
-async function pinBundledCatalog(page: import('@playwright/test').Page) {
-  await page.route('**/rest/v1/bars*', (route) => route.abort());
-}
-
+// Catalog and route fixtures share the same coordinates via catalogTest.
 async function seedResultsFromAttaboy(page: import('@playwright/test').Page) {
   await page.goto('/');
   await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
@@ -86,7 +58,6 @@ test.describe('E3.2 distance chips', () => {
   }) => {
     await denyGeolocation(page.context());
     await page.clock.setFixedTime(LATE_EVENING);
-    await pinBundledCatalog(page);
     const cards = await seedResultsFromAttaboy(page);
 
     const group = page.getByRole('group', { name: 'Search radius' });
