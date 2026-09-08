@@ -11,7 +11,7 @@
  * surface.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 
 // Fixed clock (Fri 11pm local): the live results surfaces hard-filter

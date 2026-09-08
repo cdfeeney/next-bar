@@ -33,9 +33,8 @@ export const LAST_VERIFIED_FRESH_DAYS = 90;
 export const COARSE_ACCURACY_M = 200;
 export const MAX_SNAP_MILES = 2;
 
-// E3.2 distance chips: "Walkable" ~ a determined 25-30min walk;
-// "Worth a cab" ~ a short cross-town ride. Literal types in types/index.ts
-// (Radius) must match these values.
+// Legacy distance bands for non-routed matchers and Radius's literal identity.
+// ResultsView uses street-route eligibility (900 seconds), not this mile value.
 export const RADIUS_WALK = 1.5;
 
 // Late-night ranking bias (operator 2026-07-27: "past a certain time the
@@ -55,16 +54,9 @@ export const LATE_RESTAURANT_PENALTY = 0.12;
 export const RADIUS_CAB = 4;
 export const RADIUS_ANYWHERE = null;
 
-// Derived from RADIUS_WALK so the card's walk/cab lead copy can never
-// contradict the "Walkable" chip that surfaced the bar (review HIGH:
-// after the 1 -> 1.5 bump, a 1.2mi bar under "Walkable" read "by Uber").
-export const WALK_BOUNDARY_MI = RADIUS_WALK;
-
 // E3.3 refinement (operator 2026-07-26): the open-now hard filter keeps
 // bars OPENING within this window — day drinkers search before doors.
 export const OPENS_SOON_WINDOW_MIN = 60;
-export const WALK_MIN_PER_MILE = 20;
-export const UBER_MIN_PER_MILE = 6;
 
 // Starting centroids — verify against a map before locking.
 export const NEIGHBORHOOD_CENTROIDS: Record<Neighborhood, Coords> = {

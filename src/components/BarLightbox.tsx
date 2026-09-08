@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { Bar } from '@/types';
+import type { Bar, Coords } from '@/types';
+import { directionsHref, type TravelMode } from '@/lib/travelTime';
 import { barVisual } from '@/lib/barVisual';
 import { fetchBarDetails, type BarDetails } from '@/lib/barReviews';
 import { resolveMedia } from '@/lib/mediaPolicy';
@@ -15,7 +16,7 @@ import OpenNowBadge from '@/components/OpenNowBadge';
 import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
 
 /**
- * The complete public contract — deliberately two props.
+ * Bar identity plus optional private directions context.
  *
  * Everything the panel renders comes from `bar` or is fetched from `bar.id`,
  * so no caller passes surface-specific configuration and the component
@@ -23,6 +24,8 @@ import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
  * only a `Bar` and somewhere to put the open/closed flag.
  */
 export type BarLightboxProps = {
+  origin?: Coords;
+  directionsMode?: TravelMode;
   /**
    * The bar to show.
    *
@@ -76,6 +79,8 @@ export type BarLightboxProps = {
  * <body> and strands keyboard users at the top of the page.
  */
 export default function BarLightbox({
+  origin,
+  directionsMode = 'walking',
   bar,
   onClose,
 }: BarLightboxProps): JSX.Element {
@@ -222,11 +227,7 @@ export default function BarLightbox({
   const { entries: wantToGoEntries, add: addWantToGo } = useWantToGo();
   const wantsToGo = wantToGoEntries.some((e) => e.barId === bar.id);
 
-  const mapsHref = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-    displayBar.address
-      ? `${bar.name} ${displayBar.address}`
-      : `${bar.lat},${bar.lng}`,
-  )}`;
+  const mapsHref = directionsHref(origin, bar, directionsMode);
 
   return (
     <div
@@ -355,7 +356,11 @@ export default function BarLightbox({
               ) : null}
             </figcaption>
           </figure>
-        ) : null}
+        ) : (
+          <p role="status" className="text-sm text-muted">
+            {detailStatus === 'loading' ? 'Loading photos…' : 'No photos available for this bar yet.'}
+          </p>
+        )}
 
         <div>
           <h2 className="font-display text-3xl leading-tight mb-1">

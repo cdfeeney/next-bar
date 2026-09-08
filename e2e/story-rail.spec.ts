@@ -41,7 +41,7 @@
  * `src/lib/stories.server.test.ts`.
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/test';
 import {
   CLAIRE,
   CLAIRE_ID,

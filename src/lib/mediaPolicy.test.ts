@@ -1,230 +1,49 @@
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import {
-  defaultMediaFlags,
-  needsGoogleAttribution,
-  resolveFallbackMedia,
-  resolveMedia,
-  type MediaFlags,
-  type OwnedPhoto,
-} from './mediaPolicy';
-import type { Bar } from '@/types';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { defaultMediaFlags, resolveFallbackMedia, resolveMedia, type OwnedPhoto } from './mediaPolicy';
 
-const bar = (over: Partial<Bar> = {}): Pick<Bar, 'id' | 'photoRef' | 'photoCount' | 'googlePlaceId'> => ({
-  id: 'attaboy',
-  photoRef: 'places/x/photos/y',
-  photoCount: 3,
-  googlePlaceId: 'ChIJtest',
-  ...over,
-});
+const bar = { id: 'attaboy', googlePlaceId: 'ChIJtest', photoRef: 'old-photo', photoCount: 3 };
+const venue: OwnedPhoto[] = [{ url: '/media/venue.webp', source: 'venue', isPrimary: true }];
+afterEach(() => vi.unstubAllEnvs());
 
-const owned = (source: OwnedPhoto['source'], n = 1): OwnedPhoto[] =>
-  Array.from({ length: n }, (_, i) => ({
-    url: `/media/${source}-${i}.webp`,
-    source,
-    isPrimary: i === 0,
-  }));
-
-const FLAGS = (over: Partial<MediaFlags> = {}): MediaFlags => ({
-  googleLive: false,
-  legacyCache: true,
-  ...over,
-});
-
-/**
- * Both flags must be FAIL-CLOSED: absent or malformed configuration can never
- * serve Google-derived media.
- *
- * legacyCache was `!== '0'` until 2026-07-29, i.e. opt-OUT — the ~3,435
- * re-hosted Google photo files served whenever the variable was missing. The
- * variable was in fact set NOWHERE in the repo, so the non-compliant path was
- * the live default. These tests set process.env explicitly rather than relying
- * on ambient state, because .env.local now sets the opt-in for dev and a test
- * that merely observed the ambient value would pass for the wrong reason.
- */
-describe('defaultMediaFlags is fail-closed', () => {
-  const KEYS = ['NEXT_PUBLIC_LEGACY_PHOTOS', 'NEXT_PUBLIC_GOOGLE_MEDIA'] as const;
-  const saved: Record<string, string | undefined> = {};
-
-  beforeEach(() => {
-    for (const k of KEYS) {
-      saved[k] = process.env[k];
-      delete process.env[k];
-    }
-  });
-  afterEach(() => {
-    for (const k of KEYS) {
-      if (saved[k] === undefined) delete process.env[k];
-      else process.env[k] = saved[k];
-    }
+describe('Places UI Kit media policy', () => {
+  test.each([undefined, '', '0', 'false', 'true'])('live requests stay off for %s', value => {
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', value);
+    expect(defaultMediaFlags()).toEqual({ googleLive: false });
+    expect(resolveMedia(bar)).toEqual({ source: 'glyph' });
   });
 
-  test('absent config serves NO Google media of either kind', () => {
-    expect(defaultMediaFlags()).toEqual({ googleLive: false, legacyCache: false });
+  test('the retired legacy flag cannot reopen cached photos', () => {
+    vi.stubEnv('NEXT_PUBLIC_LEGACY_PHOTOS', '1');
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '0');
+    expect(resolveMedia(bar)).toEqual({ source: 'glyph' });
+    vi.stubEnv('NEXT_PUBLIC_GOOGLE_MEDIA', '1');
+    expect(resolveMedia(bar)).toEqual({ source: 'google-live', placeId: 'ChIJtest' });
+    expect(resolveMedia({ ...bar, googlePlaceId: undefined })).toEqual({ source: 'glyph' });
+    expect(resolveFallbackMedia(bar)).toEqual({ source: 'glyph' });
   });
 
-  // The rollback case: a build predating the variable compiles it in as
-  // undefined and serves legacy photos for that build's entire life.
-  test.each(['', 'false', 'FALSE', 'off', 'no', '0', 'true', 'yes'])(
-    'legacy photos stay OFF for a reasonable-looking value %o',
-    (value) => {
-      process.env.NEXT_PUBLIC_LEGACY_PHOTOS = value;
-      expect(defaultMediaFlags().legacyCache).toBe(false);
-    },
-  );
-
-  test("exactly '1' is the only opt-in", () => {
-    process.env.NEXT_PUBLIC_LEGACY_PHOTOS = '1';
-    process.env.NEXT_PUBLIC_GOOGLE_MEDIA = '1';
-    expect(defaultMediaFlags()).toEqual({ googleLive: true, legacyCache: true });
-  });
-
-  test('a bar with legacy photos resolves to glyph under absent config', () => {
-    // The end-to-end consequence: no /bar-photos/ URL is ever produced, so the
-    // default path issues zero requests for the non-compliant files.
-    const d = resolveMedia(bar(), [], defaultMediaFlags());
-    expect(d).toEqual({ source: 'glyph' });
-    expect(JSON.stringify(d)).not.toContain('bar-photos');
-  });
-});
-
-/**
- * The failure path must not reopen the non-compliant one.
- *
- * GooglePlacePhoto shows a caller-supplied fallback when a live Google photo
- * can't render. If a caller chose "the copy already on our server", every widget
- * failure would serve a re-hosted Google file and the migration would only look
- * finished. resolveFallbackMedia removes the choice.
- */
-describe('resolveFallbackMedia never reopens the legacy path', () => {
-  test('a bar with ONLY legacy photos falls back to the glyph, not the cache', () => {
-    const d = resolveFallbackMedia(bar());
-    expect(d).toEqual({ source: 'glyph' });
-  });
-
-  test('never returns a Google-derived source, whatever the bar has', () => {
-    for (const b of [bar(), bar({ photoCount: 0 }), bar({ googlePlaceId: 'ChIJx' })]) {
-      const d = resolveFallbackMedia(b);
-      expect(d.source).not.toBe('legacy-google-cached');
-      expect(d.source).not.toBe('google-live');
-      expect(needsGoogleAttribution(d)).toBe(false);
-    }
-  });
-
-  test('produces no /bar-photos URL at all', () => {
-    expect(JSON.stringify(resolveFallbackMedia(bar()))).not.toContain('bar-photos');
-  });
-
-  test('still prefers media we actually own', () => {
-    const d = resolveFallbackMedia(bar(), owned('venue', 2));
-    expect(d).toEqual({ source: 'venue', urls: ['/media/venue-0.webp', '/media/venue-1.webp'] });
-  });
-
-  // Even with the legacy flag explicitly enabled elsewhere in the app, the
-  // fallback path must be unaffected — it takes no flags by design.
-  test('ignores ambient flag state entirely', () => {
-    const saved = process.env.NEXT_PUBLIC_LEGACY_PHOTOS;
-    process.env.NEXT_PUBLIC_LEGACY_PHOTOS = '1';
-    try {
-      expect(resolveFallbackMedia(bar())).toEqual({ source: 'glyph' });
-    } finally {
-      if (saved === undefined) delete process.env.NEXT_PUBLIC_LEGACY_PHOTOS;
-      else process.env.NEXT_PUBLIC_LEGACY_PHOTOS = saved;
-    }
-  });
-});
-
-describe('resolveMedia priority', () => {
-  test('owned Next Bar media beats everything', () => {
-    const d = resolveMedia(bar(), [...owned('user'), ...owned('nextbar')]);
-    expect(d).toEqual({ source: 'nextbar', urls: ['/media/nextbar-0.webp'] });
-  });
-
-  test('venue media beats user media', () => {
-    const d = resolveMedia(bar(), [...owned('user'), ...owned('venue')]);
-    expect(d.source).toBe('venue');
-  });
-
-  test('primary photo sorts first within a source', () => {
+  test('owned media takes priority and sorts the primary first without mutating input', () => {
     const photos: OwnedPhoto[] = [
-      { url: '/b.webp', source: 'venue', isPrimary: false },
-      { url: '/a.webp', source: 'venue', isPrimary: true },
+      ...venue,
+      { url: '/media/secondary.webp', source: 'nextbar', isPrimary: false },
+      { url: '/media/primary.webp', source: 'nextbar', isPrimary: true },
     ];
-    const d = resolveMedia(bar(), photos);
-    expect(d).toEqual({ source: 'venue', urls: ['/a.webp', '/b.webp'] });
-  });
-
-  // When the legacy cache IS opted into, it is LABELLED as Google-derived
-  // rather than passed off as ours, and it demands attribution.
-  //
-  // Flags are explicit here on purpose. This used to call resolveMedia(bar(), [])
-  // and lean on the ambient default, which silently encoded "legacy photos are
-  // on unless told otherwise" — the fail-open behaviour removed on 2026-07-29.
-  // The labelling/attribution guarantee is what this test is for; the default is
-  // pinned separately in the fail-closed suite above.
-  test('falls back to legacy cache, labelled honestly', () => {
-    const d = resolveMedia(bar(), [], FLAGS({ legacyCache: true }));
-    expect(d.source).toBe('legacy-google-cached');
-    expect(needsGoogleAttribution(d)).toBe(true);
-  });
-
-  test('google live is OFF by default even with a place id', () => {
-    expect(resolveMedia(bar(), []).source).not.toBe('google-live');
-  });
-
-  test('enabling google live outranks the legacy cache', () => {
-    expect(resolveMedia(bar(), [], FLAGS({ googleLive: true }))).toEqual({
-      source: 'google-live',
-      placeId: 'ChIJtest',
+    const before = [...photos];
+    expect(resolveMedia(bar, photos, { googleLive: true })).toEqual({
+      source: 'nextbar', urls: ['/media/primary.webp', '/media/secondary.webp'],
     });
+    expect(photos).toEqual(before);
   });
 
-  // The kill switch that makes deletion a cleanup instead of a cutover.
-  test('killing the legacy cache degrades to a glyph, not a broken image', () => {
-    expect(resolveMedia(bar(), [], FLAGS({ legacyCache: false }))).toEqual({
-      source: 'glyph',
-    });
+  test('venue media beats user media and survives a widget failure', () => {
+    const photos: OwnedPhoto[] = [{ url: '/media/user.webp', source: 'user', isPrimary: true }, ...venue];
+    expect(resolveMedia(bar, photos, { googleLive: true })).toEqual({ source: 'venue', urls: ['/media/venue.webp'] });
+    expect(resolveFallbackMedia(bar, photos)).toEqual({ source: 'venue', urls: ['/media/venue.webp'] });
+    expect(resolveMedia(bar, photos.slice(0, 1))).toEqual({ source: 'user', urls: ['/media/user.webp'] });
   });
 
-  test('both switches off with no owned media = glyph', () => {
-    expect(
-      resolveMedia(bar(), [], FLAGS({ legacyCache: false, googleLive: false })),
-    ).toEqual({ source: 'glyph' });
-  });
-
-  test('owned media survives both kill switches', () => {
-    const d = resolveMedia(
-      bar(),
-      owned('venue'),
-      FLAGS({ legacyCache: false, googleLive: false }),
-    );
-    expect(d.source).toBe('venue');
-    expect(needsGoogleAttribution(d)).toBe(false);
-  });
-
-  test('a bar with no photos at all is a glyph', () => {
-    const d = resolveMedia(bar({ photoRef: undefined, photoCount: 0 }), []);
-    expect(d).toEqual({ source: 'glyph' });
-  });
-
-  test('google live needs a place id to be selectable', () => {
-    const d = resolveMedia(
-      bar({ googlePlaceId: undefined, photoRef: undefined, photoCount: 0 }),
-      [],
-      FLAGS({ googleLive: true }),
-    );
-    expect(d).toEqual({ source: 'glyph' });
-  });
-
-  // Regression (review 2026-07-27): flags must NOT live in module scope.
-  // On the server, Next.js module state is process-global and shared by
-  // every concurrent request, so a mutable flag would let one request
-  // silently change what another renders.
-  test('flag choices do not leak between calls', () => {
-    const off = resolveMedia(bar(), [], FLAGS({ legacyCache: false }));
-    const on = resolveMedia(bar(), [], FLAGS({ legacyCache: true }));
-    expect(off.source).toBe('glyph');
-    expect(on.source).toBe('legacy-google-cached');
-    // and the default is recomputed per call, never cached
-    expect(defaultMediaFlags().googleLive).toBe(false);
+  test('request flags do not leak between callers', () => {
+    expect(resolveMedia(bar, [], { googleLive: true }).source).toBe('google-live');
+    expect(resolveMedia(bar, [], { googleLive: false }).source).toBe('glyph');
   });
 });

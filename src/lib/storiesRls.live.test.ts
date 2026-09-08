@@ -292,13 +292,16 @@ describeLive('0065 stories — live RLS/RPC with two identities', () => {
     });
   });
 
-  it('anon reads nothing at all', async () => {
+  it('anon is denied SELECT on stories before RLS is reached', async () => {
     await inRollback(async () => {
       const { alice } = await seed({ mutual: true });
       const { id: story } = await publishAs(alice);
       await asRole('anon');
-      const { rows } = await db.query('select 1 from public.stories where id = $1', [story]);
-      expect(rows).toHaveLength(0);
+      // No anon table grant is intentional. Accepting an empty result would
+      // miss an accidental GRANT that lets anon reach this private table.
+      await expect(
+        db.query('select 1 from public.stories where id = $1', [story]),
+      ).rejects.toMatchObject({ code: '42501', message: 'permission denied for table stories' });
     });
   });
 

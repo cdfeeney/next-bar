@@ -12,7 +12,7 @@
  * results) and the Pass-deep-link test that started from a card.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 import { signIn } from './helpers/stories';
 

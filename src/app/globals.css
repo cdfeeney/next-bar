@@ -102,7 +102,8 @@ body::before {
    the map legend already uses. Scoped to `.map-fill`: embedded maps are cards in
    a scrolling page and the nav is not over them. */
 .map-fill .leaflet-bottom.leaflet-right {
-  margin-bottom: calc(4.5rem + max(0.5rem, env(safe-area-inset-bottom)));
+  /* Keep the full map credit above the marker legend as well as the nav. */
+  margin-bottom: calc(6.75rem + max(0.5rem, env(safe-area-inset-bottom)));
 }
 
 .touch-card {

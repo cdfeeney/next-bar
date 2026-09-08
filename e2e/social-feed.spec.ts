@@ -40,7 +40,7 @@
  * quietly dropped: an e2e file that cannot see the surface must say so.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 
 test.describe('Social · Feed', () => {
   test('the three sub-tabs are unchanged and Feed is reachable', async ({ page }) => {

@@ -16,10 +16,13 @@ import { haversineMiles } from '@/lib/distance';
 import { NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
 import { displayHood } from '@/lib/hoodDisplay';
 import { useRatings } from '@/hooks/useRatings';
+import { useTravelRoutes } from '@/hooks/useTravelRoutes';
+import { isWalkable, ROUTE_CANDIDATE_CAP, ROUTE_RESULT_CAP } from '@/lib/travelTime';
+import { RADIUS_CAB, RADIUS_WALK } from '@/lib/constants';
 import ResultCard from '@/components/ResultCard';
 
 type ResolvedLocation =
-  | { kind: 'coords'; coords: Coords; band: AccuracyBand; snappedTo: ManhattanNeighborhood | null }
+  | { kind: 'coords'; coords: Coords; band: AccuracyBand; snappedTo: ManhattanNeighborhood | null; originLabel?: string }
   | { kind: 'neighborhood'; neighborhood: ManhattanNeighborhood };
 
 type ResultsViewProps = {
@@ -27,6 +30,8 @@ type ResultsViewProps = {
   location: ResolvedLocation;
   minMilesExclusive?: number | null;
   maxMiles: number | null;
+  /** Quiz results have no distance selector and retain their nearby default. */
+  nearbyFirst?: boolean;
   excludeIds?: string[];
   maxResults?: number;
   /**
@@ -48,8 +53,8 @@ type ResultsViewProps = {
 export default function ResultsView({
   profile,
   location,
-  minMilesExclusive,
   maxMiles,
+  nearbyFirst,
   excludeIds,
   maxResults,
   hideClosedNow,
@@ -115,24 +120,44 @@ export default function ResultsView({
     [ratings, bars],
   );
 
-  const ranked = useMemo(
-    () =>
-      matches({
+  const walkingSearch = maxMiles === RADIUS_WALK;
+  const nearbyCandidates = nearbyFirst ?? walkingSearch;
+  const candidates = useMemo(
+    () => {
+      const preferred = matches({
         profile,
         coords: userCoords,
         preferredNeighborhoods,
-        minMilesExclusive,
-        maxMiles,
-        bars: pool,
+        minMilesExclusive: null,
+        maxMiles: null,
+        bars: maxMiles === RADIUS_CAB
+          ? pool.filter(b => haversineMiles(userCoords, b) <= RADIUS_CAB) : pool,
+        distanceBands: nearbyCandidates,
         excludeIds: effectiveExcludeIds,
-        maxResults,
+        maxResults: pool.length,
         taste,
         // Late-night bias rides the SAME live clock as the open-now
         // filter — quiz/planning surfaces (no hideClosedNow) never bias.
         biasNow: filterNow ?? undefined,
-      }),
-    [profile, userCoords, preferredNeighborhoods, minMilesExclusive, maxMiles, pool, effectiveExcludeIds, maxResults, taste, filterNow],
+      });
+      if (!nearbyCandidates) return preferred.slice(0, ROUTE_CANDIDATE_CAP);
+      // Bound route lookups by proximity without erasing taste/applied-vibe order.
+      const nearbyIds = new Set([...preferred]
+        .sort((a, b) => haversineMiles(userCoords, a) - haversineMiles(userCoords, b))
+        .slice(0, ROUTE_CANDIDATE_CAP).map(b => b.id));
+      return preferred.filter(b => nearbyIds.has(b.id));
+    },
+    [profile, userCoords, preferredNeighborhoods, pool, effectiveExcludeIds, taste, filterNow, maxMiles, nearbyCandidates],
   );
+  const mode = maxMiles === RADIUS_CAB ? 'driving' : 'walking';
+  const travel = useTravelRoutes(userCoords, candidates, mode, walkingSearch);
+  const count = Math.min(maxResults ?? ROUTE_RESULT_CAP, ROUTE_RESULT_CAP);
+  const ranked = useMemo(() => travel.data
+    ? travel.data.routes.flatMap(r => candidates.filter(b => b.id === r.id)).slice(0, count)
+    : candidates.slice(0, count), [travel.data, candidates, count]);
+  const routeById = new Map(travel.data?.routes.map(r => [r.id, r]));
+  const firstFarther = walkingSearch && travel.data
+    ? ranked.findIndex(b => !isWalkable(routeById.get(b.id)?.walking)) : -1;
 
   // MED-11: companion surfaces (quiz map) mirror THIS list, not their own
   // recompute. Signature guard: fire only when the id SEQUENCE changes —
@@ -240,16 +265,30 @@ export default function ResultsView({
   const locationLabel =
     location.kind === 'neighborhood'
       ? `In ${displayHood(location.neighborhood)}`
+      : location.originLabel
+      ? location.originLabel
       : location.snappedTo
       ? `Approximate — based on ${location.snappedTo}`
       : neighborhoodFiltered
         ? 'Near you · limited to your picked neighborhoods'
-        : 'Using your location';
+        : 'Near you';
 
   return (
     <section className="px-6 py-8">
       <div className="max-w-2xl mx-auto">
         <p className="text-muted text-sm text-center mb-2">{locationLabel}</p>
+        <div className="text-sm text-muted text-center mb-4" aria-live="polite">
+          {travel.status === 'disabled' ? <p>Route times unavailable. These suggestions are not confirmed within a 15-minute walk.</p> : null}
+          {travel.status === 'loading' ? <p>Checking street routes…</p> : null}
+          {travel.status === 'error' || travel.status === 'stale' ? <>
+            <p>{travel.status === 'stale' ? 'Travel times expired.' : 'Travel times unavailable.'} Walkable is not confirmed.</p>
+            <button type="button" onClick={travel.calculate} className="min-h-[44px] text-accent underline">Recalculate from this starting point</button>
+          </> : null}
+          {travel.data ? <>
+            {travel.data.incomplete ? <p>Some route checks failed; only confirmed estimates are shown.</p> : null}
+            {ranked.length < count ? <p>Only {ranked.length} routes confirmed in this search.</p> : null}
+          </> : null}
+        </div>
         <h2 className="font-display text-3xl md:text-4xl text-center mb-8">
           {ranked.length === 1
             ? 'Your next bar'
@@ -258,7 +297,7 @@ export default function ResultsView({
 
         {ranked.length === 0 ? (
           <p className="text-muted text-center">
-            No matches found nearby.
+            {travel.data ? 'Not enough routes could be confirmed in this search.' : 'No eligible bars found in this search.'}
             <br />
             Try a different neighborhood or widen your radius.
           </p>
@@ -270,18 +309,35 @@ export default function ResultsView({
                 lng: bar.lng,
               });
               return (
+                <div key={bar.id}>
+                {idx === firstFarther ? <h3 className="font-display text-lg mb-3">A little farther away</h3> : null}
                 <ResultCard
-                  key={bar.id}
                   bar={bar}
                   rank={idx + 1}
                   miles={miles}
+                  origin={userCoords}
+                  travel={routeById.get(bar.id)}
+                  travelLoading={travel.status === 'loading'}
+                  directionsMode={mode}
                   userTags={profile.tags}
                   showShare={showShare}
                 />
+                </div>
               );
             })}
           </div>
         )}
+
+        <div className="mt-5 text-sm text-muted text-center">
+          <details>
+            <summary className="min-h-[44px] py-3 cursor-pointer">About travel times</summary>
+            <p>{walkingSearch ? 'Walkable: estimated route of 15 minutes or less.' : nearbyCandidates ? 'Matching nearby bars.' : maxMiles === RADIUS_CAB ? 'Matching across the wider area, within 4 miles straight-line.' : 'Matching across the full service area.'}</p>
+            <p>Times are estimates; driving excludes traffic and pickup waits.</p>
+            {travel.status !== 'disabled' ? <p>Travel times calculate automatically from this starting point. No location history is saved by Next Bar.</p> : null}
+            {travel.data?.limited ? <p>Checked {travel.data.checked} candidates; this is not an exhaustive search.</p> : null}
+          </details>
+          {travel.data ? <p className="text-xs">© <a href="https://openrouteservice.org/" target="_blank" rel="noopener noreferrer" className="underline">openrouteservice</a> by HeiGIT · Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" className="underline">OpenStreetMap contributors</a></p> : null}
+        </div>
 
         {/* MED-14 undo snackbar: floats above BottomNav; disappears after
             8s (focus-aware) or on undo. */}

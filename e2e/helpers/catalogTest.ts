@@ -1,4 +1,4 @@
-import { test as base, expect, type Route } from '@playwright/test';
+import { test as base, expect, type Route } from './test';
 import { bars } from '../../src/lib/bars';
 import type { Bar } from '../../src/types';
 

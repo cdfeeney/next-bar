@@ -18,7 +18,7 @@
  * On LocationPrompt we pick "East Village" — 4 bars match at Jaccard ≥ 0.10.
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/test';
 import { pickOption } from './helpers/quizWalk';
 
 async function completeQuiz(page: Page): Promise<void> {

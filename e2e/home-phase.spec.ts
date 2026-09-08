@@ -13,7 +13,7 @@
  * (no Z) so the derived hour matches on any runner timezone.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 
 const SUNDAY_2PM = new Date('2026-07-26T14:00:00');

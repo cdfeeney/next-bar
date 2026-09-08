@@ -1,0 +1,96 @@
+{
+  "version": "0.2",
+  "status": "draft-not-admitted",
+  "local_implementation_authorization": {
+    "owner": "user",
+    "date": "2026-09-06",
+    "source": "Current thread: codeit now pleas, following presentation of implementation plan 0.2",
+    "scope": "Local distance-first pilot, existing card, <=900-second walking cutoff, bounded route requests and separately labeled farther supplements. Not live-provider access, production activation or release admission.",
+    "evidence_path": "docs/DISTANCE-IMPLEMENTATION-2026-09-06.md"
+  },
+  "release_id": "v8.2-distance-correction",
+  "prd_path": "docs/DISTANCE-PLAN-2026-09-06.md",
+  "base_candidate": "fac12ac",
+  "existing_goal_id": "01a06dc8-f41c-79f0-a511-78824ebe50c5",
+  "approval_scope": "Owner requested correction of the implementation plan: implement and validate distance first, recommendation correction second, V8 release checks last. Existing-card visual intent, <=15-minute Walkable intent and at-least-five preference are confirmed. Proposed execution defaults are not owner-approved provider/privacy/budget activation, count/radius fallback or exact matching rules.",
+  "admission": "Not the frozen V8 release ledger. No frozen PRD/ledger digests changed. Freeze and pin this delta only after its decisions are resolved; the existing check:contract does not admit this draft.",
+  "execution_order": ["origin-and-route-data", "existing-card-and-directions", "route-eligibility-and-bounded-filling", "real-route-validation", "recommendation-correction", "v8-release-gate"],
+  "proposed_defaults": {
+    "status": "proposed-not-approved",
+    "provider_candidate": "hosted openrouteservice; verify current terms and both modes before external calls",
+    "candidate_batch_size": 5,
+    "primary_mode_batch_cap": 3,
+    "secondary_mode_destination_cap": 5,
+    "route_element_cap_per_search": 20,
+    "insufficient_walkable_presentation": "automatic separately labeled A little farther away supplement",
+    "local_verification": "intercept provider responses in existing test tools; never runtime mock ETAs",
+    "activation_boundary": "Local fixture-based implementation after behavior approval is separate from live provider access, coordinate disclosure, spending authorization and real-route acceptance."
+  },
+  "requirements": [
+    {
+      "requirement_id": "V8-R-DST-001",
+      "behavior": "Existing ResultCard retains layout and walking line; smaller driving time/distance line underneath, readable on both supported phone layouts.",
+      "status": "approved",
+      "coverage": "missing",
+      "implementation_paths": ["src/components/ResultCard.tsx"],
+      "acceptance": ["walk-drive-visible", "existing-actions-preserved", "enlarged-text-both-viewports"]
+    },
+    {
+      "requirement_id": "V8-R-DST-002",
+      "behavior": "One labeled origin and destination per search; route modes are distinct; Maps uses the same inputs; coarse/stale origins cannot claim precise from-you estimates.",
+      "status": "blocked",
+      "coverage": "contradicted",
+      "blocked_on": ["provider-and-location-handling-decision"],
+      "implementation_paths": ["src/hooks/useGeolocation.ts", "src/components/WhereNextFlow.tsx", "src/components/ResultsView.tsx", "src/components/ResultCard.tsx", "src/components/BarLightbox.tsx"],
+      "acceptance": ["origin-mode-destination-match", "stale-response-rejected", "coarse-origin-labeled"]
+    },
+    {
+      "requirement_id": "V8-R-DST-003",
+      "behavior": "Walkable classification requires a current walking-route duration <=900 seconds before rounding, never an expanded radius or fixed straight-line multiplier.",
+      "status": "approved",
+      "coverage": "contradicted",
+      "implementation_paths": ["src/lib/travelTime.ts", "src/lib/matching.ts", "src/components/WhereNextFlow.tsx"],
+      "acceptance": ["900-accepted-901-rejected", "22-minute-route-rejected", "vibe-no-bypass", "unknown-route-not-walkable"]
+    },
+    {
+      "requirement_id": "V8-R-DST-004",
+      "behavior": "At least five options when available, without presenting longer trips as Walkable; exact farther-result presentation must be resolved explicitly.",
+      "status": "blocked",
+      "coverage": "missing",
+      "blocked_on": ["farther-group-versus-tap-to-expand"],
+      "implementation_paths": ["src/components/ResultsView.tsx", "src/components/WhereNextFlow.tsx"],
+      "acceptance": ["five-option-fallback", "insufficient-catalog-honest", "search-budget-exhaustion-honest"]
+    },
+    {
+      "requirement_id": "V8-R-DST-005",
+      "behavior": "Bounded route work and permitted reuse; privacy, validation, rate limits, outage fallback and secondary-surface consistency are verified before activation.",
+      "status": "blocked",
+      "coverage": "missing",
+      "blocked_on": ["provider-terms", "privacy-and-spending-approval", "measured-request-and-freshness-limits"],
+      "implementation_paths": ["src/lib/travelTime.ts", "src/components/ResultsView.tsx", "src/components/BarMap.tsx", "src/app/friends/page.tsx"],
+      "acceptance": ["duplicate-work-suppressed", "mode-and-origin-cache-key", "request-cap-enforced", "outage-no-fake-minutes", "no-precise-location-logs"]
+    },
+    {
+      "requirement_id": "V8-R-DST-006",
+      "behavior": "After distance validation, evaluate nearer relevant recommendations and driving/Anywhere semantics without unapproved taste retuning.",
+      "status": "blocked",
+      "coverage": "missing",
+      "blocked_on": ["distance-validation", "ride-limit-and-ranking-precedence"],
+      "implementation_paths": ["src/lib/matching.ts", "src/components/DistanceChips.tsx", "src/components/WhereNextFlow.tsx"],
+      "acceptance": ["closer-candidate-reference-comparison", "nearby-remains-eligible-in-anywhere", "relevance-reviewed-separately"]
+    }
+  ],
+  "shared_contract": {
+    "actor": "Signed-in or signed-out Next Bar user choosing a destination; owner controls provider and rollout decisions.",
+    "entry_point": "Next Bar results; audit travel labels and directions in Map, Friends and BarLightbox.",
+    "audience": "The searching user only; no origin included in public sharing or social posts.",
+    "data_owner": "User owns their location input; routing provider and its permitted retention remain a decision.",
+    "trust_boundary": "Browser to approved routing service/backend; no new transmission until approved; validated bounded inputs and server-side secrets.",
+    "retention": "No persistent location history or exact-coordinate telemetry; provider-permitted session reuse only after policy selection.",
+    "states": ["calculating", "available", "unavailable", "unreachable", "stale", "approximate-origin", "search-limited"],
+    "failure_recovery": "Honest unavailable/limited state and directions fallback; no fabricated five results or straight-line minute fallback.",
+    "accessibility": "Readable smaller line, labeled modes, enlarged text, keyboard actions, both existing phone viewports; no wheelchair-accessibility promise.",
+    "exclusions": ["card-redesign", "uber-booking-fares", "production-changes", "paid-api-activation", "new-personalization-model"],
+    "evidence": "Current code inspection only; no distance implementation or route validation claimed. Candidate evidence must be supplied after implementation."
+  }
+}

@@ -25,7 +25,7 @@
  * and Saved Nights Out (V8-R-NO-009, V8-R-ACC-002), a private in-app archive.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 
 const TOKEN = '123e4567-e89b-42d3-a456-426614174000';
 

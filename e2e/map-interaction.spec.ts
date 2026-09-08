@@ -46,6 +46,7 @@ const COARSE_FAR = { latitude: 51.5074, longitude: -0.1278, accuracy: 3000 };
 
 test.describe('/map interaction', () => {
   test('renders bar markers', async ({ page }) => {
+    const styleRequest = page.waitForRequest('https://tiles.openfreemap.org/styles/dark');
     await gotoLoadedMap(page);
     // Leaflet attribution confirms the map booted.
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({
@@ -54,6 +55,27 @@ test.describe('/map interaction', () => {
     const markers = page.locator('.leaflet-marker-icon');
     await expect(markers.first()).toBeVisible({ timeout: 15_000 });
     expect(await markers.count()).toBeGreaterThan(0);
+    await expect(page.getByRole('link', { name: 'OpenStreetMap contributors', exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'OpenFreeMap', exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'OpenMapTiles', exact: true })).toBeVisible();
+    expect(new URL((await styleRequest).url()).search).toBe('');
+    const canvas = page.locator('.maplibregl-canvas');
+    await expect(canvas).toBeVisible();
+    await expect(canvas).toHaveCSS('filter', 'none');
+    await expect(page.getByText('Street map could not load.', { exact: false })).toHaveCount(0);
+    await expect(page.locator('img[src*="cartocdn"], img[src*="tile.openstreetmap.org"]')).toHaveCount(0);
+    const credit = await page.locator('.leaflet-control-attribution').boundingBox();
+    const legend = await page.getByTestId('map-legend').boundingBox();
+    expect(credit!.y + credit!.height).toBeLessThanOrEqual(legend!.y);
+  });
+
+  test('reports unavailable street tiles while keeping bar controls usable', async ({ page }) => {
+    await page.route('https://tiles.openfreemap.org/**', route => route.fulfill({ status: 503, body: 'Unavailable' }));
+    await gotoLoadedMap(page);
+    await expect(page.getByText('Street map could not load.', { exact: false })).toBeVisible();
+    await expect(page.locator('.leaflet-marker-icon').first()).toBeVisible();
+    await page.getByRole('button', { name: /^Filters/ }).click();
+    await expect(page.getByTestId('map-filter-sheet')).toBeVisible();
   });
 
   test('map-first hierarchy: the map IS the page, with no heading or quiz prompt', async ({

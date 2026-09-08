@@ -8,7 +8,7 @@
  * the phase now derives from the night LOG alone — no intent required.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 
 const SUNDAY_9AM = new Date('2026-07-26T09:00:00');

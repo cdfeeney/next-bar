@@ -1,21 +1,3 @@
-/**
- * Bar visual identity (blueprint B5) — deterministic glyph + colors derived
- * from a bar's PRIMARY vibe tag (tags[0]) and price tier, plus the local
- * photo URL when the Places ingest has captured one.
- *
- * Pure functions only — same input always yields the same output, so cards
- * never "shuffle" identity between renders/builds. No React, no catalog
- * import (safe for server components and cheap to test).
- *
- * PHOTO FORMAT NOTE: photos are stored as WebP at public/bar-photos/
- * <id>.webp. The ingest still downloads Google's JPEG bytes, then
- * re-encodes with `sharp` before writing (operator 2026-07-27, phone
- * speed: the raw JPEGs averaged 124 KB, so a five-card results screen
- * pulled ~620 KB of hero imagery; WebP at the same 640px width more than
- * halves that). If the format ever changes again, update BOTH the ingest
- * scripts and PHOTO_EXT here — they are the only two coupling points.
- */
-
 import type { Bar, VibeTag } from '@/types';
 
 export type BarVisual = {
@@ -137,37 +119,4 @@ export function barVisual(bar: BarVisualInput): BarVisual {
     bg: `hsl(${hue}, ${BG_SATURATION}%, ${BG_LIGHTNESS_BY_TIER[bar.priceTier]}%)`,
     fg: `hsl(${hue}, ${FG_SATURATION}%, ${FG_LIGHTNESS}%)`,
   };
-}
-
-/** Photos are re-encoded to WebP at ingest time. See header note. */
-const PHOTO_EXT = 'webp';
-
-/**
- * Local photo URL for a bar, or null when the Places ingest has no photo
- * for it (render the glyph tile instead). The file itself is downloaded by
- * `scripts/refresh-places.mjs --photos`; photoRef in the sidecar is the
- * signal that a photo exists for this bar.
- */
-export function barImageUrl(bar: Pick<Bar, 'id' | 'photoRef'>): string | null {
-  return bar.photoRef ? `/bar-photos/${bar.id}.${PHOTO_EXT}` : null;
-}
-
-/**
- * Carousel URLs (photos-multi ingest): photo 1 keeps the legacy
- * `<id>.webp` name, extras are `<id>-2.webp`, `<id>-3.webp`… — index-aligned
- * with photoAttributions. Falls back to the single legacy photo (or
- * nothing) for bars the multi ingest hasn't covered.
- */
-export function barImageUrls(
-  bar: Pick<Bar, 'id' | 'photoRef' | 'photoCount'>,
-): string[] {
-  if (bar.photoCount && bar.photoCount > 0) {
-    return Array.from({ length: bar.photoCount }, (_, i) =>
-      i === 0
-        ? `/bar-photos/${bar.id}.${PHOTO_EXT}`
-        : `/bar-photos/${bar.id}-${i + 1}.${PHOTO_EXT}`,
-    );
-  }
-  const single = barImageUrl(bar);
-  return single ? [single] : [];
 }

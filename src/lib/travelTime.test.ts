@@ -1,76 +1,31 @@
 import { describe, it, expect } from 'vitest';
-import { walkMinutes, uberMinutes, leadCopy } from '@/lib/travelTime';
+import { directionsHref, isWalkable, leadCopy, routeCopy } from '@/lib/travelTime';
 
-describe('walkMinutes', () => {
-  it('returns ~10 for 0.5 miles (Math.round(0.5 * 20))', () => {
-    expect(walkMinutes(0.5)).toBe(10);
+describe('street route display', () => {
+  it('uses raw seconds for Walkable and never rounds a longer walk down to 15', () => {
+    expect(isWalkable({ seconds: 900, meters: 1100 })).toBe(true);
+    expect(isWalkable({ seconds: 901, meters: 1100 })).toBe(false);
+    expect(isWalkable({ seconds: 1320, meters: 1700 })).toBe(false);
+    expect(routeCopy({ seconds: 901, meters: 1100 }, 'walking')).toBe('Walk ~16 min · 0.7 mi');
+    expect(routeCopy({ seconds: 300, meters: 3218.688 }, 'driving')).toBe('Drive ~5 min · 2.0 mi');
   });
-
-  it('returns 1 for 0 miles (Math.max floor prevents 0)', () => {
-    expect(walkMinutes(0)).toBe(1);
+  it('does not infer minutes or walkability from unknown or straight-line distances', () => {
+    expect(isWalkable(null)).toBe(false);
+    expect(isWalkable({ seconds: NaN, meters: 20 })).toBe(false);
+    expect(routeCopy(null, 'walking')).toBe('Walk time unavailable');
+    expect(routeCopy(undefined, 'driving')).toBe('Drive time unavailable');
+    expect(leadCopy(0.7).text).toBe('0.7 mi straight-line');
+    expect(leadCopy(null, 'Chelsea').text).toBe('In Chelsea');
   });
-
-  it('returns 20 for 1.0 mile', () => {
-    expect(walkMinutes(1.0)).toBe(20);
-  });
-
-  it('returns 1 for very small distance (floor at 1)', () => {
-    expect(walkMinutes(0.001)).toBe(1);
-  });
-});
-
-describe('uberMinutes', () => {
-  it('returns 12 for 2 miles (Math.round(2 * 6))', () => {
-    expect(uberMinutes(2)).toBe(12);
-  });
-
-  it('returns 18 for 3 miles', () => {
-    expect(uberMinutes(3)).toBe(18);
-  });
-
-  it('returns 1 for 0 miles (floor at 1)', () => {
-    expect(uberMinutes(0)).toBe(1);
-  });
-});
-
-describe('leadCopy', () => {
-  it('returns walk result for 0.5 miles', () => {
-    const result = leadCopy(0.5);
-    expect(result).toEqual({ kind: 'walk', minutes: 10, text: '~10 min walk' });
-  });
-
-  it('returns walk result at exactly 1.5 miles (boundary = RADIUS_WALK, inclusive on walk side)', () => {
-    // E3.2: the boundary derives from RADIUS_WALK so lead copy can never
-    // contradict the "Walkable" chip that surfaced the bar.
-    const result = leadCopy(1.5);
-    expect(result.kind).toBe('walk');
-    expect((result as { kind: 'walk'; minutes: number; text: string }).minutes).toBe(30);
-    expect(result.text).toBe('~30 min walk');
-  });
-
-  it('flips to uber at 1.51 miles', () => {
-    const result = leadCopy(1.51);
-    expect(result.kind).toBe('uber');
-    expect(result.text).toContain('min by Uber');
-  });
-
-  it('returns uber result for 3.0 miles', () => {
-    const result = leadCopy(3.0);
-    expect(result).toEqual({ kind: 'uber', minutes: 18, text: '~18 min by Uber' });
-  });
-
-  it('returns neighborhood fallback when miles is null and no neighborhood provided', () => {
-    const result = leadCopy(null);
-    expect(result).toEqual({ kind: 'neighborhood', text: 'Pick a neighborhood' });
-  });
-
-  it('returns "In Midtown" when miles is null and neighborhood is "Midtown"', () => {
-    const result = leadCopy(null, 'Midtown');
-    expect(result).toEqual({ kind: 'neighborhood', text: 'In Midtown' });
-  });
-
-  it('returns "In East Village" when miles is null and neighborhood is "East Village"', () => {
-    const result = leadCopy(null, 'East Village');
-    expect(result).toEqual({ kind: 'neighborhood', text: 'In East Village' });
+  it('pins Maps to the same coordinates and explicit mode, without name ambiguity', () => {
+    const origin = { lat: 40.75, lng: -74 };
+    const destination = { lat: 40.7542853, lng: -73.9953313 };
+    for (const mode of ['walking', 'driving'] as const) {
+      const url = new URL(directionsHref(origin, destination, mode));
+      expect(url.searchParams.get('origin')).toBe('40.75,-74');
+      expect(url.searchParams.get('destination')).toBe('40.7542853,-73.9953313');
+      expect(url.searchParams.get('travelmode')).toBe(mode);
+    }
+    expect(new URL(directionsHref(undefined, destination, 'walking')).searchParams.has('origin')).toBe(false);
   });
 });

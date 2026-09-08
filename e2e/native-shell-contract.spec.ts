@@ -15,7 +15,7 @@
  * If you add a route to the bottom nav, ADD IT TO TAB_ROUTES.
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 
 /** The five canonical tabs. Each must satisfy the contract at both sizes. */

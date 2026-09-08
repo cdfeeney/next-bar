@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 
 test.describe('legacy ranking deep links', () => {

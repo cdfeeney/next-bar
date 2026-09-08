@@ -1,11 +1,11 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import type { Bar, VibeTag } from '@/types';
+import type { Bar, Coords, VibeTag } from '@/types';
 import { vibeMatchBadge } from '@/lib/matching';
-import { leadCopy } from '@/lib/travelTime';
+import { directionsHref, routeCopy, type BarTravel, type TravelMode } from '@/lib/travelTime';
 import { barVisual } from '@/lib/barVisual';
-import { needsGoogleAttribution, resolveMedia } from '@/lib/mediaPolicy';
+import { resolveMedia } from '@/lib/mediaPolicy';
 import { buildPickPath, sharePickText } from '@/lib/share';
 import { displayHood } from '@/lib/hoodDisplay';
 import ShareButton from '@/components/ShareButton';
@@ -13,13 +13,16 @@ import OpenNowBadge from '@/components/OpenNowBadge';
 import BarVisualTile from '@/components/BarVisualTile';
 import BarLightbox from '@/components/BarLightbox';
 import RatingBadge from '@/components/RatingBadge';
-import GoogleAttribution from '@/components/GoogleAttribution';
 import GooglePlacePhotoLazy from '@/components/GooglePlacePhotoLazy';
 
 type ResultCardProps = {
   bar: Bar;
   rank: number;
   miles: number | null;
+  origin?: Coords;
+  travel?: BarTravel;
+  travelLoading?: boolean;
+  directionsMode?: TravelMode;
   userTags: VibeTag[];
   /** Planning phase (operator 2026-07-27): show the "Send" share — text
    *  the bar to a group; recipients without the app land on /share/[id]. */
@@ -40,8 +43,7 @@ type ResultCardProps = {
  * /rankings owns that flow), and the per-card photo attribution line is
  * replaced by the blanket disclosure on /privacy + the lightbox credit.
  */
-export default function ResultCard({ bar, rank, miles, userTags, showShare }: ResultCardProps) {
-  const lead = leadCopy(miles, displayHood(bar.neighborhood));
+export default function ResultCard({ bar, rank, userTags, showShare, origin, travel, travelLoading, directionsMode = 'walking' }: ResultCardProps) {
   const badge = vibeMatchBadge(userTags, bar.tags);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   // A broken photo advances to the NEXT carousel photo before giving up —
@@ -56,9 +58,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
     : decision.urls;
   const showHero = photos.length > 0 && !heroFailed;
   const isGoogleLive = decision.source === 'google-live';
-  const mapsHref = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-    `${bar.name} ${bar.address}`,
-  )}`;
+  const mapsHref = directionsHref(origin, bar, directionsMode);
   const fallbackVisual = barVisual(bar);
 
   return (
@@ -129,10 +129,6 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
         </div>
       ) : null}
 
-      {showHero && needsGoogleAttribution(decision) ? (
-        <GoogleAttribution bar={bar} label="Photo via Google" className="px-4 pt-2" />
-      ) : null}
-
       <div className="p-4 pt-3 flex flex-col gap-2">
         {!showHero && !isGoogleLive ? (
           <div className="flex items-start gap-3">
@@ -142,9 +138,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
               aria-label={`See photos and hours for ${bar.name}`}
               className="shrink-0 touch-manipulation rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              {/* photoDisabled: the hero already exhausted every photo URL —
-                  don't re-request a known-broken file. */}
-              <BarVisualTile bar={bar} size={56} photoDisabled={heroFailed} />
+              <BarVisualTile bar={bar} size={56} />
             </button>
             <div className="flex-1 min-w-0 flex flex-col gap-0.5">
               <h3 className="font-display text-lg leading-snug">
@@ -160,10 +154,13 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
         {/* One meta line: the loud walk/ride time + the match count several
             e2e specs key on ("Vibe match" — keep those words). */}
         <p className="text-sm">
-          <span className="font-display text-accent">{lead.text}</span>
+          <span className="font-display text-accent">{travelLoading ? 'Calculating walk…' : routeCopy(travel?.walking, 'walking')}</span>
           <span className="text-muted">
             {' '}· Vibe match {badge.num}/{badge.den}
           </span>
+        </p>
+        <p className="text-xs text-muted">
+          {travelLoading ? 'Calculating drive…' : routeCopy(travel?.driving, 'driving')}
         </p>
 
         {/* flex-wrap (review HIGH): open-badge + rating + Send + Maps can
@@ -175,7 +172,7 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
             <RatingBadge barId={bar.id} />
             {isGoogleLive ? (
               <button type="button" onClick={() => setLightboxOpen(true)} className="text-xs text-accent font-display min-h-[44px] inline-flex items-center">
-                Hours
+                Photos &amp; hours
               </button>
             ) : null}
           </div>
@@ -193,12 +190,16 @@ export default function ResultCard({ bar, rank, miles, userTags, showShare }: Re
             rel="noopener noreferrer"
             className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4 shrink-0"
           >
-            Maps →
+            {directionsMode === 'walking' ? 'Walk' : 'Drive'} Maps →
           </a> : null}
+          <a href={directionsHref(origin, bar, directionsMode === 'walking' ? 'driving' : 'walking')}
+            target="_blank" rel="noopener noreferrer" className="text-xs text-accent min-h-[44px] inline-flex items-center">
+            {directionsMode === 'walking' ? 'Drive' : 'Walk'} directions
+          </a>
         </div>
       </div>
 
-      {lightboxOpen ? <BarLightbox bar={bar} onClose={closeLightbox} /> : null}
+      {lightboxOpen ? <BarLightbox bar={bar} onClose={closeLightbox} origin={origin} directionsMode={directionsMode} /> : null}
     </article>
   );
 }

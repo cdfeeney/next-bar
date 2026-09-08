@@ -10,6 +10,10 @@ import { NextResponse, type NextRequest } from 'next/server';
  * in unauthenticated / local-dev mode without a Supabase project.
  */
 export async function middleware(request: NextRequest) {
+  // Retired Google-photo cache: old bookmarks must not serve the files either.
+  if (request.nextUrl.pathname.startsWith('/bar-photos/')) {
+    return new NextResponse(null, { status: 404 });
+  }
   const response = NextResponse.next({
     request: { headers: request.headers },
   });
@@ -47,5 +51,5 @@ export const config = {
   // may act on behalf of the user. Anonymous-friendly content routes (/,
   // /quiz, /map, /rankings, /friends) skip middleware entirely to keep
   // navigations fast and avoid Next.js dev cold-compile races.
-  matcher: ['/auth/:path*', '/settings/:path*', '/api/:path*'],
+  matcher: ['/auth/:path*', '/settings/:path*', '/api/:path*', '/bar-photos/:path*'],
 };

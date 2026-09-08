@@ -9,7 +9,7 @@
  * If you add a new route to the bottom nav or top nav, ADD A SMOKE TEST.
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 
 async function expectNoConsoleErrors(page: Page, label: string): Promise<void> {

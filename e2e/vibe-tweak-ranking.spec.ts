@@ -18,7 +18,7 @@
  * explicit path can bring one back to the top.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 
 // Same fixed clock as where-next-path.spec.ts: the live surfaces hard-filter

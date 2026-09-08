@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Page, type Route } from './helpers/test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 // Shared with src/lib/authenticatedE2eConfig.test.ts, which is what puts this

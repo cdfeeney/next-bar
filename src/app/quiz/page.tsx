@@ -101,6 +101,7 @@ function QuizResults({ profile, location }: QuizResultsProps) {
         profile={profile}
         location={location}
         maxMiles={null}
+        nearbyFirst
         maxResults={QUIZ_TOP_N}
         onRanked={setHighlightIds}
       />

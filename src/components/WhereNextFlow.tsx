@@ -25,8 +25,8 @@ import { useNightRefresh } from '@/hooks/useIntent';
 import { deriveNightPhase } from '@/lib/nightPhase';
 import { loadIntent, wasOutLastNight } from '@/lib/intent';
 import { loadPhaseOverride } from '@/lib/phaseOverride';
-import { RADIUS_CAB, RADIUS_WALK, RESULTS_COUNT } from '@/lib/constants';
-import { advanceShownIds, nextWiderRadius } from '@/lib/resultsRefresh';
+import { RADIUS_WALK, RESULTS_COUNT } from '@/lib/constants';
+import { advanceShownIds } from '@/lib/resultsRefresh';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
 import DistanceChips from '@/components/DistanceChips';
@@ -72,12 +72,8 @@ type Step =
 
 /**
  * BOTH home surfaces enter on Walkable (operator, 2026-07-27 morning:
- * "I need to see bars that are close to me" — proximity beats a
- * guaranteed-full first page). The earlier review concern (a walking
- * default blanks the page for someone far from any catalog bar) is
- * answered by the AUTO-WIDEN below: zero results at an untouched radius
- * widens one visible step (walking → cab → anywhere) instead of ever
- * stranding an empty list.
+ * "I need to see bars that are close to me"). Route eligibility now owns
+ * the 15-minute cutoff; farther supplements are explicitly labeled.
  */
 const DEFAULT_RADIUS: Radius = { kind: 'walking', maxMiles: RADIUS_WALK };
 
@@ -183,9 +179,7 @@ export default function WhereNextFlow() {
     if (step.kind !== 'locating' && step.kind !== 'askLocation') return;
     const status = geo.state.status;
     if (geo.coords) {
-      // Fresh auto entry: Walkable — closest bars first (auto-widen
-      // covers the zero-results case; see DEFAULT_RADIUS note).
-      radiusTouchedRef.current = false;
+      // Fresh auto entry: Walkable, with explicitly labeled farther supplements.
       setSelectedRadius(DEFAULT_RADIUS);
       setStep({ kind: 'autoResults', coords: geo.coords });
       return;
@@ -229,39 +223,25 @@ export default function WhereNextFlow() {
   // Radius fine-tune lives on the results surface (E2.1) — changing it
   // re-ranks live. Walking default.
   const [selectedRadius, setSelectedRadius] = useState<Radius>(DEFAULT_RADIUS);
-  const minMilesExclusive =
-    selectedRadius.kind === 'cab'
-      ? RADIUS_WALK
-      : selectedRadius.kind === 'anywhere'
-        ? RADIUS_CAB
-        : null;
+  // Broader modes include nearby bars; distance isn't an exclusive ring.
+  const minMilesExclusive = null;
 
   // The history excludes already-shown bars so refresh deals the NEXT batch.
   const [shownIds, setShownIds] = useState<readonly string[]>([]);
   const lastRankedRef = useRef<string[]>([]);
-  // True once the user taps the distance chips themselves — the
-  // auto-widen below must never fight an explicit choice.
-  const radiusTouchedRef = useRef(false);
   const [rankedEmpty, setRankedEmpty] = useState(false);
   const handleRanked = useCallback((ids: string[]): void => {
     lastRankedRef.current = ids;
     setRankedEmpty(ids.length === 0);
   }, []);
-  // Empty-rank recovery, in priority order: (1) wrap backstop (review
-  // HIGH — a refresh cycle that exhausted the pool restarts instead of
-  // stranding "No matches found"); (2) AUTO-WIDEN (operator fix
-  // 2026-07-27: home opens on Walkable; if an UNTOUCHED radius yields
-  // zero, widen one visible chip step walking → cab → anywhere rather
-  // than showing an empty first load).
+  // Wrap an exhausted shown-history pool without silently changing travel mode.
   useEffect(() => {
     if (!rankedEmpty) return;
     if (shownIds.length > 0) {
       setShownIds([]);
       return;
     }
-    if (!radiusTouchedRef.current) {
-      setSelectedRadius((prev) => nextWiderRadius(prev));
-    }
+    // Route failure must never silently change the user's selected mode.
   }, [rankedEmpty, shownIds]);
   const handleRunAgain = useCallback((): void => {
     setShownIds((prev) =>
@@ -269,11 +249,9 @@ export default function WhereNextFlow() {
     );
   }, []);
   const handleRadiusChange = useCallback((next: Radius): void => {
-    radiusTouchedRef.current = true;
     setSelectedRadius(next);
-    // Widening alone kept the same five closest bars, which looked like a
-    // dead button. A distance choice now deals a fresh matching batch.
-    setShownIds(lastRankedRef.current);
+    // Changing mode must not exclude the very bars that are closest.
+    setShownIds([]);
   }, []);
   const resetResultsControls = useCallback((): void => {
     setShownIds([]);
@@ -340,7 +318,6 @@ export default function WhereNextFlow() {
     // object records it with zero extra questions. The lib itself
     // refuses synthetic free-text seeds.
     recordVisit(seedBar.id);
-    radiusTouchedRef.current = false;
     setSelectedRadius(DEFAULT_RADIUS);
     // QA-6: a new seed is a new search — hood override and run-it-again
     // history reset with the radius.
@@ -424,9 +401,8 @@ export default function WhereNextFlow() {
     setStep({ kind: 'autoResults', coords: step.coords });
   };
 
-  // Effective coord for ranking: real geolocation if granted, else seed bar's coord.
+  // The displayed starting point owns both ranking and directions.
   const effectiveCoords = useMemo<Coords | null>(() => {
-    if (geo.coords) return geo.coords;
     if (step.kind === 'locating') return null;
     if (step.kind === 'askLocation') return null;
     if (step.kind === 'autoResults') return step.coords;
@@ -434,7 +410,7 @@ export default function WhereNextFlow() {
     if (step.kind === 'pickBar') return null;
     if (step.kind === 'freeTextSeed') return null;
     return { lat: step.seedBar.lat, lng: step.seedBar.lng };
-  }, [geo.coords, step]);
+  }, [step]);
 
   if (step.kind === 'askLocation') {
     return (
@@ -446,8 +422,8 @@ export default function WhereNextFlow() {
           Find bars near you
         </h1>
         <p className="text-muted text-sm mb-8 max-w-xs leading-relaxed">
-          See what&apos;s good within a short walk. Your location stays in
-          your browser — we never store it.
+          Find nearby bars. Route calculations ask separately before sharing
+          your starting point with our routing provider. We do not save a location history.
         </p>
         <button
           type="button"
@@ -678,8 +654,9 @@ export default function WhereNextFlow() {
         location={{
           kind: 'coords',
           coords: userCoordsForView,
-          band: geo.accuracyBand,
-          snappedTo: geo.snappedNeighborhood,
+          band: 'precise',
+          snappedTo: null,
+          originLabel: `From ${step.seedBar.name}`,
         }}
         minMilesExclusive={minMilesExclusive}
         maxMiles={selectedRadius.maxMiles}

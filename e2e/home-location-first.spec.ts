@@ -7,7 +7,7 @@
  *  3. The bottom nav shows an enlarged "Next Bar?" action in the center.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 import { denyGeolocation, grantGeolocation } from './helpers/geo';
 
 test.describe('Home — location-first', () => {
@@ -22,7 +22,7 @@ test.describe('Home — location-first', () => {
     await expect(page.getByRole('heading', { name: /Your next/i })).toBeVisible({
       timeout: 15_000,
     });
-    await expect(page.getByText(/Using your location/i)).toBeVisible();
+    await expect(page.getByText('Near you', { exact: true })).toBeVisible();
     expect(await page.locator('article').count()).toBeGreaterThan(0);
 
     // The manual seed prompt is NOT the surface shown when we can locate you.

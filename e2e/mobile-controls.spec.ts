@@ -24,7 +24,7 @@
  *
  * Runs on every project in playwright.config.ts (iPhone 13, Pixel 7).
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 
 /** Apple HIG minimum tap target. Also what a11y-mobile.spec.ts enforces. */

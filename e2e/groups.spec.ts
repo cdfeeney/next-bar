@@ -38,7 +38,7 @@
  * run. Both viewports, per the project rule.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 
 test.describe('Social · Groups', () => {
   test('the Groups & People control reveals the relationship surface', async ({

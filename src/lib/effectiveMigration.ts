@@ -391,7 +391,7 @@ export function definingMigration(name: string): string | null {
  * caller fails loudly rather than comparing against an empty string.
  */
 export function committedFunctionBody(file: string, name: string): string | null {
-  const raw = readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8').replace(/\r\n/g, '\n');
+  const raw = canonicalFunctionBody(readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8'));
   // Located in the normalised skeleton, sliced from the RAW text: the two are
   // the same length, and a header quoted inside a literal is not a definition.
   const { skeleton } = sqlView(raw);
@@ -413,6 +413,14 @@ export function committedFunctionBody(file: string, name: string): string | null
   const close = skeleton.indexOf(tag, open + tag.length);
   if (close < 0) return null;
   return raw.slice(open + tag.length, close);
+}
+
+/** Fold transport line endings only, on BOTH sides of the live body check.
+ * Older applies stored CRLF in pg_proc.prosrc. Preserve all other content,
+ * including comments, literals, lone CRs, and trailing whitespace.
+ */
+export function canonicalFunctionBody(body: string): string {
+  return body.replace(/\r\n/g, '\n');
 }
 
 /**

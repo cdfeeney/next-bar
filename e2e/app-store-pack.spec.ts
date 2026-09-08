@@ -7,7 +7,7 @@
  * context so the overlay actually appears.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 
 test.describe('21+ age gate', () => {
   // Virgin context: no pre-seeded ack.

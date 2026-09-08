@@ -14,7 +14,7 @@
  * by missing data.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 import { bars } from '../src/lib/bars';
 import { haversineMiles } from '../src/lib/distance';
@@ -108,21 +108,22 @@ test.describe('E3.2 distance chips', () => {
     await cab.click();
     await expect(cab).toHaveAttribute('aria-pressed', 'true');
     await expect(walkable).toHaveAttribute('aria-pressed', 'false');
-    await expect.poll(async () => {
-      const next = await cards.locator('h3').allTextContents();
-      return next.filter((name) => walkBatch.includes(name)).length;
-    }).toBe(0);
-    await expectDistanceBand(cards, RADIUS_WALK, RADIUS_CAB);
+    // Cab admits a wider taste-ranked pool, including nearby bars, even when
+    // route times are disabled. It must not reuse the nearest-15 walk shortlist.
+    await expect(cards.locator('h3')).not.toHaveText(walkBatch);
+    await expectDistanceBand(cards, null, RADIUS_CAB);
+    await expect(cards.first().getByText('Drive time unavailable')).toBeVisible();
     await expect(page).toHaveURL('/');
 
-    const cabBatch = await cards.locator('h3').allTextContents();
     await anywhere.click();
     await expect(anywhere).toHaveAttribute('aria-pressed', 'true');
-    await expect.poll(async () => {
-      const next = await cards.locator('h3').allTextContents();
-      return next.filter((name) => cabBatch.includes(name)).length;
-    }).toBe(0);
-    await expectDistanceBand(cards, RADIUS_CAB, null);
+    await page.getByText('About travel times', { exact: true }).click();
+    await expect(page.getByText('Matching across the full service area.', { exact: true })).toBeVisible();
+    await expect(cards).toHaveCount(5);
+    await expectDistanceBand(cards, null, null);
+    await expect(cards.first().getByText('Walk time unavailable')).toBeVisible();
+    await walkable.click();
+    await expect(cards.locator('h3')).toHaveText(walkBatch);
   });
 });
 

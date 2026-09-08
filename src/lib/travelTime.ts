@@ -1,33 +1,49 @@
-import {
-  UBER_MIN_PER_MILE,
-  WALK_BOUNDARY_MI,
-  WALK_MIN_PER_MILE,
-} from '@/lib/constants';
+import type { Coords } from '@/types';
 
-export function walkMinutes(miles: number): number {
-  return Math.max(1, Math.round(miles * WALK_MIN_PER_MILE));
+export type TravelMode = 'walking' | 'driving';
+export type RouteEstimate = { seconds: number; meters: number };
+export type BarTravel = {
+  id: string;
+  destination: Coords;
+  walking: RouteEstimate | null;
+  driving: RouteEstimate | null;
+};
+export type TravelSearch = {
+  routes: BarTravel[];
+  checked: number;
+  limited: boolean;
+  incomplete: boolean;
+};
+export const WALKABLE_SECONDS = 900;
+export const ROUTE_CANDIDATE_CAP = 15;
+export const ROUTE_RESULT_CAP = 5;
+
+export function isRouteEstimate(value: unknown): value is RouteEstimate {
+  if (!value || typeof value !== 'object') return false;
+  const r = value as RouteEstimate;
+  return Number.isFinite(r.seconds) && r.seconds >= 0 && Number.isFinite(r.meters) && r.meters >= 0;
 }
-
-export function uberMinutes(miles: number): number {
-  return Math.max(1, Math.round(miles * UBER_MIN_PER_MILE));
+export function isWalkable(route: RouteEstimate | null | undefined): boolean {
+  return isRouteEstimate(route) && route.seconds <= WALKABLE_SECONDS;
 }
-
-export type LeadCopy =
-  | { kind: 'walk'; minutes: number; text: string }
-  | { kind: 'uber'; minutes: number; text: string }
-  | { kind: 'neighborhood'; text: string };
-
-export function leadCopy(miles: number | null, neighborhood?: string): LeadCopy {
-  if (miles === null) {
-    return {
-      kind: 'neighborhood',
-      text: neighborhood ? `In ${neighborhood}` : 'Pick a neighborhood',
-    };
+export function routeCopy(route: RouteEstimate | null | undefined, mode: TravelMode): string {
+  const label = mode === 'walking' ? 'Walk' : 'Drive';
+  if (!isRouteEstimate(route)) return `${label} time unavailable`;
+  // Round up so a 901-second walk never displays as a 15-minute walk.
+  return `${label} ~${Math.max(1, Math.ceil(route.seconds / 60))} min · ${(route.meters / 1609.344).toFixed(1)} mi`;
+}
+/** Non-routed surfaces must not turn straight-line distance into an ETA. */
+export function leadCopy(miles: number | null, neighborhood?: string): {
+  kind: 'distance' | 'neighborhood'; text: string;
+} {
+  if (miles !== null && Number.isFinite(miles) && miles >= 0) {
+    return { kind: 'distance', text: `${miles.toFixed(1)} mi straight-line` };
   }
-  if (miles <= WALK_BOUNDARY_MI) {
-    const minutes = walkMinutes(miles);
-    return { kind: 'walk', minutes, text: `~${minutes} min walk` };
-  }
-  const minutes = uberMinutes(miles);
-  return { kind: 'uber', minutes, text: `~${minutes} min by Uber` };
+  return { kind: 'neighborhood', text: neighborhood ? `In ${neighborhood}` : 'Pick a neighborhood' };
+}
+/** Private directions only. Public share links deliberately do not call this. */
+export function directionsHref(origin: Coords | undefined, destination: Coords, mode: TravelMode): string {
+  const params = new URLSearchParams({ api: '1', destination: `${destination.lat},${destination.lng}`, travelmode: mode });
+  if (origin) params.set('origin', `${origin.lat},${origin.lng}`);
+  return `https://www.google.com/maps/dir/?${params}`;
 }

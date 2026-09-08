@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/test';
 
 const WANT_KEY = 'next-bar:list:want-to-go:v1';
 

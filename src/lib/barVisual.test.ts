@@ -1,11 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import type { VibeTag } from '@/types';
 import { TAG_VOCABULARY } from '@/lib/catalog';
-import { barVisual, barImageUrl,
-  barImageUrls, TAG_GLYPH } from '@/lib/barVisual';
+import { barVisual, TAG_GLYPH } from '@/lib/barVisual';
 
-// Minimal bar factory — barVisual only reads name/tags/priceTier and
-// barImageUrl only reads id/photoRef, so tests pass exactly those.
+// Minimal bar factory for visual identity.
 function visualInput(overrides: {
   name?: string;
   tags?: VibeTag[];
@@ -70,36 +68,5 @@ describe('barVisual', () => {
     expect(punctuated.glyph).toBe('PC');
     // Monogram path is deterministic too.
     expect(barVisual(visualInput({ name: 'Dead Rabbit', tags: [] }))).toEqual(twoWords);
-  });
-});
-
-describe('barImageUrl', () => {
-  it('returns the local photo path when photoRef is present', () => {
-    expect(barImageUrl({ id: 'attaboy', photoRef: 'places/abc/photos/def' }))
-      .toBe('/bar-photos/attaboy.webp');
-  });
-
-  it('returns null when photoRef is absent', () => {
-    expect(barImageUrl({ id: 'attaboy' })).toBeNull();
-    expect(barImageUrl({ id: 'attaboy', photoRef: undefined })).toBeNull();
-  });
-});
-
-describe('barImageUrls (carousel)', () => {
-  it('maps photoCount to legacy-first file names', () => {
-    expect(
-      barImageUrls({ id: 'attaboy', photoRef: 'places/x/photos/a', photoCount: 3 }),
-    ).toEqual([
-      '/bar-photos/attaboy.webp',
-      '/bar-photos/attaboy-2.webp',
-      '/bar-photos/attaboy-3.webp',
-    ]);
-  });
-
-  it('falls back to the single legacy photo pre-ingest, and [] with none', () => {
-    expect(
-      barImageUrls({ id: 'attaboy', photoRef: 'places/x/photos/a' }),
-    ).toEqual(['/bar-photos/attaboy.webp']);
-    expect(barImageUrls({ id: 'attaboy', photoRef: undefined })).toEqual([]);
   });
 });

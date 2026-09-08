@@ -14,6 +14,11 @@ import { denyGeolocation } from './helpers/geo';
 // live-clock counts nondeterministic).
 const FRIDAY_NIGHT = new Date('2026-07-24T23:00:00');
 
+test('retired cached photo URLs return 404', async ({ request }) => {
+  const response = await request.get('/bar-photos/attaboy.webp');
+  expect(response.status()).toBe(404);
+});
+
 /**
  * The legacy re-hosted Google photo files (src/lib/mediaPolicy.ts,
  * `legacy-google-cached`) are the non-compliant state Phase 1 exists to stop.
@@ -52,8 +57,9 @@ test.describe('Hero result card', () => {
     const heading = cards.first().getByRole('heading');
     await expect(heading).toBeVisible();
 
-    // The meta line below keeps the loud walk/ride time.
-    await expect(cards.first().getByText(/min (walk|by Uber)|In /)).toBeVisible();
+    // Without an activated route service, never substitute straight-line minutes.
+    await expect(cards.first().getByText('Walk time unavailable')).toBeVisible();
+    await expect(cards.first().getByText('Drive time unavailable')).toBeVisible();
 
     // Tap the hero → lightbox (carousel + hours).
     await cards

@@ -9,6 +9,7 @@ import { nycNightKey } from './nightKey';
 
 import {
   GUARDED_FUNCTIONS,
+  canonicalFunctionBody,
   committedFunctionBody,
   definingMigration,
   migrationChecksum,
@@ -620,6 +621,9 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
     return ids;
   }
 
+  // These two cap cases create 22 identities and issue 50+ sequential remote
+  // queries. The 5s default timed out mid-transaction on 2026-09-06; use the
+  // same bounded live-DB budget as the ledger checks, without retries.
   it('enforces the 20-member cap, and lets a pending invitee convert AT the boundary (criterion 8)', async () => {
     await inRollback(async () => {
       const ids = await makeIdentities(22);
@@ -667,7 +671,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       const still = await db.query('select public.night_out_seat_count($1) as n', [planId]);
       expect(still.rows[0].n, 'converting an invite consumed a new seat').toBe(20);
     });
-  });
+  }, 30_000);
 
   it('refuses a declined member rejoining a full plan, and lets them in once a seat frees', async () => {
     await inRollback(async () => {
@@ -722,7 +726,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       );
       expect(back2[0].ok, 'a declined member could not rejoin a plan with room').toBe(true);
     });
-  });
+  }, 30_000);
 
   it('get_my_night_outs shows each caller only their own memberships (criterion 3)', async () => {
     await inRollback(async () => {
@@ -1282,15 +1286,16 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
    * comparison of the text that actually runs — the evidence the round-8 review
    * asked for (Codex, medium: "closing it requires the raw applied bytes").
    *
-   * Only line endings are folded, and only on the committed side, because the
-   * server stores LF. Nothing else is normalised: not case, not whitespace, not
-   * comments. A one-character difference fails.
+   * Only CRLF line endings are folded, on BOTH sides. Older Windows applies
+   * stored CRLF in prosrc (measured 2026-09-06 on all five guarded functions).
+   * Nothing else is normalised: not case, whitespace, comments, or literals.
+   * This proves body identity up to CRLF/LF, not raw byte identity.
    */
   // 30s, not the 5s default: this scan is O(migrations) in both file reads and
   // round trips to staging, so it crossed the default the moment the
   // convergence brought 0060 in. A timeout that fails on a growing ledger
   // reports a slow suite as a broken database.
-  it('every guarded function RUNS the exact text and attributes this repo commits', async () => {
+  it('every guarded function RUNS the committed body (up to CRLF/LF) and exact security attributes', async () => {
     // prosecdef and proconfig too, not only the body. A function can be replaced
     // with a byte-identical body and no `security definer` or no
     // `set search_path = public` — prosrc is unchanged, the signature is
@@ -1318,7 +1323,7 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       if (committed === null) return [name, `body not locatable in ${file}`];
       const row = applied.get(name);
       if (!row) return [name, 'not installed on this database'];
-      if (row.applied !== committed) return [name, `body DIFFERS from ${file}`];
+      if (canonicalFunctionBody(row.applied) !== committed) return [name, `body DIFFERS from ${file}`];
       if (!row.definer) return [name, 'installed WITHOUT security definer'];
       if (row.config !== 'search_path=public') {
         return [name, `search_path is "${row.config}", not public`];

@@ -18,7 +18,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { Bar } from '@/types';
-import { barImageUrls } from '@/lib/barVisual';
 import { useBars } from '@/lib/useBars';
 import {
   WANT_TO_GO_KEY,
@@ -48,7 +47,7 @@ type DiscoverCardProps = {
 };
 
 /**
- * The top card of the stack. Mounted with key={bar.id} so drag + photo
+ * The top card of the stack. Mounted with key={bar.id} so drag
  * state reset per bar. Drag is raw pointer events (no library): translate
  * + slight rotate while dragging; releasing past ±SWIPE_COMMIT_PX commits
  * (right = save, left = skip), anything less springs back.
@@ -58,10 +57,6 @@ function DiscoverCard({ bar, onSave, onSkip }: DiscoverCardProps) {
   const [dragging, setDragging] = useState(false);
   const startXRef = useRef(0);
   const pointerIdRef = useRef<number | null>(null);
-
-  const photo = barImageUrls(bar)[0] ?? null;
-  const [photoFailed, setPhotoFailed] = useState(false);
-  const showPhoto = photo !== null && !photoFailed;
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     // Primary pointer only; ignore a second touch mid-drag.
@@ -102,21 +97,9 @@ function DiscoverCard({ bar, onSave, onSkip }: DiscoverCardProps) {
       onPointerUp={(e) => endDrag(e, true)}
       onPointerCancel={(e) => endDrag(e, false)}
     >
-      {showPhoto ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={photo}
-          alt=""
-          draggable={false}
-          className="absolute inset-0 w-full h-full object-cover"
-          onError={() => setPhotoFailed(true)}
-        />
-      ) : (
-        // Glyph fallback: BarVisualTile centered on the card surface.
-        <div className="absolute inset-0 flex items-center justify-center">
-          <BarVisualTile bar={bar} size={56} photoDisabled={photoFailed} />
-        </div>
-      )}
+      <div className="absolute inset-0 flex items-center justify-center">
+        <BarVisualTile bar={bar} size={56} />
+      </div>
 
       {/* Bottom overlay — name never truncates (wraps instead). */}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-5 pt-16 pb-5 pointer-events-none">

@@ -14,7 +14,7 @@ export const metadata: Metadata = {
   description: 'How Next Bar handles your data.',
 };
 
-const UPDATED = 'September 3, 2026';
+const UPDATED = 'September 6, 2026';
 
 export default function PrivacyPage(): JSX.Element {
   return (
@@ -67,9 +67,14 @@ export default function PrivacyPage(): JSX.Element {
               your device.
             </li>
             <li>
-              <strong>Location:</strong> only when you tap a
-              &ldquo;near&nbsp;me&rdquo; feature, only in the browser, only
-              while you use it. We never store your location on our servers.
+              <strong>Location:</strong> nearby suggestions use your browser&apos;s
+              location permission or a starting point you choose. Travel times
+              calculate automatically: that starting point and candidate
+              destinations pass through our server to openrouteservice. Next Bar
+              does not save a precise-location history or include your origin in
+              public share links. Opening directions sends the starting point and
+              destination to Google Maps. External providers handle requests under
+              their own privacy policies; route estimates stay only in the active view.
             </li>
           </ul>
         </Block>

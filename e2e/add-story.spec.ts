@@ -46,7 +46,7 @@
  * and the audience surface offers no group feature that does not exist.
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/test';
 import {
   CLAIRE,
   CLAIRE_ID,

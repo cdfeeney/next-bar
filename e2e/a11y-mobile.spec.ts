@@ -14,7 +14,7 @@
  * contrast ratios in src/lib/paletteContrast.test.ts.)
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 
 /** The five canonical tabs. A control is no less real on one than another. */

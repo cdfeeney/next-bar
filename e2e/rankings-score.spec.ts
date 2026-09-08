@@ -19,7 +19,7 @@
  *   - The legacy-score recovery hint vanishing for unscored bars
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 
 type LocalRating = {

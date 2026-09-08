@@ -20,7 +20,7 @@
  * an opacity-0 element still counts as "visible" to Playwright, so
  * toBeHidden() would pass before the fix too and discriminate nothing.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/test';
 import { denyGeolocation } from './helpers/geo';
 
 const SEARCH = { name: 'Search bars' };

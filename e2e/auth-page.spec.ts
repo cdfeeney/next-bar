@@ -22,7 +22,7 @@
  * event layer handles consistently on both engines.
  */
 
-import { test, expect, type Locator, type Page, type Route } from '@playwright/test';
+import { test, expect, type Locator, type Page, type Route } from './helpers/test';
 
 async function typeInto(input: Locator, value: string): Promise<void> {
   await input.click();

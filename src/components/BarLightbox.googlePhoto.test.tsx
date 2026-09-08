@@ -7,7 +7,7 @@ vi.mock('@/lib/mediaPolicy', () => ({
   // it is about to paint, which is the only place a one-frame mis-attribution
   // is observable. `rerender` flushes effects inside act(), so a post-swap DOM
   // assertion cannot see it (measured: such a test passes against the bug).
-  resolveMedia: vi.fn(() => ({ source: 'google-live', placeId: 'ChIJbar54' })),
+  resolveMedia: vi.fn((): import('@/lib/mediaPolicy').MediaDecision => ({ source: 'google-live', placeId: 'ChIJbar54' })),
 }));
 
 vi.mock('@/lib/barReviews', () => ({
@@ -38,6 +38,14 @@ const BAR: Bar = {
   lastVerified: '2026-08-13',
   googlePlaceId: 'ChIJbar54',
 };
+
+test('explains missing photos instead of silently removing the photo section', async () => {
+  vi.mocked(resolveMedia).mockReturnValue({ source: 'glyph' });
+  render(<BarLightbox bar={BAR} onClose={() => {}} />);
+  expect(await screen.findByText('No photos available for this bar yet.')).toBeVisible();
+  expect(screen.queryByTestId('live-google-photo')).toBeNull();
+  vi.mocked(resolveMedia).mockReturnValue({ source: 'google-live', placeId: 'ChIJbar54' });
+});
 
 /**
  * V8-1a: BarLightbox is the ONE shared bar-detail surface — Map, Rankings and

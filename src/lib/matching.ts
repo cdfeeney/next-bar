@@ -60,6 +60,8 @@ export type MatchesArgs = {
   /** Exclusive lower edge for a distance band; null keeps nearby bars. */
   minMilesExclusive?: number | null;
   maxMiles: number | null;
+  /** Broader travel searches rank the admitted pool together; exact miles still break ties. */
+  distanceBands?: boolean;
   bars: Bar[];
   excludeIds?: string[];
   maxResults?: number;
@@ -200,6 +202,7 @@ export function matches(args: MatchesArgs): Bar[] {
     preferredNeighborhoods,
     minMilesExclusive = null,
     maxMiles,
+    distanceBands = true,
     bars,
     excludeIds,
     maxResults,
@@ -285,8 +288,8 @@ export function matches(args: MatchesArgs): Bar[] {
   const milesOf = coords
     ? (bar: Bar) => haversineMiles(coords, bar)
     : () => 0;
-  const bands: Bar[][] = coords ? [[], [], []] : [pool];
-  if (coords) {
+  const bands: Bar[][] = coords && distanceBands ? [[], [], []] : [pool];
+  if (coords && distanceBands) {
     for (const bar of pool) {
       const mi = milesOf(bar);
       bands[mi <= RADIUS_WALK ? 0 : mi <= RADIUS_CAB ? 1 : 2].push(bar);

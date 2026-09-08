@@ -1,13 +1,13 @@
 {
-  "ledger_version": "3.1.0",
+  "ledger_version": "3.1.1",
   "ledger_status": "founder-approved",
-  "generated_at": "2026-08-23",
+  "generated_at": "2026-09-07",
   "last_owner_approval": {
     "approver": "founder",
-    "approved_on": "2026-08-23",
-    "contract_version": "3.1.0",
-    "statement": "I approve and acknowledge V8 contract 3.1.0 at pre-stamp commit 0855948374d0d1483cf304e1363d2c5fd0d8d8d0, including CC-01, CC-02, D-C-37, D-C-38 and D-C-39.",
-    "scope": "Approves V8 contract version 3.1.0 in full: the nine decisions of the 3.0.0 approval, the two correction-only repairs CC-01 and CC-02, and the three newly approved bindings D-C-37, D-C-38 and D-C-39.",
+    "approved_on": "2026-09-07",
+    "contract_version": "3.1.1",
+    "statement": "Operator approved the 2026-09-07 execution backlog and said: Yea tes thats good can we do that lets start executing - no spending model call limit and I will be back at 8am tomoorw",
+    "scope": "Carry forward prior approvals; approve only the new recommendation correction, V9 audit, and bounded overnight execution described in the 2026-09-07 delta.",
     "decisions_approved": [
       "D-C-19 (revised)",
       "D-C-29",
@@ -20,7 +20,9 @@
       "D-C-36",
       "D-C-37",
       "D-C-38",
-      "D-C-39"
+      "D-C-39",
+      "D-C-40",
+      "D-C-41"
     ],
     "corrections_approved": [
       {
@@ -71,12 +73,12 @@
       }
     ],
     "approved_contract_identity": {
-      "contract_version": "3.1.0",
+      "contract_version": "3.1.1",
       "branch": "docs/v8-contract-3.1.0-20260823",
-      "pre_stamp_commit": "0855948374d0d1483cf304e1363d2c5fd0d8d8d0",
-      "prd_sha256": "734ca30b9efc6da71fde65449d4e0f3d97c5ff38304a901be9e98e897147dba9",
-      "delta_sha256": "ce10538451c2c4880fe1297e88e8b402bcc898d88a405c6e42ac88372c5b58b3",
-      "decision_record_sha256": "8b6f30eea1974d63bb7dccc2271ef9799a7c6e6ff90f072f8285c5c188dac64e",
+      "pre_stamp_commit": "fac12ac84f310580aea26f6e9ddc13ba971ebc10",
+      "prd_sha256": "4a0d39c7664e7b24fdd5d1471302b49baecadc5d059849313e849c7c3a006576",
+      "delta_sha256": "bb99f2fe3e23e042f108c00e106ec3941c134f0903146d4d6b49cf352f719c5e",
+      "decision_record_sha256": "a736adbd93442cc860f06177656476864994547f38b575f7d879f8fda384190d",
       "design_reference_readme_sha256": "7698b0bb9e2e99f5df039a5524f1e521af5fa23c8c4a2cddf73a7db66970fd34",
       "ledger_sha256_pre_stamp": "8ad1131719e857a45d8bad39cb4798b97d661653bdd5e28dde22a67e2733b45d",
       "validator_sha256_at_acknowledgment": "c84a47959e0363a8032dfa3303eeac309f730ca1a6e98e04c1e259612745030c",
@@ -85,7 +87,7 @@
       "approved_canvas_count": 16,
       "approved_canvas_digests_unchanged": true
     },
-    "authorization_note": "Approval stamping and validator consistency repair only. It does NOT authorize goals, implementation, migrations, staging, integration, workers, reviews, push, PR, deployment, publication, or TestFlight.",
+    "authorization_note": "Authorizes preparation and isolated workers for the stated backlog until 2026-09-08 08:00 EDT. Push remains conditional on passing release evidence and occurs outside the unattended worker protocol.",
     "ledger_self_digest_note": "The ledger cannot contain its own digest. The post-stamp ledger digest is emitted by the validator and recorded with the approval commit."
   },
   "release_id": "V8",
@@ -94,18 +96,18 @@
   "contract": {
     "prd": {
       "path": "docs/V8-PRD-2026-08-13.md",
-      "version": "2026-08-13 as amended 2026-08-21 and 2026-08-23",
-      "sha256": "734ca30b9efc6da71fde65449d4e0f3d97c5ff38304a901be9e98e897147dba9"
+      "version": "2026-08-13 amended through 2026-09-07",
+      "sha256": "4a0d39c7664e7b24fdd5d1471302b49baecadc5d059849313e849c7c3a006576"
     },
     "delta": {
-      "path": "docs/V8-PRD-DELTA-2026-08-23.md",
-      "version": "v8.4, founder-approved and frozen 2026-08-23",
-      "sha256": "ce10538451c2c4880fe1297e88e8b402bcc898d88a405c6e42ac88372c5b58b3"
+      "path": "docs/V8-PRD-DELTA-2026-09-07.md",
+      "version": "3.1.1 operator-approved recommendation correction",
+      "sha256": "bb99f2fe3e23e042f108c00e106ec3941c134f0903146d4d6b49cf352f719c5e"
     },
     "decision_record": {
-      "path": "docs/V8-DECISIONS-2026-08-23.md",
-      "version": "revision 4, founder-approved 2026-08-23",
-      "sha256": "8b6f30eea1974d63bb7dccc2271ef9799a7c6e6ff90f072f8285c5c188dac64e"
+      "path": "docs/V8-DECISIONS-2026-09-07.md",
+      "version": "3.1.1 prior decisions plus D-C-40 and D-C-41",
+      "sha256": "a736adbd93442cc860f06177656476864994547f38b575f7d879f8fda384190d"
     },
     "design_reference_readme": {
       "path": "docs/design-reference/README.md",
@@ -113,12 +115,12 @@
     },
     "validator": {
       "path": "scripts/check-release-contract.mjs",
-      "sha256": "4a06253092e243a3015fd210e42c442e37dead03a30a741a14276dd0b1f1730b"
+      "sha256": "351cb0f3821b078198b863104d12a84d801b67bdc0dd9aeafc6a93920863ec53"
     },
     "ledger_self_digest_note": "A file cannot contain its own digest. The validator emits this ledger's SHA-256 on every run; record that value with the founder approval to freeze the whole contract.",
     "validator_test": {
       "path": "scripts/check-release-contract.test.ts",
-      "sha256": "fc1ef0ecc18ad697c3e94aa404c981ff25c620128cdfa9ed7cd0108bf8e0d0e8"
+      "sha256": "73b9af7f9ac3b873f1b8c541f98323f21ba2bfe0f169e36dbb7572d663622732"
     }
   },
   "approved_artifact_manifest": {
@@ -6199,6 +6201,95 @@
         }
       ],
       "coverage": "complete"
+    },
+    {
+      "requirement_id": "V8-R-NXT-008",
+      "kind": "action",
+      "title": "Travel choices recompute recommendations",
+      "sources": [
+        "operator:2026-09-07 overnight queue",
+        "prd:docs/V8-PRD-DELTA-2026-09-07.md"
+      ],
+      "actor": "any user requesting Next Bar recommendations",
+      "entry_point": "Next Bar results travel controls and applied vibe selection",
+      "behavior": "Recompute the intended ranked pool and routes for Walkable, Worth a cab and Anywhere; late prior-selection responses cannot overwrite current results.",
+      "states": [
+        "no explicit vibes",
+        "applied vibes",
+        "selection changed",
+        "results loading",
+        "empty eligible pool",
+        "route unavailable"
+      ],
+      "audience": "current user",
+      "trust_boundary": "local selection and validated route responses; no new authorization surface",
+      "data_owner": "current user; existing catalog owner unchanged",
+      "retention": "existing transient selection lifecycle; no new persistence",
+      "failure_recovery": "Keep current selection authoritative; show fewer eligible results or honest empty/unavailable state; never invent route certainty or relax vibe eligibility.",
+      "accessibility": "Preserve labeled controls, selected state, keyboard activation and both mobile viewports.",
+      "exclusions": [
+        "no new Google APIs",
+        "no score-based exclusion",
+        "no changes to saved quiz prior",
+        "no threshold invention"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-40",
+      "blocked_on": null,
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [
+        "src/components/WhereNextFlow.tsx",
+        "src/components/ResultsView.tsx",
+        "src/hooks/useTravelRoutes.ts",
+        "src/lib/routeSearch.ts"
+      ],
+      "evidence": [],
+      "coverage": "contradicted"
+    },
+    {
+      "requirement_id": "V8-R-NXT-009",
+      "kind": "action",
+      "title": "Explicit vibe eligibility and selected-count badge",
+      "sources": [
+        "operator:2026-09-07 overnight queue",
+        "prd:docs/V8-PRD-DELTA-2026-09-07.md"
+      ],
+      "actor": "any user requesting Next Bar recommendations",
+      "entry_point": "Next Bar results travel controls and applied vibe selection",
+      "behavior": "No active explicit vibes: no badge. N distinct selections: numerator is intersection and denominator N; eligibility requires at least max(1,N-1) matches. No fallback may reintroduce rejected bars. Clearing restores normal eligibility.",
+      "states": [
+        "no explicit vibes",
+        "applied vibes",
+        "selection changed",
+        "results loading",
+        "empty eligible pool",
+        "route unavailable"
+      ],
+      "audience": "current user",
+      "trust_boundary": "local selection and validated route responses; no new authorization surface",
+      "data_owner": "current user; existing catalog owner unchanged",
+      "retention": "existing transient selection lifecycle; no new persistence",
+      "failure_recovery": "Keep current selection authoritative; show fewer eligible results or honest empty/unavailable state; never invent route certainty or relax vibe eligibility.",
+      "accessibility": "Preserve labeled controls, selected state, keyboard activation and both mobile viewports.",
+      "exclusions": [
+        "no new Google APIs",
+        "no score-based exclusion",
+        "no changes to saved quiz prior",
+        "no threshold invention"
+      ],
+      "status": "approved",
+      "decision_ref": "D-C-41",
+      "blocked_on": null,
+      "goal_ids": [],
+      "acceptance_refs": [],
+      "implementation_paths": [
+        "src/lib/matching.ts",
+        "src/components/ResultsView.tsx",
+        "src/components/ResultCard.tsx"
+      ],
+      "evidence": [],
+      "coverage": "contradicted"
     }
   ],
   "post_approval_finalization": {
@@ -6345,6 +6436,92 @@
       "contract_version": "3.0.0",
       "superseded_by": "the 3.1.0 approval of 2026-08-23 recorded in last_owner_approval",
       "provenance_note": "Verbatim as stamped for contract 3.0.0. Retained unchanged so the record of what was approved then survives the 3.1.0 approval."
+    },
+    {
+      "approver": "founder",
+      "approved_on": "2026-08-23",
+      "contract_version": "3.1.0",
+      "statement": "I approve and acknowledge V8 contract 3.1.0 at pre-stamp commit 0855948374d0d1483cf304e1363d2c5fd0d8d8d0, including CC-01, CC-02, D-C-37, D-C-38 and D-C-39.",
+      "scope": "Approves V8 contract version 3.1.0 in full: the nine decisions of the 3.0.0 approval, the two correction-only repairs CC-01 and CC-02, and the three newly approved bindings D-C-37, D-C-38 and D-C-39.",
+      "decisions_approved": [
+        "D-C-19 (revised)",
+        "D-C-29",
+        "D-C-30",
+        "D-C-31",
+        "D-C-32",
+        "D-C-33",
+        "D-C-34",
+        "D-C-35",
+        "D-C-36",
+        "D-C-37",
+        "D-C-38",
+        "D-C-39"
+      ],
+      "corrections_approved": [
+        {
+          "id": "CC-01",
+          "requirement_id": "V8-R-STO-016",
+          "field": "behavior",
+          "note": "clerical: restated the already-settled D-C-33 deletion rule; no settled meaning changed"
+        },
+        {
+          "id": "CC-02",
+          "requirement_id": "V8-R-CMP-003",
+          "field": "failure_recovery",
+          "note": "clerical: restated the already-settled D-C-33 deletion rule; no settled meaning changed"
+        }
+      ],
+      "bindings_approved": [
+        {
+          "id": "PB-01",
+          "decision_id": "D-C-37",
+          "summary": "Story, Feed and pin named-group audiences resolve to the selected group intersected with the poster's or pinner's mutual friends; the persistent Group-chat destination retains its fixed Group membership."
+        },
+        {
+          "id": "PB-02",
+          "decision_id": "D-C-38",
+          "summary": "One Group administrator; on leave or account deletion administration transfers to the longest-standing remaining member, tie-broken by lowest member profile id; an empty Group is deleted."
+        },
+        {
+          "id": "PB-03",
+          "decision_id": "D-C-39",
+          "summary": "The 4:00 AM boundary uses America/New_York and the existing DST-aware night-key convention."
+        }
+      ],
+      "v9_deferrals_approved": [
+        {
+          "requirement_id": "V8-R-ACC-003",
+          "subject": "Badges and the Persona card",
+          "decision": "D-C-24"
+        },
+        {
+          "requirement_id": "V8-R-FEED-007",
+          "subject": "Automatic ranking-event Feed rows",
+          "decision": "D-C-35"
+        },
+        {
+          "requirement_id": "V8-R-NO-010",
+          "subject": "Native Photos-library export or save, unconditional",
+          "decision": "D-C-19"
+        }
+      ],
+      "approved_contract_identity": {
+        "contract_version": "3.1.0",
+        "branch": "docs/v8-contract-3.1.0-20260823",
+        "pre_stamp_commit": "0855948374d0d1483cf304e1363d2c5fd0d8d8d0",
+        "prd_sha256": "734ca30b9efc6da71fde65449d4e0f3d97c5ff38304a901be9e98e897147dba9",
+        "delta_sha256": "ce10538451c2c4880fe1297e88e8b402bcc898d88a405c6e42ac88372c5b58b3",
+        "decision_record_sha256": "8b6f30eea1974d63bb7dccc2271ef9799a7c6e6ff90f072f8285c5c188dac64e",
+        "design_reference_readme_sha256": "7698b0bb9e2e99f5df039a5524f1e521af5fa23c8c4a2cddf73a7db66970fd34",
+        "ledger_sha256_pre_stamp": "8ad1131719e857a45d8bad39cb4798b97d661653bdd5e28dde22a67e2733b45d",
+        "validator_sha256_at_acknowledgment": "c84a47959e0363a8032dfa3303eeac309f730ca1a6e98e04c1e259612745030c",
+        "validator_test_sha256_at_acknowledgment": "aab851b2d5260659863e6f5b018ee7cc97422d5cb6917f9f3770d47b94556ab8",
+        "validator_repair_note": "This approval explicitly authorizes a validator consistency repair, so scripts/check-release-contract.mjs and its test necessarily digest differently after stamping. The values above are what was acknowledged; contract.validator and contract.validator_test carry the current values. The validator therefore binds the four narrative contract parts by identity and deliberately excludes itself and its test from that equality.",
+        "approved_canvas_count": 16,
+        "approved_canvas_digests_unchanged": true
+      },
+      "authorization_note": "Approval stamping and validator consistency repair only. It does NOT authorize goals, implementation, migrations, staging, integration, workers, reviews, push, PR, deployment, publication, or TestFlight.",
+      "ledger_self_digest_note": "The ledger cannot contain its own digest. The post-stamp ledger digest is emitted by the validator and recorded with the approval commit."
     }
   ]
 }

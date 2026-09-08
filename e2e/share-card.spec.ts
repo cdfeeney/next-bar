@@ -7,7 +7,7 @@
  * we assert presence, not the native sheet).
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 
 test.describe('Shareable pick cards', () => {
   test('share page leads with the in-product CTA, keeps Maps secondary', async ({

@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useMemo } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, ZoomControl, useMap } from 'react-leaflet';
+import { useEffect, useMemo, useState } from 'react';
+import { MapContainer, Marker, Popup, ZoomControl, useMap } from 'react-leaflet';
 import L from 'leaflet';
+import { maplibreGL } from '@maplibre/maplibre-gl-leaflet';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import 'leaflet-gesture-handling/dist/leaflet-gesture-handling.css';
 import { GestureHandling } from 'leaflet-gesture-handling';
-import { haversineMiles } from '@/lib/distance';
-import { leadCopy } from '@/lib/travelTime';
 import { displayHood } from '@/lib/hoodDisplay';
 import type { Bar, Coords } from '@/types';
 
@@ -53,6 +53,33 @@ type BarMapProps = {
 };
 
 const NYC_FALLBACK_CENTER: Coords = { lat: 40.7250, lng: -73.9850 };
+
+function DarkBasemap() {
+  const map = useMap();
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    const layer = maplibreGL({
+      style: 'https://tiles.openfreemap.org/styles/dark',
+      attributionControl: {
+        customAttribution: '<a href="https://openfreemap.org/">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
+      },
+    });
+    try {
+      layer.addTo(map);
+      layer.getMaplibreMap().on('error', () => setFailed(true));
+    } catch {
+      setFailed(true);
+    }
+    return () => {
+      if (map.hasLayer(layer)) map.removeLayer(layer);
+    };
+  }, [map]);
+  return failed ? (
+    <p role="status" className="absolute top-40 left-2 right-2 z-[500] rounded bg-black/90 p-2 text-center text-xs text-white">
+      Street map could not load. Check your connection and reload.
+    </p>
+  ) : null;
+}
 
 const barIcon = L.divIcon({
   className: '',
@@ -242,6 +269,10 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
           <MapContainer
             center={[center.lat, center.lng]}
             zoom={13}
+            minZoom={1}
+            maxZoom={20}
+            maxBounds={[[-85, -Infinity], [85, Infinity]]}
+            maxBoundsViscosity={1}
             preferCanvas
             scrollWheelZoom={false}
             doubleClickZoom={false}
@@ -266,10 +297,7 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
               bar={focusBarId ? (bars.find((b) => b.id === focusBarId) ?? null) : null}
               nonce={focusNonce}
             />
-            <TileLayer
-              url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-              attribution="&copy; OpenStreetMap &copy; CARTO"
-            />
+            <DarkBasemap />
             {userCoords && (
               <Marker position={[userCoords.lat, userCoords.lng]} icon={userIcon}>
                 <Popup>You are here</Popup>
@@ -293,10 +321,6 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
                 : isHighlighted
                 ? highlightIcon
                 : barIcon;
-              const miles = userCoords
-                ? haversineMiles(userCoords, { lat: bar.lat, lng: bar.lng })
-                : null;
-              const travelLabel = miles !== null ? leadCopy(miles, displayHood(bar.neighborhood)).text : null;
               return (
                 <Marker
                   key={bar.id}
@@ -306,11 +330,7 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
                 >
                   <Popup>
                     <div className="font-bold">{bar.name}</div>
-                    <div className="text-xs">
-                      {travelLabel
-                        ? `${displayHood(bar.neighborhood)} · ${travelLabel}`
-                        : displayHood(bar.neighborhood)}
-                    </div>
+                    <div className="text-xs">{displayHood(bar.neighborhood)}</div>
                   </Popup>
                 </Marker>
               );

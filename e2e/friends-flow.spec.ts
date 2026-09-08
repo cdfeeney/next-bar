@@ -13,7 +13,7 @@
  * back to the default set (claire, john) — see useFollows.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/test';
 
 /**
  * V8-1 criterion 11 + 19 — Social is the approved surface from

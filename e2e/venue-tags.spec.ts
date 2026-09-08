@@ -11,11 +11,11 @@
  * iPhone 13 / Pixel 7 projects, so every assertion here is viewport-agnostic.
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 // catalogTest serves the FULL bars catalog from a mocked Supabase route, so a
 // named venue's tag set is fixed rather than whatever the emergency core set
 // happens to hold.
-import { test as catalogTest } from './helpers/catalogTest';
+import { test } from './helpers/catalogTest';
 import { denyGeolocation } from './helpers/geo';
 import { bars } from '../src/lib/bars';
 import { displayTag, topVenueTags } from '../src/lib/tagDisplay';
@@ -37,7 +37,13 @@ async function openLightbox(page: Page) {
   await page.getByRole('button', { name: /Attaboy/ }).click();
   const cards = page.locator('article').filter({ hasText: /Vibe match/i });
   await expect(cards).toHaveCount(5);
-  await cards.first().getByRole('button', { name: /See photos and hours/i }).click();
+  // Layout coverage needs a venue with known tags; untagged venues legitimately
+  // omit this section. Recommendation order is covered in vibe-tweak-ranking.
+  const taggedName = (await cards.locator('h3').allInnerTexts())
+    .find(name => bars.some(bar => name.endsWith(bar.name) && topVenueTags(bar.tags).length > 0));
+  expect(taggedName, 'the fixture must recommend a venue with displayable tags').toBeTruthy();
+  await cards.filter({ has: page.getByRole('heading', { name: taggedName!, exact: true }) })
+    .getByRole('button', { name: /See photos and hours/i }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
   // The Hours card is client-only state: BarLightbox sets `rows` in its mount
@@ -154,7 +160,7 @@ test.describe('venue tags in the bar lightbox', () => {
   // catalog, so the imported array is the same data the app rendered.
   // openLightbox takes a Page, so it works under either fixture — no need to
   // re-inline the seed steps here.
-  catalogTest('renders exactly what the priority rule returns, in order', async ({ page }) => {
+  test('renders exactly what the priority rule returns, in order', async ({ page }) => {
     const dialog = await openLightbox(page);
 
     const name = await dialog.getByRole('heading', { level: 2 }).innerText();

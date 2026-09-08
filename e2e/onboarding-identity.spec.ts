@@ -34,7 +34,7 @@ import {
   type Locator,
   type Page,
   type Route,
-} from '@playwright/test';
+} from './helpers/test';
 
 const USER_ID = '11111111-2222-3333-4444-555555555555';
 const USER_EMAIL = 'connor@example.com';
