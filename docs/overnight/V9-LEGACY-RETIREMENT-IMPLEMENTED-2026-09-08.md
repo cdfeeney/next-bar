@@ -39,10 +39,17 @@ and by this goal's stored write scope.
 | S5 | `src/lib/goingList.test.ts` | 36 | test |
 | S5 | `src/components/ResultsHoodChips.tsx` | 63 | product |
 
-**One further tracked edit, and only one:** a single line removed from
-`src/lib/storageInventory.test.ts`. See §6 — it is a live guard test that the
-deletion itself told us to update, and the guard's own failure message named the
-edit.
+**Two further tracked edits, both test-only, both authorised by the lead as
+verification repair inside this same task (§6, §6a):**
+
+1. one line removed from `src/lib/storageInventory.test.ts` — a live guard the
+   deletion itself told us to update, in the guard's own failure message;
+2. one line added to `e2e/night-out.spec.ts:1733` — a pinned browser clock, so
+   that test's "tonight at 23:00" fixture is a future deadline at every hour of
+   the day rather than only before 23:00.
+
+Neither touches production code. Both are recorded on the goal with
+`append-note` under this session's lease.
 
 No replacement module, no abstraction and no compatibility shim was introduced.
 This is deletion, per the Ponytail skill recorded on the goal (`ponytail`
@@ -196,6 +203,60 @@ division of labour, and it worked.
 
 ---
 
+## 6a. The failure the deletion did NOT cause — a clock-dependent e2e fixture
+
+The first full production gate on commit `7366b06` finished **2 failed / 2
+skipped / 718 passed (11.7m)**. Both failures were the same assertion, on both
+viewports:
+
+```
+e2e/night-out.spec.ts:1773
+  Expected pattern: /in about/i
+  Received string:  "Voting closes immediately."
+```
+
+The test picks a deadline of **tonight at 23:00** and then asserts the row
+saying how long is left. `src/lib/nightOutPlan.ts:41` —
+`remainingLabel(iso, now = Date.now())` — returns `'immediately'` the moment
+`minutes <= 0`. Read off the real clock, that fixture is a future deadline
+before 23:00 and a past one after it. The gate started at 23:35 EDT and the two
+tests reached the assertion at ~23:47.
+
+**Controlled A/B, one run per arm, same commit `7366b06`, same command
+(`node scripts/run-e2e-release.mjs e2e/night-out.spec.ts --grep "three rows are
+editable in place"`), the injected browser clock the only difference:**
+
+| Arm | Injected clock | Result |
+|---|---|---|
+| late | `2026-07-24T23:30:00` | **2 failed**, both viewports, `Received string: "Voting closes immediately."` — exit 1 |
+| early | `2026-07-24T20:00:00` | **6 passed**, exit 0, 48.6s |
+
+That isolates the cause to wall-clock time, not to this diff: nothing deleted
+here is imported by `nightOutPlan.ts` or `NightOutPlanFields.tsx`.
+
+**Fix — one line, test-only.** `await page.clock.setFixedTime(new
+Date('2026-07-24T20:00:00'))` at the top of that one test, the pattern
+`e2e/home-phase.spec.ts` and `e2e/friends-flow.spec.ts` already use in this
+suite. Production code is unchanged; the assertion keeps its exact strength
+(`/in about/i`, not a weakened matcher); the past-deadline cases elsewhere in
+the file keep their own setup; both viewports still run it; no dependency was
+added.
+
+**Negative-proof discipline for the late arm.** The probe edit was made after
+snapshotting `e2e/night-out.spec.ts` outside the repository, then restored by
+copying the snapshot back — never by `git checkout`, `restore`, `reset`, `stash`
+or a branch switch. SHA-256
+`b99fb70218adebadf76cf85c7174963fabbafd0bb9d710ae00d253673808ae51` verified
+identical before the probe and after the restore.
+
+**Why earlier evidence missed it:** every check before the gate — typecheck,
+Vitest, the contract — is clock-independent, and the earlier full Vitest runs
+started before 23:00. Only a browser run started after 23:00 could see it. The
+permanent regression check is the pinned clock itself: the test now fails only
+if the *behaviour* changes, at any hour.
+
+---
+
 ## 7. Verification
 
 Tier re-classified on the actual changed paths
@@ -209,7 +270,10 @@ every path — matching the goal's stored tier, no upgrade required.
 | Unit — targeted re-check | `CI=1 npx vitest run src/lib/storageInventory.test.ts` | 8 passed, exit 0 |
 | Unit — run 2 (after fix) | `CI=1 npx vitest run` | exit 0 — **188 files passed / 1 skipped (189)**, **2,992 tests passed / 7 skipped (2,999)**, 91.5s |
 | Release contract | `node scripts/check-release-contract.mjs docs/V8-TRACEABILITY-LEDGER.json` | exit 0 — `RELEASE CONTRACT OK`, ledger 3.1.1, sha256 `f040b8e3…5eb976`, 16/16 artifacts, 150 requirements, coverage `{partial:67, complete:12, contradicted:16, stale:1, missing:54}`, 0 open decisions — **identical to the audit's E12 baseline**, so the deletions moved the contract not at all |
-| Browser | `node scripts/run-e2e-release.mjs` (= `npm run test:e2e`) | *see below* |
+| Browser — run 1 (`7366b06`) | `node scripts/run-e2e-release.mjs` | **2 failed** / 2 skipped / 718 passed, 11.7m. Both failures the clock-dependent fixture of §6a. |
+| Browser — A/B late arm | same, `--grep` one test | 2 failed, exit 1 — clock pinned 23:30 |
+| Browser — A/B early arm | same, `--grep` one test | 6 passed, exit 0 — clock pinned 20:00 |
+| Browser — run 2 (corrected candidate) | `node scripts/run-e2e-release.mjs` | *filled in below* |
 
 Every command ran under `bounded-run.mjs`. Exit codes are the verbatim tool
 results, not narration.
