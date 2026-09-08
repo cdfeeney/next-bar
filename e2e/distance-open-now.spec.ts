@@ -56,7 +56,7 @@ async function seedResultsFromAttaboy(page: import('@playwright/test').Page) {
   await page.goto('/');
   await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
   await page.getByRole('button', { name: /Attaboy/ }).click();
-  const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+  const cards = page.getByTestId('result-card');
   await expect(cards.first()).toBeVisible();
   return cards;
 }
@@ -157,7 +157,7 @@ test.describe('E3.3 open-now hard filter', () => {
     // honest empty state — either outcome proves the surface. A "Closed"
     // badge, or an "Opens" time later than 10 AM (the one-hour day-
     // drinker window), would mean the hard filter leaked.
-    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    const cards = page.getByTestId('result-card');
     const empty = page.getByText(/No matches found nearby/i);
     await expect(cards.first().or(empty).first()).toBeVisible();
     await expect(page.getByText(/Closed/)).toHaveCount(0);

@@ -34,11 +34,11 @@ test(`street travel cards at ${textSize}% text (${coarse ? 'approximate' : 'prec
   });
   await page.goto('/');
   await page.addStyleTag({ content: `html { font-size: ${textSize}%; }` });
-  await expect(page.locator('article').filter({ hasText: 'Vibe match' }).first()).toContainText('Distance Fixture');
+  await expect(page.getByTestId('result-card').first()).toContainText('Distance Fixture');
   await expect(page.getByText('Catalog refresh unavailable — showing the emergency set.')).toHaveCount(0);
   if (coarse) await expect(page.getByText('Approximate — based on Chelsea', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Calculate travel times' })).toHaveCount(0);
-  const cards = page.locator('article').filter({ hasText: 'Vibe match' });
+  const cards = page.getByTestId('result-card');
   await expect(cards).toHaveCount(5);
   await expect(cards.first()).toContainText('Walk ~10 min');
   await expect(cards.first()).toContainText('Drive ~5 min');
@@ -91,7 +91,7 @@ test('routing disabled never invents minutes or transmits a location', async ({ 
   });
   await page.goto('/');
   await expect(page.getByText('Route times unavailable. These suggestions are not confirmed within a 15-minute walk.')).toBeVisible();
-  const cards = page.locator('article').filter({ hasText: 'Vibe match' });
+  const cards = page.getByTestId('result-card');
   await expect(cards).toHaveCount(5);
   await expect(cards.first()).toContainText('Walk time unavailable');
   await expect(cards.first()).toContainText('Drive time unavailable');

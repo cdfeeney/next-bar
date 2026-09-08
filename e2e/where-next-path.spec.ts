@@ -33,11 +33,11 @@ test.describe('Where-next path (E2.1 collapsed)', () => {
     await page.getByRole('button', { name: /Attaboy/ }).click();
 
     // ONE tap → results. No interstitials. QA-6: 5 suggestions everywhere.
-    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    const cards = page.getByTestId('result-card');
     await expect(cards).toHaveCount(5);
     await expect(cards.locator('[data-testid="bar-visual"]')).toHaveCount(5);
     await expect(
-      page.locator('article').filter({ hasText: /Vibe match/i }).getByRole('heading', { name: /Attaboy/i }),
+      page.getByTestId('result-card').getByRole('heading', { name: /Attaboy/i }),
     ).toHaveCount(0);
 
     // ACCEPTANCE 6 — the deleted steps NEVER rendered on the way here:
@@ -65,7 +65,7 @@ test.describe('Where-next path (E2.1 collapsed)', () => {
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
     await expect(
-      page.locator('article').filter({ hasText: /Vibe match/i }).first(),
+      page.getByTestId('result-card').first(),
     ).toBeVisible();
 
     // Enter the vibe surface from RESULTS (there is no pre-results stop).
@@ -94,7 +94,7 @@ test.describe('Where-next path (E2.1 collapsed)', () => {
     await expect(triple).toHaveAttribute('aria-pressed', 'false');
     await page.getByRole('button', { name: 'Apply' }).click();
     await expect(
-      page.locator('article').filter({ hasText: /Vibe match/i }).first(),
+      page.getByTestId('result-card').first(),
     ).toBeVisible();
 
     // NIGHT CACHE (locked decision 3): start a NEW search from the same

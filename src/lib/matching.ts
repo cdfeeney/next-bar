@@ -20,7 +20,6 @@ import {
   LATE_RESTAURANT_PENALTY,
   EXPLORATION_MIN_RESULTS,
   LAST_VERIFIED_HARD_FILTER_DAYS,
-  RADIUS_ANYWHERE,
   RADIUS_CAB,
   RADIUS_WALK,
   MAX_RESULTS,
@@ -39,18 +38,65 @@ export function jaccard(a: VibeTag[], b: VibeTag[]): number {
   return intersection / union;
 }
 
-export function vibeMatchBadge(
-  user: VibeTag[],
-  bar: VibeTag[],
-): { num: number; den: number } {
-  const setUser = new Set(user);
-  const setBar = new Set(bar);
+/**
+ * The vibes the user EXPLICITLY selected, deduplicated — or null when no
+ * selection is active (V8-R-NXT-009 / D-C-41).
+ *
+ * The distinction is the whole point: a SAVED QUIZ PROFILE is a cold-start
+ * prior, not a choice the user just made, so it never reaches here. Only an
+ * APPLIED Tweak-the-vibe pick sets `isExplicitVibe`, and an applied EMPTY pick
+ * is a CLEAR — it returns null, which restores ungated ranking and removes the
+ * badge exactly as if the surface had never been opened.
+ *
+ * Deduplication happens once, here, so N is the number of DISTINCT vibes for
+ * both the badge denominator and the eligibility threshold.
+ */
+export function selectedVibes(profile: VibeProfile): VibeTag[] | null {
+  if (profile.isExplicitVibe !== true) return null;
+  const unique = [...new Set(profile.tags)];
+  return unique.length > 0 ? unique : null;
+}
+
+/** How many of the SELECTED vibes a bar carries. Both sides deduplicated. */
+export function vibeMatchCount(selected: VibeTag[], barTags: VibeTag[]): number {
+  const bar = new Set(barTags);
   let num = 0;
-  for (const tag of setUser) {
-    if (setBar.has(tag)) num += 1;
+  for (const tag of new Set(selected)) {
+    if (bar.has(tag)) num += 1;
   }
-  const den = Math.max(1, Math.min(setUser.size, setBar.size));
-  return { num, den };
+  return num;
+}
+
+/**
+ * ELIGIBILITY (V8-R-NXT-009 / D-C-41): with N distinct selected vibes a bar
+ * must carry at least max(1, N - 1) of them. So 1/2, 3/4 and 5/6 are admitted
+ * — one miss is forgiven — while 0/1, 0/2, 2/4 and 4/6 are not.
+ *
+ * With NO selection this gates nothing: quiz cold-start and learned taste are
+ * untouched, and no bar is rejected for tag mismatch.
+ */
+export function isVibeEligible(selected: VibeTag[], barTags: VibeTag[]): boolean {
+  const den = new Set(selected).size;
+  if (den === 0) return true;
+  return vibeMatchCount(selected, barTags) >= Math.max(1, den - 1);
+}
+
+/**
+ * The match badge, or NULL when there is nothing honest to show.
+ *
+ * The denominator is N — the number of vibes the user actually picked — not
+ * `min(|user|, |bar|)`, which quietly shrank the denominator to flatter a bar
+ * with few tags. Returning null (rather than 0/1) for an empty selection is
+ * what makes "no explicit selection, no badge" structural: the card cannot
+ * render a badge it was never given.
+ */
+export function vibeMatchBadge(
+  selected: VibeTag[],
+  barTags: VibeTag[],
+): { num: number; den: number } | null {
+  const den = new Set(selected).size;
+  if (den === 0) return null;
+  return { num: vibeMatchCount(selected, barTags), den };
 }
 
 export type MatchesArgs = {
@@ -176,25 +222,6 @@ export function explicitVibeScore(
   );
 }
 
-/**
- * The band fill order an ACTIVE tweak walks: every band's MATCHING bars
- * first, then every band's nonmatching ones.
- *
- * So a matching bar a cab ride away outranks a nonmatching bar underfoot,
- * but only once the closer bands are out of matches — expansion before
- * fallback. A bar matches when it carries at least one picked tag; the
- * bands and their radii are untouched, only the visit order changes.
- */
-function vibeMatchFillOrder(
-  bands: Bar[][],
-  isMatch: (bar: Bar) => boolean,
-): Bar[][] {
-  return [
-    ...bands.map((band) => band.filter(isMatch)),
-    ...bands.map((band) => band.filter((bar) => !isMatch(bar))),
-  ];
-}
-
 export function matches(args: MatchesArgs): Bar[] {
   const {
     profile,
@@ -228,42 +255,26 @@ export function matches(args: MatchesArgs): Bar[] {
   // The explicit-intent path (EXPLICIT_VIBE_WEIGHT). Active only for an
   // APPLIED tweak carrying at least one tag — an empty pick is a CLEARED
   // tweak, which must rank exactly like no tweak at all. Resolved BEFORE the
-  // distance filter because an applied pick widens what that filter admits.
-  const explicitTags =
-    profile.isExplicitVibe === true && profile.tags.length > 0
-      ? profile.tags
-      : null;
-  const pickedTags = explicitTags ? new Set(explicitTags) : null;
-  const isVibeMatch = (bar: Bar): boolean =>
-    pickedTags !== null && bar.tags.some((t) => pickedTags.has(t));
+  // distance filter because an applied pick changes what that filter admits.
+  const selected = selectedVibes(profile);
 
-  // The outer edge of THE NEXT BAND — how far criterion 5's expansion may
-  // reach, named by the existing chip radii and nothing else. A Walkable pick
-  // reaches into the cab band and stops at RADIUS_CAB; a cab pick reaches into
-  // `anywhere`, whose edge is RADIUS_ANYWHERE (null) because that band has
-  // none by construction. Reaching further than the next band would be a new
-  // threshold, which the goal forbids by name — and unbounded reach from a
-  // 1.5-mile chip is the largest new threshold there is.
-  const nextBandMaxMiles =
-    maxMiles !== null && maxMiles <= RADIUS_WALK ? RADIUS_CAB : RADIUS_ANYWHERE;
+  // ELIGIBILITY, not ordering (V8-R-NXT-009 / D-C-41). This runs BEFORE the
+  // distance filter, before banding, before the cap — and before ResultsView's
+  // route-candidate truncation, which only ever sees what this returns. There
+  // is deliberately no second pass that lets a rejected bar back in: the fill
+  // order, the band expansion, "run it again" and the route supplement all
+  // draw from this pool, so a bar the user's picks rejected cannot reappear as
+  // padding. Fewer results — or none — is the honest answer.
+  if (selected) {
+    pool = pool.filter((b) => isVibeEligible(selected, b.tags));
+  }
 
+  // Explicit vibes never widen a caller's geographic bounds.
   if (coords && (minMilesExclusive !== null || maxMiles !== null)) {
     pool = pool.filter((b) => {
       const miles = haversineMiles(coords, b);
-      if (minMilesExclusive !== null && miles <= minMilesExclusive) return false;
-      if (maxMiles === null || miles <= maxMiles) return true;
-      // Criterion 5's expansion, and the ONLY thing that makes it reachable.
-      // Every distance chip is an exclusive ring (Walkable ≤ RADIUS_WALK, cab
-      // RADIUS_WALK–RADIUS_CAB, anywhere beyond it), so filtering the pool to
-      // the selected ring first left exactly one band non-empty and the
-      // cross-band fill order below had nothing to expand into. An APPLIED
-      // pick therefore reaches PAST the ring's outer edge — but only into the
-      // next band, only for a bar that actually matches it, and never inside
-      // the ring's inner edge. A NONMATCHING bar outside the chosen scope is
-      // still never admitted, so the chip keeps bounding the fallback; only
-      // the vibe the user just asked for can widen it, and only by one band.
-      if (nextBandMaxMiles !== null && miles > nextBandMaxMiles) return false;
-      return isVibeMatch(b);
+      return (minMilesExclusive === null || miles > minMilesExclusive) &&
+        (maxMiles === null || miles <= maxMiles);
     });
   }
 
@@ -276,8 +287,8 @@ export function matches(args: MatchesArgs): Bar[] {
   // the quiz prior fades as c grows with rating history.
   const late = biasNow !== undefined && isLateNight(biasNow);
 
-  const rankOf = explicitTags
-    ? (bar: Bar): number => explicitVibeScore(bar, explicitTags, taste, late)
+  const rankOf = selected
+    ? (bar: Bar): number => explicitVibeScore(bar, selected, taste, late)
     : (bar: Bar): number => rankScore(bar, profile.tags, taste, late);
 
   // Step 2 — fill from the CLOSEST band first, expanding only when the closer
@@ -296,19 +307,15 @@ export function matches(args: MatchesArgs): Bar[] {
     }
   }
 
-  // Step 2b — an active tweak fills from matching candidates across every
-  // band before it falls back to nonmatching ones. Without a tweak this is
-  // the same `bands` array, so the walk is unchanged.
-  // Same predicate the distance filter widened on, so a bar admitted as a
-  // match can never be sorted as a nonmatch here.
-  const fillOrder = explicitTags
-    ? vibeMatchFillOrder(bands, isVibeMatch)
-    : bands;
+  // Step 2b USED to re-order each band's matching bars ahead of its
+  // nonmatching ones so an active tweak expanded before it fell back. Under
+  // D-C-41 there is nothing left to fall back TO — every bar that survived the
+  // eligibility filter matches — so the bands are walked as they are.
 
   // Steps 3 + 4 — within a band, learned taste orders; EXACT MILES are only
   // the final tie-breaker, never a ranking term of their own.
   const ranked: { bar: Bar; score: number; miles: number }[] = [];
-  for (const band of fillOrder) {
+  for (const band of bands) {
     if (ranked.length >= cap) break;
     ranked.push(
       ...band

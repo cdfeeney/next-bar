@@ -27,7 +27,7 @@ it('defaults off and refuses production even with a key', async () => {
 });
 it('rejects bad origins, duplicate/oversized IDs and bodies before catalog/provider work', async () => {
   expect((await POST(request(valid, 'https://attacker.test'))).status).toBe(403);
-  for (const body of [null, { ...valid, ids: ['one', 'one'] },
+  for (const body of [null, { ...valid, band: 'invalid' }, { ...valid, band: 'cab' }, { ...valid, ids: ['one', 'one'] },
     { ...valid, origin: { lat: 0, lng: 0 } }, { ...valid, ids: Array.from({ length: 16 }, (_, i) => `b${i}`) }]) {
     expect((await POST(request(body))).status).toBe(400);
   }

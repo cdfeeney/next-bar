@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { directionsHref, isWalkable, leadCopy, routeCopy } from '@/lib/travelTime';
+import { directionsHref, matchesTravelBand, isWalkable, leadCopy, routeCopy } from '@/lib/travelTime';
 
 describe('street route display', () => {
   it('uses raw seconds for Walkable and never rounds a longer walk down to 15', () => {
@@ -28,4 +28,18 @@ describe('street route display', () => {
     }
     expect(new URL(directionsHref(undefined, destination, 'walking')).searchParams.has('origin')).toBe(false);
   });
+});
+
+it('separates the route boundary, cab edge, and unknown routes without overlapping bands', () => {
+  const origin = { lat: 40.75, lng: -74 };
+  const near = { lat: 40.76, lng: -74 };
+  const far = { lat: 40.85, lng: -74 };
+  const bands = ['walkable', 'cab', 'anywhere'] as const;
+  const admitted = (destination: typeof near, seconds: number | null) => bands.filter(band =>
+    matchesTravelBand(origin, destination, seconds === null ? null : { seconds, meters: 1500 }, band));
+  expect(admitted(near, 900)).toEqual(['walkable']);
+  expect(admitted(near, 901)).toEqual(['cab']);
+  expect(admitted(near, null)).toEqual([]);
+  expect(admitted(far, 5000)).toEqual(['anywhere']);
+  expect(admitted(far, null)).toEqual(['anywhere']);
 });

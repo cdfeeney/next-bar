@@ -1736,6 +1736,22 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     baseURL,
   }) => {
     test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    // The deadline this test picks is "tonight at 23:00", and the row it then
+    // asserts on says how long is LEFT — `remainingLabel` returns 'immediately'
+    // once that moment has passed. Read off the real clock, the fixture is a
+    // future deadline before 23:00 and a past one after it, so the run's START
+    // TIME decided the assertion: measured red at 23:47 EDT on 7366b06, both
+    // viewports, with "Voting closes immediately." Pin the clock the way
+    // `home-phase.spec.ts` and `friends-flow.spec.ts` already do.
+    //
+    // The OFFSET is not decoration. A timezone-free literal is parsed in the
+    // HOST's zone, so on a PDT machine 20:00 is the instant 23:00 in New York
+    // — exactly the deadline — and the pin reintroduces the failure it exists
+    // to remove (reproduced by independent V9 review, 2026-09-08). Naming
+    // -04:00 makes the pinned instant the same three hours of headroom on
+    // every host. Not a widening: the past-deadline cases elsewhere in this
+    // file keep their own setup and their own assertions.
+    await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
     await context.addCookies([
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);

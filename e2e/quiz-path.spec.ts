@@ -3,7 +3,12 @@
  *
  * End-to-end: navigate directly to /quiz, complete the 6-question vibe quiz,
  * pick a neighborhood on the LocationPrompt (avoids the geolocation popup),
- * and confirm 3 result cards render with "Vibe match" text.
+ * and confirm 3 result cards render.
+ *
+ * Cards are identified by data-testid="result-card". The quiz profile is a
+ * cold-start PRIOR, not an explicit selection, so these cards deliberately
+ * carry no "Vibe match" badge at all (D-C-41) — the old text-based selector
+ * would now match nothing here.
  *
  * Quiz route is /quiz (post Beli-style restructure — home / is Where-next).
  *
@@ -48,7 +53,7 @@ async function reachQuizResults(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'East Village' }).click();
 
   await expect(
-    page.locator('article').filter({ hasText: /Vibe match/i }).first(),
+    page.getByTestId('result-card').first(),
   ).toBeVisible();
 }
 
@@ -65,7 +70,7 @@ test.describe('Quiz path', () => {
   test('navigates to /quiz, completes 6-question quiz, picks neighborhood, sees 3 result cards', async ({ page }) => {
     await reachQuizResults(page);
 
-    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    const cards = page.getByTestId('result-card');
     // Quiz path shows top 10. East Village + cocktail-leaning currently
     // yields fewer than 10 candidates (5 East Village bars total), so just
     // assert at least 3 cards render.

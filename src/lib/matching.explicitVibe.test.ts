@@ -122,9 +122,11 @@ describe('matches() — active tweak', () => {
       'dive-bar',
       'cocktail-bar',
     ]);
+    // D-C-41: the dive bar is not merely outranked now, it is 0/1 and so
+    // INELIGIBLE. A one-bar page is the honest answer; padding it with a bar
+    // the user's pick rejected is not.
     expect(rank(tweakedProfile([PICKED]), twoBarPool(), taste)).toEqual([
       'cocktail-bar',
-      'dive-bar',
     ]);
   });
 
@@ -134,7 +136,6 @@ describe('matches() — active tweak', () => {
       expect(taste.confidence).toBeGreaterThan(0.95);
       expect(rank(tweakedProfile([PICKED]), twoBarPool(), taste)).toEqual([
         'cocktail-bar',
-        'dive-bar',
       ]);
     }
   });
@@ -210,10 +211,12 @@ describe('matches() — distance band expansion under an active tweak', () => {
     );
   });
 
-  it('expands to the next band for a MATCH before falling back to nonmatching bars', () => {
+  it('reaches the far MATCH, and never pads the page with the near nonmatches', () => {
+    // Before D-C-41 the five walkable dives filled the rest of the page behind
+    // the far match. They are 0/1 against the pick, so the page is now one bar
+    // long — "fewer results" rather than "five results, four of them wrong".
     const ids = rank(tweakedProfile([PICKED]), pool, EMPTY_TASTE);
-    expect(ids[0]).toBe('far-cocktail');
-    expect(ids).toHaveLength(5); // the page still fills from the walkables
+    expect(ids).toEqual(['far-cocktail']);
   });
 
   // The test above passes maxMiles: null, which NO production caller of the
@@ -222,7 +225,7 @@ describe('matches() — distance band expansion under an active tweak', () => {
   // .maxMiles). Under that configuration the pool used to be cut to a single
   // ring before banding, so the expansion above was unreachable on every real
   // surface. This is the same assertion under the Walkable chip's arguments.
-  it('expands under the arguments the Walkable chip actually passes', () => {
+  it('does not expand an explicit maximum for an applied vibe', () => {
     const ids = matches({
       profile: tweakedProfile([PICKED]),
       coords: ORIGIN,
@@ -235,16 +238,10 @@ describe('matches() — distance band expansion under an active tweak', () => {
       taste: EMPTY_TASTE,
     }).map((bar) => bar.id);
 
-    expect(ids[0]).toBe('far-cocktail');
-    expect(ids).toHaveLength(5);
+    expect(ids).toEqual([]);
   });
 
   it('reaches the NEXT band only — a match past RADIUS_CAB stays out of a Walkable page', () => {
-    // Criterion 5 says expand to the next band reusing RADIUS_WALK /
-    // RADIUS_CAB and invent no new thresholds. Letting a Walkable pick reach
-    // an arbitrarily distant match IS a new threshold (an unbounded one), and
-    // it would let a page under a 1.5-mile chip be composed entirely of bars
-    // miles away, with no walkable bar on it at all.
     const scoped = [
       atMiles('walk-dive', 0.9, [HISTORY]),
       atMiles('cab-cocktail', 3.0, [PICKED]), // next band — reachable
@@ -262,10 +259,10 @@ describe('matches() — distance band expansion under an active tweak', () => {
       taste: EMPTY_TASTE,
     }).map((bar) => bar.id);
 
-    expect(ids).toEqual(['cab-cocktail', 'walk-dive']);
+    expect(ids).toEqual([]);
   });
 
-  it('expands under the cab chip too, without reaching back inside it', () => {
+  it('enforces both geographic bounds even when no vibe match remains', () => {
     const cabScoped = [
       atMiles('walk-cocktail', 0.5, [PICKED]), // inside the chip's inner edge
       atMiles('cab-dive', 2.0, [HISTORY]),
@@ -283,9 +280,7 @@ describe('matches() — distance band expansion under an active tweak', () => {
       taste: EMPTY_TASTE,
     }).map((bar) => bar.id);
 
-    // Expansion goes OUTWARD only: the far match is reached, the walkable one
-    // the user deliberately excluded is not.
-    expect(ids).toEqual(['beyond-cocktail', 'cab-dive']);
+    expect(ids).toEqual([]);
   });
 
   it('changes geographic scope only — the radius never re-weights the vibe', () => {
@@ -308,18 +303,86 @@ describe('matches() — distance band expansion under an active tweak', () => {
       (b) => b.id,
     );
 
-    expect(anywhere).toEqual([
-      'walk-cocktail',
-      'cab-cocktail',
-      'walk-dive',
-      'cab-dive',
+    expect(anywhere).toEqual(['walk-cocktail', 'cab-cocktail']);
+    expect(walkOnly).toEqual(['walk-cocktail']);
+  });
+});
+
+describe('matches() — eligibility gates the pool (D-C-41)', () => {
+  const FOUR: VibeTag[] = ['cocktail', 'wine', 'jazz', 'rooftop'];
+
+  /** A bar carrying the first `hit` of FOUR, padded with a non-picked tag. */
+  const hitting = (id: string, hit: number, miles: number): Bar =>
+    atMiles(id, miles, [...FOUR.slice(0, hit), 'pub']);
+
+  const rankFour = (bars: Bar[], maxMiles: number | null = null): string[] =>
+    matches({
+      profile: tweakedProfile(FOUR),
+      coords: ORIGIN,
+      preferredNeighborhoods: [],
+      minMilesExclusive: null,
+      maxMiles,
+      bars,
+      maxResults: 10,
+      now: NOW,
+      taste: EMPTY_TASTE,
+    }).map((bar) => bar.id);
+
+  it('admits 3/4 and 4/4 but not 2/4 — one miss is forgiven, two are not', () => {
+    const ids = rankFour([
+      hitting('four', 4, 0.4),
+      hitting('three', 3, 0.5),
+      hitting('two', 2, 0.6),
+      hitting('one', 1, 0.7),
+      hitting('zero', 0, 0.8),
     ]);
-    // Narrowing to Walkable drops the out-of-scope NONMATCH and reorders
-    // nothing: the chip still bounds the fallback. The out-of-scope MATCH
-    // stays, because criterion 5 says an applied pick expands past the band
-    // before falling back to bars that do not match it — and its position is
-    // unchanged, so the radius has not re-weighted anything.
-    expect(walkOnly).toEqual(anywhere.filter((id) => id !== 'cab-dive'));
+    expect(ids).toEqual(['four', 'three']);
+  });
+
+  it('returns an EMPTY list rather than padding with rejected bars', () => {
+    // Five nearby bars, none eligible. The old fill order would have handed
+    // back all five; the honest answer is none.
+    expect(
+      rankFour([0.2, 0.3, 0.4, 0.5, 0.6].map((mi, i) => hitting(`near-${i}`, 1, mi))),
+    ).toEqual([]);
+  });
+
+  it('an ineligible bar cannot re-enter through the band expansion', () => {
+    // A 2/4 bar sitting in the next band out is exactly what the expansion
+    // reaches for — and it is still rejected, because eligibility is decided
+    // before any distance rule runs.
+    const ids = rankFour(
+      [hitting('near-two', 2, 0.5), hitting('far-three', 3, 3.0)],
+      RADIUS_WALK,
+    );
+    expect(ids).toEqual(['far-three']);
+  });
+
+  it('an ineligible bar cannot re-enter to fill an under-full page', () => {
+    // maxResults 10 against 1 eligible bar: nothing tops the list back up.
+    const ids = rankFour([
+      hitting('eligible', 4, 0.4),
+      ...Array.from({ length: 9 }, (_, i) => hitting(`filler-${i}`, 1, 0.5 + i / 100)),
+    ]);
+    expect(ids).toEqual(['eligible']);
+  });
+
+  it('deduplicates the selection before setting the threshold', () => {
+    // Two distinct picks written four times: N = 2, so 1 match is enough.
+    // Counting duplicates would demand 3 of 4 and return nothing.
+    const oneOfTwo = atMiles('one-of-two', 0.5, ['cocktail', 'pub']);
+    expect(
+      matches({
+        profile: tweakedProfile(['cocktail', 'cocktail', 'wine', 'wine']),
+        coords: ORIGIN,
+        preferredNeighborhoods: [],
+        maxMiles: null,
+        bars: [oneOfTwo],
+        maxResults: 5,
+        now: NOW,
+        taste: EMPTY_TASTE,
+      }).map((bar) => bar.id),
+    ).toEqual(['one-of-two']);
   });
 });
 
@@ -338,8 +401,9 @@ describe('matches() — clearing the tweak', () => {
     const pool = twoBarPool();
     expect(rank(tweakedProfile([PICKED]), pool, taste)).toEqual([
       'cocktail-bar',
-      'dive-bar',
     ]);
+    // Dropping the flag drops the gate with it: the dive bar is back, and
+    // ahead, exactly as the quiz-prior cascade orders it.
     expect(rank(quizProfile([PICKED]), pool, taste)).toEqual([
       'dive-bar',
       'cocktail-bar',

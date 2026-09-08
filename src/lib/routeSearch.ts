@@ -1,8 +1,8 @@
 import type { Coords } from '@/types';
 import { SERVICE_AREA_BBOX } from '@/lib/constants';
 import {
-  isRouteEstimate, isWalkable, ROUTE_CANDIDATE_CAP, ROUTE_RESULT_CAP,
-  type BarTravel, type RouteEstimate, type TravelMode, type TravelSearch,
+  isRouteEstimate, matchesTravelBand, ROUTE_CANDIDATE_CAP, ROUTE_RESULT_CAP,
+  type BarTravel, type RouteEstimate, type TravelMode, type TravelSearch, type TravelBand,
 } from '@/lib/travelTime';
 
 export type RouteDestination = Coords & { id: string };
@@ -42,10 +42,11 @@ async function matrix(origin: Coords, bars: RouteDestination[], mode: TravelMode
   if (!response.ok) throw new Error('routing_unavailable');
   return parseMatrix(await response.json(), bars.length);
 }
-/** At most 15 primary + 5 secondary elements. No retries or persistent cache. */
+/** At most 15 walking + 5 driving elements. No retries or persistent cache. */
 export async function searchRoutes(
   origin: Coords, candidates: RouteDestination[], mode: TravelMode,
   walkableOnly: boolean, key: string, signal: AbortSignal,
+  band: TravelBand = walkableOnly ? 'walkable' : mode === 'driving' ? 'cab' : 'anywhere',
 ): Promise<TravelSearch> {
   if (!isRoutingCoords(origin) || candidates.length < 1 || candidates.length > ROUTE_CANDIDATE_CAP ||
       new Set(candidates.map(b => b.id)).size !== candidates.length ||
@@ -56,31 +57,25 @@ export async function searchRoutes(
     const batch = candidates.slice(i, i + ROUTE_RESULT_CAP);
     let routes: (RouteEstimate | null)[];
     try {
-      routes = await matrix(origin, batch, mode, key, signal);
+      routes = await matrix(origin, batch, 'walking', key, signal);
     } catch (error) {
       if (checked.length === 0) throw error;
       incomplete = true;
       break; // Keep earlier confirmed routes; don't retry a failing service.
     }
     checked.push(...batch.map((b, j) => ({
-      id: b.id, destination: { lat: b.lat, lng: b.lng }, walking: null, driving: null, [mode]: routes[j],
+      id: b.id, destination: { lat: b.lat, lng: b.lng }, walking: routes[j], driving: null,
     })));
-    const eligible = checked.filter(r => walkableOnly ? isWalkable(r.walking) : r[mode] !== null);
+    const eligible = checked.filter(r => r.walking !== null && matchesTravelBand(origin, r.destination, r.walking, band));
     if (eligible.length >= ROUTE_RESULT_CAP) break;
   }
-  const available = checked.filter(r => r[mode] !== null);
-  available.sort((a, b) => {
-    if (walkableOnly && isWalkable(a.walking) !== isWalkable(b.walking)) return isWalkable(a.walking) ? -1 : 1;
-    // Input already carries taste/applied-vibe priority. Only farther walking
-    // supplements use duration order; they can never displace a walkable match.
-    return walkableOnly && !isWalkable(a.walking) ? a.walking!.seconds - b.walking!.seconds : 0;
-  });
+  // Preserve the input's vibe/taste order within the selected band; never pad.
+  const available = checked.filter(r => r.walking !== null && matchesTravelBand(origin, r.destination, r.walking, band));
   const selected = available.slice(0, ROUTE_RESULT_CAP);
-  const secondary = mode === 'walking' ? 'driving' : 'walking';
   if (selected.length && !incomplete) {
     try {
-      const routes = await matrix(origin, selected.map(r => ({ id: r.id, ...r.destination })), secondary, key, signal);
-      selected.forEach((r, i) => { r[secondary] = routes[i]; });
+      const routes = await matrix(origin, selected.map(r => ({ id: r.id, ...r.destination })), 'driving', key, signal);
+      selected.forEach((r, i) => { r.driving = routes[i]; });
     } catch {
       // Preserve confirmed primary routes if only the secondary lookup fails.
       incomplete = true;

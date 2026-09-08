@@ -25,14 +25,13 @@ async function pickSeed(page: import('@playwright/test').Page, name: string) {
     .first()
     .click();
   await expect(
-    page.locator('article').filter({ hasText: /Vibe match/i }).first(),
+    page.getByTestId('result-card').first(),
   ).toBeVisible();
 }
 
 async function topResultName(page: import('@playwright/test').Page) {
   const heading = page
-    .locator('article')
-    .filter({ hasText: /Vibe match/i })
+    .getByTestId('result-card')
     .first()
     .getByRole('heading')
     .first();
@@ -70,8 +69,7 @@ test.describe('E3.1 tonight-exclusion', () => {
     // Y's own results exclude Y (it's the seed) — sanity.
     await expect(
       page
-        .locator('article')
-        .filter({ hasText: /Vibe match/i })
+        .getByTestId('result-card')
         .getByRole('heading', { name: nameRegex(nextStop) }),
     ).toHaveCount(0);
 
@@ -81,8 +79,7 @@ test.describe('E3.1 tonight-exclusion', () => {
     await pickSeed(page, SEED);
     await expect(
       page
-        .locator('article')
-        .filter({ hasText: /Vibe match/i })
+        .getByTestId('result-card')
         .getByRole('heading', { name: nameRegex(nextStop) }),
     ).toHaveCount(0);
 
@@ -93,8 +90,7 @@ test.describe('E3.1 tonight-exclusion', () => {
     await pickSeed(page, SEED);
     await expect(
       page
-        .locator('article')
-        .filter({ hasText: /Vibe match/i })
+        .getByTestId('result-card')
         .getByRole('heading', { name: nameRegex(nextStop) }),
     ).not.toHaveCount(0);
   });

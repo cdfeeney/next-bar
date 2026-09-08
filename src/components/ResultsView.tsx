@@ -11,13 +11,13 @@ import type {
 import { useBars } from '@/lib/useBars';
 import { excludeClosedBars } from '@/lib/openNow';
 import { deriveLearnedTaste } from '@/lib/tasteAffinity';
-import { matches } from '@/lib/matching';
+import { matches, selectedVibes } from '@/lib/matching';
 import { haversineMiles } from '@/lib/distance';
 import { NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
 import { displayHood } from '@/lib/hoodDisplay';
 import { useRatings } from '@/hooks/useRatings';
 import { useTravelRoutes } from '@/hooks/useTravelRoutes';
-import { isWalkable, ROUTE_CANDIDATE_CAP, ROUTE_RESULT_CAP } from '@/lib/travelTime';
+import { matchesTravelBand, ROUTE_CANDIDATE_CAP, ROUTE_RESULT_CAP, type TravelBand } from '@/lib/travelTime';
 import { RADIUS_CAB, RADIUS_WALK } from '@/lib/constants';
 import ResultCard from '@/components/ResultCard';
 
@@ -120,8 +120,14 @@ export default function ResultsView({
     [ratings, bars],
   );
 
-  const walkingSearch = maxMiles === RADIUS_WALK;
-  const nearbyCandidates = nearbyFirst ?? walkingSearch;
+  // The user's ACTIVE explicit vibe picks, or [] when none. The saved quiz
+  // profile never reaches the card: it is a cold-start prior, not a selection
+  // (V8-R-NXT-009 / D-C-41). matches() gates eligibility on the same value.
+  const selected = selectedVibes(profile) ?? [];
+
+  const band: TravelBand = nearbyFirst ? 'nearby' : maxMiles === RADIUS_WALK ? 'walkable' : maxMiles === RADIUS_CAB ? 'cab' : 'anywhere';
+  const walkingSearch = band === 'walkable';
+  const nearbyCandidates = band === 'nearby';
   const candidates = useMemo(
     () => {
       const preferred = matches({
@@ -130,8 +136,9 @@ export default function ResultsView({
         preferredNeighborhoods,
         minMilesExclusive: null,
         maxMiles: null,
-        bars: maxMiles === RADIUS_CAB
-          ? pool.filter(b => haversineMiles(userCoords, b) <= RADIUS_CAB) : pool,
+        bars: pool.filter(b => band === 'nearby' || (band === 'anywhere'
+          ? haversineMiles(userCoords, b) > RADIUS_CAB
+          : haversineMiles(userCoords, b) <= RADIUS_CAB)),
         distanceBands: nearbyCandidates,
         excludeIds: effectiveExcludeIds,
         maxResults: pool.length,
@@ -140,40 +147,27 @@ export default function ResultsView({
         // filter — quiz/planning surfaces (no hideClosedNow) never bias.
         biasNow: filterNow ?? undefined,
       });
-      if (!nearbyCandidates) {
-        // D-C-40: the chip picks which band is searched FIRST. Without this a
-        // wider selection returns the very same five bars — exact miles is the
-        // cascade's last tie-breaker (V8 P1), so the home surface's untagged,
-        // unrated profile scores every bar equally and an inclusive wider pool
-        // just re-derives the nearest ones. Nearer bars stay eligible BEHIND
-        // the named band (broader modes are not exclusive rings), so a chip
-        // whose own band is empty still answers instead of emptying the page.
-        // Bands reuse RADIUS_WALK/RADIUS_CAB; no new threshold.
-        const selectedBandFloor = maxMiles === RADIUS_CAB ? RADIUS_WALK : RADIUS_CAB;
-        const inSelectedBand = (bar: { lat: number; lng: number }): boolean =>
-          haversineMiles(userCoords, bar) > selectedBandFloor;
-        return [
-          ...preferred.filter(inSelectedBand),
-          ...preferred.filter((b) => !inSelectedBand(b)),
-        ].slice(0, ROUTE_CANDIDATE_CAP);
-      }
+      if (!nearbyCandidates) return preferred.slice(0, ROUTE_CANDIDATE_CAP);
       // Bound route lookups by proximity without erasing taste/applied-vibe order.
       const nearbyIds = new Set([...preferred]
         .sort((a, b) => haversineMiles(userCoords, a) - haversineMiles(userCoords, b))
         .slice(0, ROUTE_CANDIDATE_CAP).map(b => b.id));
       return preferred.filter(b => nearbyIds.has(b.id));
     },
-    [profile, userCoords, preferredNeighborhoods, pool, effectiveExcludeIds, taste, filterNow, maxMiles, nearbyCandidates],
+    [profile, userCoords, preferredNeighborhoods, pool, effectiveExcludeIds, taste, filterNow, band, nearbyCandidates],
   );
   const mode = maxMiles === RADIUS_CAB ? 'driving' : 'walking';
-  const travel = useTravelRoutes(userCoords, candidates, mode, walkingSearch);
+  const travel = useTravelRoutes(userCoords, candidates, mode, walkingSearch, band);
   const count = Math.min(maxResults ?? ROUTE_RESULT_CAP, ROUTE_RESULT_CAP);
   const ranked = useMemo(() => travel.data
-    ? travel.data.routes.flatMap(r => candidates.filter(b => b.id === r.id)).slice(0, count)
-    : candidates.slice(0, count), [travel.data, candidates, count]);
+    ? travel.data.routes.filter(r => matchesTravelBand(userCoords, r.destination, r.walking, band))
+      .flatMap(r => candidates.filter(b => b.id === r.id)).slice(0, count)
+    : candidates.filter(b => matchesTravelBand(userCoords, b, null, band)).slice(0, count),
+    [travel.data, candidates, count, userCoords, band]);
   const routeById = new Map(travel.data?.routes.map(r => [r.id, r]));
-  const firstFarther = walkingSearch && travel.data
-    ? ranked.findIndex(b => !isWalkable(routeById.get(b.id)?.walking)) : -1;
+  // Empty because the vibe picks admitted nothing — as opposed to empty
+  // because no route could be confirmed. The two need different copy.
+  const noVibeMatches = selected.length > 0 && candidates.length === 0;
 
   // MED-11: companion surfaces (quiz map) mirror THIS list, not their own
   // recompute. Signature guard: fire only when the id SEQUENCE changes —
@@ -294,10 +288,10 @@ export default function ResultsView({
       <div className="max-w-2xl mx-auto">
         <p className="text-muted text-sm text-center mb-2">{locationLabel}</p>
         <div className="text-sm text-muted text-center mb-4" aria-live="polite">
-          {travel.status === 'disabled' ? <p>Route times unavailable. These suggestions are not confirmed within a 15-minute walk.</p> : null}
+          {travel.status === 'disabled' ? <p>Route times unavailable. Walkable and cab results need a confirmed walking route.</p> : null}
           {travel.status === 'loading' ? <p>Checking street routes…</p> : null}
           {travel.status === 'error' || travel.status === 'stale' ? <>
-            <p>{travel.status === 'stale' ? 'Travel times expired.' : 'Travel times unavailable.'} Walkable is not confirmed.</p>
+            <p>{travel.status === 'stale' ? 'Travel times expired.' : 'Travel times unavailable.'} This travel band could not be confirmed.</p>
             <button type="button" onClick={travel.calculate} className="min-h-[44px] text-accent underline">Recalculate from this starting point</button>
           </> : null}
           {travel.data ? <>
@@ -313,9 +307,17 @@ export default function ResultsView({
 
         {ranked.length === 0 ? (
           <p className="text-muted text-center">
-            {travel.data ? 'Not enough routes could be confirmed in this search.' : 'No eligible bars found in this search.'}
+            {/* Say WHY it is empty. Under an active vibe selection the honest
+                answer is that nothing matched the picks — blaming the routing
+                service, or telling the user to widen a radius that was never
+                the constraint, sends them to fix the wrong control. */}
+            {noVibeMatches
+              ? 'No bars match the vibes you picked in this travel band.'
+              : travel.data ? 'Not enough routes could be confirmed in this search.' : 'No eligible bars found in this search.'}
             <br />
-            Try a different neighborhood or widen your radius.
+            {noVibeMatches
+              ? 'Tweak the vibe, choose another travel band, or try a different neighborhood.'
+              : 'Try another travel band or a different neighborhood.'}
           </p>
         ) : (
           <div className="flex flex-col gap-4">
@@ -326,7 +328,6 @@ export default function ResultsView({
               });
               return (
                 <div key={bar.id}>
-                {idx === firstFarther ? <h3 className="font-display text-lg mb-3">A little farther away</h3> : null}
                 <ResultCard
                   bar={bar}
                   rank={idx + 1}
@@ -335,7 +336,7 @@ export default function ResultsView({
                   travel={routeById.get(bar.id)}
                   travelLoading={travel.status === 'loading'}
                   directionsMode={mode}
-                  userTags={profile.tags}
+                  selectedVibes={selected}
                   showShare={showShare}
                 />
                 </div>
@@ -347,7 +348,7 @@ export default function ResultsView({
         <div className="mt-5 text-sm text-muted text-center">
           <details>
             <summary className="min-h-[44px] py-3 cursor-pointer">About travel times</summary>
-            <p>{walkingSearch ? 'Walkable: estimated route of 15 minutes or less.' : nearbyCandidates ? 'Matching nearby bars.' : maxMiles === RADIUS_CAB ? 'Matching across the wider area, within 4 miles straight-line.' : 'Matching across the full service area.'}</p>
+            <p>{walkingSearch ? 'Walkable: estimated route of 15 minutes or less.' : nearbyCandidates ? 'Matching nearby bars.' : maxMiles === RADIUS_CAB ? 'Beyond a 15-minute walk, within 4 miles straight-line.' : 'Beyond 4 miles straight-line, within the service area.'}</p>
             <p>Times are estimates; driving excludes traffic and pickup waits.</p>
             {travel.status !== 'disabled' ? <p>Travel times calculate automatically from this starting point. No location history is saved by Next Bar.</p> : null}
             {travel.data?.limited ? <p>Checked {travel.data.checked} candidates; this is not an exhaustive search.</p> : null}

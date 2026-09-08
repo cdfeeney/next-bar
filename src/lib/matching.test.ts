@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { isLateNight, jaccard, matches, vibeMatchBadge } from '@/lib/matching';
+import {
+  isLateNight,
+  isVibeEligible,
+  jaccard,
+  matches,
+  selectedVibes,
+  vibeMatchBadge,
+} from '@/lib/matching';
 import { deriveLearnedTaste, EMPTY_TASTE } from '@/lib/tasteAffinity';
 import type { BarRating } from '@/types/ratings';
 import type { Bar, VibeProfile, VibeTag } from '@/types';
@@ -49,35 +56,128 @@ describe('jaccard', () => {
   });
 });
 
+describe('selectedVibes', () => {
+  it('returns null for a saved quiz profile — a prior is not a selection', () => {
+    expect(selectedVibes(baseProfile(['jazz', 'live']))).toBeNull();
+  });
+
+  it('returns null when the flag is explicitly false', () => {
+    expect(
+      selectedVibes({ ...baseProfile(['jazz']), isExplicitVibe: false }),
+    ).toBeNull();
+  });
+
+  it('returns null for a CLEARED pick — the flag with no tags', () => {
+    expect(
+      selectedVibes({ ...baseProfile([]), isExplicitVibe: true }),
+    ).toBeNull();
+  });
+
+  it('deduplicates, so a repeated pick counts once', () => {
+    expect(
+      selectedVibes({
+        ...baseProfile(['cocktail', 'cocktail', 'wine']),
+        isExplicitVibe: true,
+      }),
+    ).toEqual(['cocktail', 'wine']);
+  });
+});
+
 describe('vibeMatchBadge', () => {
-  it('numerator is the intersection size', () => {
-    const { num } = vibeMatchBadge(
-      ['cocktail', 'speakeasy', 'polished'],
-      ['cocktail', 'speakeasy', 'dive'],
-    );
-    expect(num).toBe(2);
+  it('is null with no selection — there is no honest fraction to show', () => {
+    expect(vibeMatchBadge([], ['cocktail', 'dive'])).toBeNull();
+    expect(vibeMatchBadge([], [])).toBeNull();
   });
 
-  it('denominator is min(|user|, |bar|) when user is smaller', () => {
-    const { den } = vibeMatchBadge(
-      ['cocktail', 'speakeasy'],
-      ['cocktail', 'speakeasy', 'polished', 'industry'],
-    );
-    expect(den).toBe(2);
+  it('numerator is the intersection with the SELECTED vibes', () => {
+    expect(
+      vibeMatchBadge(
+        ['cocktail', 'speakeasy', 'polished'],
+        ['cocktail', 'speakeasy', 'dive'],
+      ),
+    ).toEqual({ num: 2, den: 3 });
   });
 
-  it('denominator is min(|user|, |bar|) when bar is smaller', () => {
-    const { den } = vibeMatchBadge(
-      ['cocktail', 'speakeasy', 'polished', 'industry'],
-      ['cocktail'],
-    );
-    expect(den).toBe(1);
+  it('denominator is N even when the bar carries far more tags', () => {
+    expect(
+      vibeMatchBadge(
+        ['cocktail', 'speakeasy'],
+        ['cocktail', 'speakeasy', 'polished', 'industry'],
+      ),
+    ).toEqual({ num: 2, den: 2 });
   });
 
-  it('denominator is floored at 1 when both inputs are empty (no divide-by-zero)', () => {
-    const { num, den } = vibeMatchBadge([], []);
-    expect(num).toBe(0);
-    expect(den).toBe(1);
+  it('denominator is N even when the bar carries fewer tags', () => {
+    // The old badge used min(|user|, |bar|), which read 1/1 here — a perfect
+    // score for a bar missing three of the four vibes the user asked for.
+    expect(
+      vibeMatchBadge(
+        ['cocktail', 'speakeasy', 'polished', 'industry'],
+        ['cocktail'],
+      ),
+    ).toEqual({ num: 1, den: 4 });
+  });
+
+  it('counts a duplicated pick once, in both halves of the fraction', () => {
+    expect(vibeMatchBadge(['wine', 'wine'], ['wine'])).toEqual({
+      num: 1,
+      den: 1,
+    });
+  });
+});
+
+describe('isVibeEligible — at least max(1, N - 1) of N', () => {
+  const T: VibeTag[] = [
+    'cocktail',
+    'wine',
+    'dive',
+    'jazz',
+    'rooftop',
+    'garden',
+  ];
+  /** A bar carrying `hit` of the first `n` selected vibes. */
+  const barWith = (hit: number, n: number): VibeTag[] => [
+    ...T.slice(0, hit),
+    ...(hit < n ? (['pub'] as VibeTag[]) : []),
+  ];
+  const selectionOf = (n: number): VibeTag[] => T.slice(0, n);
+
+  it('gates nothing when there is no selection', () => {
+    expect(isVibeEligible([], ['pub'])).toBe(true);
+  });
+
+  it.each([
+    [1, 1],
+    [1, 2],
+    [2, 2],
+    [3, 4],
+    [4, 4],
+    [5, 6],
+    [6, 6],
+  ])('admits %i/%i', (hit, n) => {
+    expect(isVibeEligible(selectionOf(n), barWith(hit, n))).toBe(true);
+  });
+
+  it.each([
+    [0, 1],
+    [0, 2],
+    [1, 4],
+    [2, 4],
+    [3, 6],
+    [4, 6],
+  ])('rejects %i/%i', (hit, n) => {
+    expect(isVibeEligible(selectionOf(n), barWith(hit, n))).toBe(false);
+  });
+
+  it('deduplicates the selection before computing the threshold', () => {
+    // Four picks, two distinct: N = 2, so one match is enough. Counting the
+    // duplicates would demand 3 of 4 and reject this bar.
+    expect(
+      isVibeEligible(
+        ['cocktail', 'cocktail', 'wine', 'wine'],
+        ['cocktail', 'pub'],
+      ),
+    ).toBe(true);
   });
 });
 

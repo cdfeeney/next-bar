@@ -86,7 +86,7 @@ test.describe('Bias smoke — Midtown geolocation', () => {
     }
 
     await expect(resultsHeading).toBeVisible({ timeout: 15_000 });
-    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    const cards = page.getByTestId('result-card');
     const count = await cards.count();
     expect(count).toBeGreaterThanOrEqual(3);
 

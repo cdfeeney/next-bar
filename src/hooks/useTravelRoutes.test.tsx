@@ -75,7 +75,7 @@ it('ignores a previous travel selection answering after the current one', async 
     .mockImplementation(() => new Promise<Response>(resolve => { complete.push(resolve); }));
   vi.stubGlobal('fetch', fetcher);
   const answer = (driving: number) => new Response(JSON.stringify({ ...data,
-    routes: [{ ...data.routes[0], driving: { seconds: driving, meters: 1200 } }] }));
+    routes: [{ ...data.routes[0], walking: { seconds: driving === 222 ? 901 : 600, meters: 1200 }, driving: { seconds: driving, meters: 1200 } }] }));
   // Walkable, then Worth a cab: a different mode and walkable-only flag is a
   // different search, so the walkable answer can never stand in for it — not
   // while the cab search is still running, and not when it lands after.

@@ -2,14 +2,15 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Bar, Coords } from '@/types';
-import { isRouteEstimate, ROUTE_RESULT_CAP, type TravelMode, type TravelSearch } from '@/lib/travelTime';
+import { isRouteEstimate, matchesTravelBand, ROUTE_RESULT_CAP, type TravelBand, type TravelMode, type TravelSearch } from '@/lib/travelTime';
 
 /** Search-local memory only: no coordinate history, cross-user cache or retries. */
-export function useTravelRoutes(origin: Coords, candidates: Bar[], mode: TravelMode, walkableOnly: boolean) {
+export function useTravelRoutes(origin: Coords, candidates: Bar[], mode: TravelMode, walkableOnly: boolean,
+  band: TravelBand = walkableOnly ? 'walkable' : mode === 'driving' ? 'cab' : 'anywhere') {
   const [enabled, setEnabled] = useState(false);
   const [revision, setRevision] = useState(0);
   const originKey = `${origin.lat},${origin.lng}`;
-  const key = JSON.stringify([originKey, candidates.map(b => [b.id, b.lat, b.lng]), mode, walkableOnly, revision]);
+  const key = JSON.stringify([originKey, candidates.map(b => [b.id, b.lat, b.lng]), mode, walkableOnly, band, revision]);
   const [state, setState] = useState<{ key: string; status: 'ready' | 'error' | 'stale'; data?: TravelSearch } | null>(null);
   const pending = useRef<{ key: string; work: Promise<{ data: TravelSearch; expiresAt: number }> } | null>(null);
   const capability = useRef<Promise<boolean> | null>(null);
@@ -30,7 +31,7 @@ export function useTravelRoutes(origin: Coords, candidates: Bar[], mode: TravelM
       const work = fetch('/api/travel', {
         method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' },
         signal: AbortSignal.timeout(25_000),
-        body: JSON.stringify({ origin, ids: candidates.map(b => b.id), mode, walkableOnly }),
+        body: JSON.stringify({ origin, ids: candidates.map(b => b.id), mode, walkableOnly, band }),
       }).then(async response => {
         if (!response.ok) throw new Error('routing_unavailable');
         const data = await response.json() as TravelSearch;
@@ -42,7 +43,8 @@ export function useTravelRoutes(origin: Coords, candidates: Bar[], mode: TravelM
               const bar = candidates.find(b => b.id === r.id);
               return !bar || r.destination?.lat !== bar.lat || r.destination?.lng !== bar.lng ||
                 (r.walking !== null && !isRouteEstimate(r.walking)) ||
-                (r.driving !== null && !isRouteEstimate(r.driving)) || !isRouteEstimate(r[mode]);
+                (r.driving !== null && !isRouteEstimate(r.driving)) || !isRouteEstimate(r.walking) ||
+                !matchesTravelBand(origin, bar, r.walking, band);
             })) throw new Error('invalid_routes');
         return { data, expiresAt: Date.now() + 120_000 };
       });

@@ -23,7 +23,12 @@ type ResultCardProps = {
   travel?: BarTravel;
   travelLoading?: boolean;
   directionsMode?: TravelMode;
-  userTags: VibeTag[];
+  /**
+   * The vibes the user EXPLICITLY selected, or [] when no selection is
+   * active. NOT the saved quiz profile — a cold-start prior is not a choice,
+   * and must not produce a match badge (V8-R-NXT-009 / D-C-41).
+   */
+  selectedVibes: VibeTag[];
   /** Planning phase (operator 2026-07-27): show the "Send" share — text
    *  the bar to a group; recipients without the app land on /share/[id]. */
   showShare?: boolean;
@@ -43,8 +48,9 @@ type ResultCardProps = {
  * /rankings owns that flow), and the per-card photo attribution line is
  * replaced by the blanket disclosure on /privacy + the lightbox credit.
  */
-export default function ResultCard({ bar, rank, userTags, showShare, origin, travel, travelLoading, directionsMode = 'walking' }: ResultCardProps) {
-  const badge = vibeMatchBadge(userTags, bar.tags);
+export default function ResultCard({ bar, rank, selectedVibes, showShare, origin, travel, travelLoading, directionsMode = 'walking' }: ResultCardProps) {
+  // null with no explicit selection — there is then no badge to render at all.
+  const badge = vibeMatchBadge(selectedVibes, bar.tags);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   // A broken photo advances to the NEXT carousel photo before giving up —
   // a multi-photo bar with one corrupt file keeps its photo-first card.
@@ -62,7 +68,7 @@ export default function ResultCard({ bar, rank, userTags, showShare, origin, tra
   const fallbackVisual = barVisual(bar);
 
   return (
-    <article className="bg-surface border border-border rounded-3xl overflow-hidden flex flex-col">
+    <article data-testid="result-card" className="bg-surface border border-border rounded-3xl overflow-hidden flex flex-col">
       {isGoogleLive ? (
         <GooglePlacePhotoLazy
           placeId={decision.placeId}
@@ -151,13 +157,18 @@ export default function ResultCard({ bar, rank, userTags, showShare, origin, tra
           </div>
         ) : null}
 
-        {/* One meta line: the loud walk/ride time + the match count several
-            e2e specs key on ("Vibe match" — keep those words). */}
+        {/* One meta line: the loud walk/ride time, plus the match count when —
+            and only when — the user has an explicit vibe selection active.
+            With no selection there is no honest fraction to print, so the
+            badge is omitted rather than shown as "0/1". Specs identify a card
+            by data-testid="result-card", never by this text. */}
         <p className="text-sm">
           <span className="font-display text-accent">{travelLoading ? 'Calculating walk…' : routeCopy(travel?.walking, 'walking')}</span>
-          <span className="text-muted">
-            {' '}· Vibe match {badge.num}/{badge.den}
-          </span>
+          {badge ? (
+            <span className="text-muted" data-testid="vibe-match">
+              {' '}· Vibe match {badge.num}/{badge.den}
+            </span>
+          ) : null}
         </p>
         <p className="text-xs text-muted">
           {travelLoading ? 'Calculating drive…' : routeCopy(travel?.driving, 'driving')}

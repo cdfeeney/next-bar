@@ -36,7 +36,7 @@ async function seedResultsFromAttaboy(page: import('@playwright/test').Page) {
   await page.goto('/');
   await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
   await page.getByRole('button', { name: /Attaboy/ }).click();
-  const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+  const cards = page.getByTestId('result-card');
   await expect(cards).toHaveCount(5);
   return cards;
 }

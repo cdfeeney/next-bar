@@ -223,7 +223,7 @@ export default function WhereNextFlow() {
   // Radius fine-tune lives on the results surface (E2.1) — changing it
   // re-ranks live. Walking default.
   const [selectedRadius, setSelectedRadius] = useState<Radius>(DEFAULT_RADIUS);
-  // Broader modes include nearby bars; distance isn't an exclusive ring.
+  // ResultsView enforces separate route-based travel bands.
   const minMilesExclusive = null;
 
   // The history excludes already-shown bars so refresh deals the NEXT batch.

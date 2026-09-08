@@ -150,7 +150,7 @@ const settledRanking = async (
 const seedResultsFromAttaboy = async (page: import('@playwright/test').Page) => {
   await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
   await page.getByRole('button', { name: /Attaboy/ }).click();
-  const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+  const cards = page.getByTestId('result-card');
   await expect(cards.first()).toBeVisible();
   await settledRanking(cards);
   return cards;
@@ -194,16 +194,19 @@ test.describe('Tweak the vibe — ranking', () => {
     // `isExplicitVibe` is the only input that changes across the click. If the
     // flag never reached the ranker this list could not move.
     const before = await settledRanking(cards);
-    // With the pick's tags scored down, the normal path buries every match.
-    await expect(cards.first()).toContainText('Vibe match 0/');
+    // Nothing is APPLIED yet — the seed bar's own tags are inference, not
+    // instruction — so no card carries a match badge (D-C-41), and with the
+    // pick's tags scored down the normal path buries every match.
+    await expect(page.getByTestId('vibe-match')).toHaveCount(0);
 
     await page.getByRole('button', { name: /Tweak the vibe/i }).click();
     await page.getByRole('button', { name: /^Apply$/ }).click();
     await expect(cards.first()).toBeVisible();
 
-    // On the explicit path a MATCHING bar outranks anything the rating
-    // history merely favours, so the top card cannot be a 0-tag match.
-    await expect(cards.first()).not.toContainText('Vibe match 0/');
+    // Applying makes the pick explicit: every surviving card now carries a
+    // badge, and every one of them is eligible, so none can read 0/N.
+    await expect(cards.first().getByTestId('vibe-match')).toBeVisible();
+    await expect(cards.first()).not.toContainText(/Vibe match 0\//);
     expect(await settledRanking(cards)).not.toEqual(before);
   });
 });

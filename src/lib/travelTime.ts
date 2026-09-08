@@ -1,6 +1,9 @@
 import type { Coords } from '@/types';
+import { RADIUS_CAB } from '@/lib/constants';
+import { haversineMiles } from '@/lib/distance';
 
 export type TravelMode = 'walking' | 'driving';
+export type TravelBand = 'walkable' | 'cab' | 'anywhere' | 'nearby';
 export type RouteEstimate = { seconds: number; meters: number };
 export type BarTravel = {
   id: string;
@@ -25,6 +28,14 @@ export function isRouteEstimate(value: unknown): value is RouteEstimate {
 }
 export function isWalkable(route: RouteEstimate | null | undefined): boolean {
   return isRouteEstimate(route) && route.seconds <= WALKABLE_SECONDS;
+}
+/** Unknown walking routes cannot establish membership in either inner band. */
+export function matchesTravelBand(origin: Coords, destination: Coords, walking: RouteEstimate | null | undefined, band: TravelBand): boolean {
+  if (band === 'nearby') return true;
+  const miles = haversineMiles(origin, destination);
+  if (band === 'anywhere') return miles > RADIUS_CAB;
+  return miles <= RADIUS_CAB && isRouteEstimate(walking) &&
+    (band === 'walkable' ? isWalkable(walking) : !isWalkable(walking));
 }
 export function routeCopy(route: RouteEstimate | null | undefined, mode: TravelMode): string {
   const label = mode === 'walking' ? 'Walk' : 'Drive';

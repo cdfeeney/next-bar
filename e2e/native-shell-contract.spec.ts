@@ -439,7 +439,7 @@ test.describe('V8 native interaction contract', () => {
     await page.goto('/');
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
-    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    const cards = page.getByTestId('result-card');
     await expect(cards).toHaveCount(5);
     await cards.first().getByRole('button', { name: /See photos and hours/i }).press('Enter');
 
@@ -486,7 +486,7 @@ test.describe('V8 native interaction contract', () => {
     await page.goto('/');
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
-    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    const cards = page.getByTestId('result-card');
     await expect(cards).toHaveCount(5);
 
     await page.evaluate(() => window.scrollTo(0, 0));
@@ -518,7 +518,7 @@ test.describe('V8 native interaction contract', () => {
     await page.goto('/');
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
-    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    const cards = page.getByTestId('result-card');
     await expect(cards).toHaveCount(5);
     await cards.first().getByRole('button', { name: /See photos and hours/i }).press('Enter');
 
@@ -650,7 +650,7 @@ test.describe('V8 native interaction contract', () => {
     // known bar is the shortest path to a card that opens the lightbox.
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
-    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    const cards = page.getByTestId('result-card');
     await expect(cards).toHaveCount(5);
     await settle(page);
 

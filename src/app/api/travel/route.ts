@@ -41,6 +41,9 @@ export async function POST(request: Request) {
   if (!body || !isRoutingCoords(body.origin) ||
       !['walking', 'driving'].includes(body.mode) || typeof body.walkableOnly !== 'boolean' ||
       (body.walkableOnly && body.mode !== 'walking') || !Array.isArray(body.ids) ||
+      (body.band !== undefined && (!['walkable', 'cab', 'anywhere', 'nearby'].includes(body.band) ||
+        body.walkableOnly !== (body.band === 'walkable') ||
+        body.mode !== (body.band === 'cab' ? 'driving' : 'walking'))) ||
       body.ids.length < 1 || body.ids.length > ROUTE_CANDIDATE_CAP ||
       body.ids.some((id: unknown) => typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(id)) ||
       new Set(body.ids).size !== body.ids.length) return reply({ error: 'invalid_request' }, 400);
@@ -52,7 +55,7 @@ export async function POST(request: Request) {
   if (candidates.some(b => !b || !isRoutingCoords(b))) return reply({ error: 'catalog_changed' }, 409);
   try {
     const result = await searchRoutes(body.origin, candidates as {id: string; lat: number; lng: number}[],
-      body.mode, body.walkableOnly, process.env.ORS_API_KEY!, AbortSignal.timeout(20_000));
+      body.mode, body.walkableOnly, process.env.ORS_API_KEY!, AbortSignal.timeout(20_000), body.band);
     return reply(result);
   } catch {
     // Don't log provider payloads, request bodies, URLs or exact coordinates.

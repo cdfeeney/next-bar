@@ -35,7 +35,7 @@ async function openLightbox(page: Page) {
   await page.goto('/');
   await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
   await page.getByRole('button', { name: /Attaboy/ }).click();
-  const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+  const cards = page.getByTestId('result-card');
   await expect(cards).toHaveCount(5);
   // Layout coverage needs a venue with known tags; untagged venues legitimately
   // omit this section. Recommendation order is covered in vibe-tweak-ranking.
@@ -183,7 +183,7 @@ test.describe('venue tags in the bar lightbox', () => {
     await page.goto('/');
     await page.getByRole('textbox', { name: 'Search bars' }).fill('Attaboy');
     await page.getByRole('button', { name: /Attaboy/ }).click();
-    const cards = page.locator('article').filter({ hasText: /Vibe match/i });
+    const cards = page.getByTestId('result-card');
     await expect(cards).toHaveCount(5);
     // The chip row belongs to the lightbox only (checklist §2: "without
     // crowding the result card").
