@@ -25,6 +25,7 @@
  * Runs on every project in playwright.config.ts (iPhone 13, Pixel 7).
  */
 import { test, expect, type Page } from './helpers/test';
+import { CATALOG_ROUTE, fulfillCatalog } from './helpers/catalogTest';
 import { denyGeolocation } from './helpers/geo';
 
 /** Apple HIG minimum tap target. Also what a11y-mobile.spec.ts enforces. */
@@ -217,6 +218,22 @@ test.describe('mobile controls are reachable', () => {
   test.beforeEach(async ({ context }) => {
     // Home is location-first; deny geo so it settles to the manual surface.
     await denyGeolocation(context);
+  });
+
+  test('a delayed catalog settles before the picker bottom is measured', async ({ page }) => {
+    await page.route(CATALOG_ROUTE, async route => {
+      await new Promise(resolve => setTimeout(resolve, 750));
+      await fulfillCatalog(route);
+    });
+    await page.goto('/');
+    await expect(page.getByText(/Loading the Manhattan catalog/)).toBeVisible();
+    await expect(page.getByText(/Loading the Manhattan catalog/)).toHaveCount(0, { timeout: 15_000 });
+    const lastControl = page.getByRole('button', { name: /Not listed/ });
+    await lastControl.scrollIntoViewIfNeeded();
+    await expect(lastControl).toBeVisible();
+    await lastControl.click({ trial: true });
+    const covered = await unreachableControls(page, 'coverage-only');
+    expect(covered, describeFailures('/ after delayed catalog', covered)).toEqual([]);
   });
 
   // The two passes are SEPARATE tests. They were one test until 2026-08-19,

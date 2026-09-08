@@ -42,4 +42,5 @@ it('separates the route boundary, cab edge, and unknown routes without overlappi
   expect(admitted(near, null)).toEqual([]);
   expect(admitted(far, 5000)).toEqual(['anywhere']);
   expect(admitted(far, null)).toEqual(['anywhere']);
+  expect(admitted({ lat: 0, lng: 0 }, null)).toEqual([]);
 });

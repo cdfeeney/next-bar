@@ -1,5 +1,5 @@
 import type { Coords } from '@/types';
-import { RADIUS_CAB } from '@/lib/constants';
+import { RADIUS_CAB, SERVICE_AREA_BBOX } from '@/lib/constants';
 import { haversineMiles } from '@/lib/distance';
 
 export type TravelMode = 'walking' | 'driving';
@@ -32,6 +32,8 @@ export function isWalkable(route: RouteEstimate | null | undefined): boolean {
 /** Unknown walking routes cannot establish membership in either inner band. */
 export function matchesTravelBand(origin: Coords, destination: Coords, walking: RouteEstimate | null | undefined, band: TravelBand): boolean {
   if (band === 'nearby') return true;
+  if (!(destination.lat >= SERVICE_AREA_BBOX.minLat && destination.lat <= SERVICE_AREA_BBOX.maxLat &&
+        destination.lng >= SERVICE_AREA_BBOX.minLng && destination.lng <= SERVICE_AREA_BBOX.maxLng)) return false;
   const miles = haversineMiles(origin, destination);
   if (band === 'anywhere') return miles > RADIUS_CAB;
   return miles <= RADIUS_CAB && isRouteEstimate(walking) &&
