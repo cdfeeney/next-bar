@@ -174,6 +174,9 @@ test.describe('Friends + consensus', () => {
     // carries the star/share moment reserved for a unanimous pick.
     await expect(page.getByTestId('no-unanimous-pick')).toBeVisible();
     const cards = page.locator('article');
+    // `count()` does not wait; the cards render once the ratings merge has
+    // settled, which under a loaded gate can trail the notice above.
+    await expect(cards.first()).toBeVisible();
     const cardCount = await cards.count();
     expect(cardCount).toBeGreaterThan(0);
     await expect(page.getByTestId('near-miss-badge')).toHaveCount(cardCount);

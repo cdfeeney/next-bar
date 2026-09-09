@@ -2029,7 +2029,10 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await expect(page.locator('main')).toBeVisible();
     await page.goto('/friends');
     await page.getByRole('tab', { name: 'Plans' }).click();
-    await expect.poll(() => listReadsAfterCreate, { timeout: 10_000 }).toBeGreaterThan(0);
+    // Plans has rendered before the list read is judged; under a loaded gate
+    // the tab's content can trail the click.
+    await expect(page.getByTestId('start-night-out')).toBeVisible();
+    await expect.poll(() => listReadsAfterCreate, { timeout: 15_000 }).toBeGreaterThan(0);
     await page.reload();
     await page.getByRole('tab', { name: 'Plans' }).click();
     await expect(page.getByTestId('start-night-out')).toBeVisible();

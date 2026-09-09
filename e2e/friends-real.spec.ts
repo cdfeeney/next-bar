@@ -401,9 +401,12 @@ test.describe('/friends/consensus — REAL group pick', () => {
     });
     await page.goto('/friends/consensus');
 
-    // Real first names as selectable people — not the demo curators.
-    await expect(page.getByRole('button', { name: /Sam/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Claire/ })).toBeVisible();
+    // Real first names as selectable people — not the demo curators. The chip
+    // is the button whose name STARTS with the name; the selection summary
+    // also carries a "Remove Sam" control (V9-04), so an unanchored /Sam/
+    // would match two elements.
+    await expect(page.getByRole('button', { name: /^Sam\b/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Claire\b/ })).toBeVisible();
 
     await expect(page.getByText(/Group Favorites/i)).toBeVisible();
 
