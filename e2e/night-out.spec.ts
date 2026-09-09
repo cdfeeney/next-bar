@@ -34,6 +34,13 @@ test.afterEach(async ({ page }) => {
 
 const TOKEN = '123e4567-e89b-42d3-a456-426614174000';
 const PLAN_ID = '223e4567-e89b-42d3-a456-426614174000';
+/**
+ * The plan reads a member view may issue. Anything else under the get_night_out
+ * prefix is NOT answered here: it falls back to the strict recorder and fails the
+ * test as an unexpected request (cycle-2 panel: the broad glob used to answer
+ * unknown suffixes with a plan row).
+ */
+const PLAN_READ_RE = /\/rpc\/get_night_out(?:_(?:members|board|voting|anon_rsvps|media))?(?:\?|$)/;
 const USER_ID = '323e4567-e89b-42d3-a456-426614174000';
 const PENDING_KEY = 'next-bar:pending-invite:v1';
 
@@ -284,6 +291,7 @@ async function stubMemberRpcs(page: Page, night?: string): Promise<void> {
   );
   await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
     const url = route.request().url();
+    if (!PLAN_READ_RE.test(url)) return route.fallback();
     // Every plan read names THIS plan; a fixture that answered any id would
     // keep an exact-plan regression green (V9-03).
     expect(route.request().postDataJSON()).toEqual(
@@ -291,7 +299,12 @@ async function stubMemberRpcs(page: Page, night?: string): Promise<void> {
     );
     // Set-returning reads with their own row shapes: an empty set is the honest
     // default, never the plan row the bare `get_night_out` returns.
-    if (/get_night_out_(voting|anon_rsvps|media)/.test(url)) {
+    // get_night_out_anon_rsvps is an ungrouped aggregate: exactly ONE row, zeros
+    // when nothing was answered (0068:2268-2282). Never an empty set.
+    if (url.includes('get_night_out_anon_rsvps')) {
+      return fulfillJson(200, [{ going: 0, maybe: 0, declined: 0 }])(route);
+    }
+    if (/get_night_out_(voting|media)/.test(url)) {
       return fulfillJson(200, [])(route);
     }
     if (url.includes('get_night_out_members')) {
@@ -349,12 +362,18 @@ async function stubOwnerRpcs(page: Page): Promise<void> {
   );
   await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
     const url = route.request().url();
+    if (!PLAN_READ_RE.test(url)) return route.fallback();
     expect(route.request().postDataJSON()).toEqual(
       expect.objectContaining({ p_night_out: PLAN_ID }),
     );
     // Set-returning reads with their own row shapes: an empty set is the honest
     // default, never the plan row the bare `get_night_out` returns.
-    if (/get_night_out_(voting|anon_rsvps|media)/.test(url)) {
+    // get_night_out_anon_rsvps is an ungrouped aggregate: exactly ONE row, zeros
+    // when nothing was answered (0068:2268-2282). Never an empty set.
+    if (url.includes('get_night_out_anon_rsvps')) {
+      return fulfillJson(200, [{ going: 0, maybe: 0, declined: 0 }])(route);
+    }
+    if (/get_night_out_(voting|media)/.test(url)) {
       return fulfillJson(200, [])(route);
     }
     if (url.includes('get_night_out_members')) {
@@ -675,12 +694,18 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     let planReads = 0;
     await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
       const url = route.request().url();
+      if (!PLAN_READ_RE.test(url)) return route.fallback();
       // Every plan read names THIS plan, and set-returning reads get an empty set,
       // never the plan row (round-3 panel: the broad glob shadowed both checks).
       expect(route.request().postDataJSON()).toEqual(
         expect.objectContaining({ p_night_out: PLAN_ID }),
       );
-      if (/get_night_out_(voting|anon_rsvps|media)/.test(url)) {
+      // get_night_out_anon_rsvps is an ungrouped aggregate: exactly ONE row, zeros
+      // when nothing was answered (0068:2268-2282). Never an empty set.
+      if (url.includes('get_night_out_anon_rsvps')) {
+        return fulfillJson(200, [{ going: 0, maybe: 0, declined: 0 }])(route);
+      }
+      if (/get_night_out_(voting|media)/.test(url)) {
         return fulfillJson(200, [])(route);
       }
       if (url.includes('get_night_out_members')) return fulfillJson(200, [])(route);
@@ -737,10 +762,15 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     await page.route('**/rest/v1/rpc/night_out_media_window', fulfillJson(200, []));
     await page.route('**/rest/v1/rpc/get_night_out*', async (route) => {
       const url = route.request().url();
+      if (!PLAN_READ_RE.test(url)) return route.fallback();
       expect(route.request().postDataJSON()).toEqual(
         expect.objectContaining({ p_night_out: PLAN_ID }),
       );
-      if (/get_night_out_(members|board|voting|anon_rsvps|media)/.test(url)) {
+      if (url.includes('get_night_out_anon_rsvps')) {
+        // One aggregate row, always (0068:2268-2282); zeros for a declined caller.
+        return fulfillJson(200, [{ going: 0, maybe: 0, declined: 0 }])(route);
+      }
+      if (/get_night_out_(members|board|voting|media)/.test(url)) {
         return fulfillJson(200, [])(route);
       }
       // share_token is returned only to accepted members (0059:236); a declined
@@ -799,12 +829,18 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     // Re-stub the plan as decided — the RPCs reject writes in this state.
     await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
       const url = route.request().url();
+      if (!PLAN_READ_RE.test(url)) return route.fallback();
       // Every plan read names THIS plan, and set-returning reads get an empty set,
       // never the plan row (round-3 panel: the broad glob shadowed both checks).
       expect(route.request().postDataJSON()).toEqual(
         expect.objectContaining({ p_night_out: PLAN_ID }),
       );
-      if (/get_night_out_(voting|anon_rsvps|media)/.test(url)) {
+      // get_night_out_anon_rsvps is an ungrouped aggregate: exactly ONE row, zeros
+      // when nothing was answered (0068:2268-2282). Never an empty set.
+      if (url.includes('get_night_out_anon_rsvps')) {
+        return fulfillJson(200, [{ going: 0, maybe: 0, declined: 0 }])(route);
+      }
+      if (/get_night_out_(voting|media)/.test(url)) {
         return fulfillJson(200, [])(route);
       }
       if (url.includes('get_night_out_members')) return fulfillJson(200, [])(route);
@@ -1685,12 +1721,18 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     await stubMemberRpcs(page, night);
     await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
       const url = route.request().url();
+      if (!PLAN_READ_RE.test(url)) return route.fallback();
       // Every plan read names THIS plan, and set-returning reads get an empty set,
       // never the plan row (round-3 panel: the broad glob shadowed both checks).
       expect(route.request().postDataJSON()).toEqual(
         expect.objectContaining({ p_night_out: PLAN_ID }),
       );
-      if (/get_night_out_(voting|anon_rsvps|media)/.test(url)) {
+      // get_night_out_anon_rsvps is an ungrouped aggregate: exactly ONE row, zeros
+      // when nothing was answered (0068:2268-2282). Never an empty set.
+      if (url.includes('get_night_out_anon_rsvps')) {
+        return fulfillJson(200, [{ going: 0, maybe: 0, declined: 0 }])(route);
+      }
+      if (/get_night_out_(voting|media)/.test(url)) {
         return fulfillJson(200, [])(route);
       }
       if (url.includes('get_night_out_members')) return fulfillJson(200, [])(route);
@@ -1941,12 +1983,11 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     let listReadsAfterCreate = 0;
     await page.route('**/rest/v1/rpc/create_night_out*', async (route) => {
       const body = route.request().postDataJSON() as { p_night: string; p_idempotency_key: string | null };
-      expect(body).toEqual(
-        expect.objectContaining({
-          p_night: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-          p_idempotency_key: expect.any(String),
-        }),
-      );
+      expect(body).toEqual({
+        p_night: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        p_title: null,
+        p_idempotency_key: expect.any(String),
+      });
       createCalls += 1;
       createdNight = body.p_night;
       await fulfillJson(200, PLAN_ID)(route);
@@ -1957,9 +1998,8 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     // invite is answered so the V9-03 journey can continue, and recorded.
     const invited: string[] = [];
     await page.route('**/rest/v1/rpc/invite_to_night_out*', async (route) => {
-      const body = route.request().postDataJSON() as { p_night_out: string; p_user: string };
-      expect(body.p_night_out).toBe(PLAN_ID);
-      invited.push(body.p_user);
+      expect(route.request().postDataJSON()).toEqual({ p_night_out: PLAN_ID, p_user: FRIEND_ID });
+      invited.push(FRIEND_ID);
       await fulfillJson(200, true)(route);
     });
     // Registered AFTER openTheForm's empty Plans-tab fixture, so it wins. It is
@@ -2003,8 +2043,13 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
    * surface lists plans you own (StartNightOutButton.tsx:38-41 records it as a
    * residual gap from V8-3). So the server's real answer to the owner's Plans
    * tab is `[]`, and the plan they just created is not listed anywhere.
-   * `test.fail` keeps it visible until the Night Out goal adds an owner surface
-   * (or includes owned plans in the list); it turns red when fixed.
+   * The listing assertion is marked expected-to-fail ONLY when the listing is
+   * missing (dynamic `test.fail`), so every other failure in this case stays
+   * red. A mock cannot notice the server fix: when the Night Out goal lands an
+   * owner surface, it updates the `get_my_night_outs` fixture here and removes
+   * the marker by hand. The check that goes red on the server side the moment
+   * 0059:296 changes is src/lib/nightOutsRls.live.test.ts:909, which pins the
+   * exclusion today and must be inverted by that goal.
    */
   test('V9-03: the plan an owner just created is listed under Plans after returning', async ({
     page,
@@ -2012,25 +2057,51 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     baseURL,
   }) => {
     test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
-    test.fail(true, 'V9-03 known product failure: get_my_night_outs excludes owned plans and no surface lists them — Night Out goal');
     await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
     await context.addCookies([
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
     await openTheForm(page);
     await stubOwnerRpcs(page);
-    await page.route('**/rest/v1/rpc/create_night_out*', fulfillJson(200, PLAN_ID));
-    await page.route('**/rest/v1/rpc/invite_to_night_out*', fulfillJson(200, true));
-    // The server's answer for an owner: their own plans are excluded.
+    await page.route('**/rest/v1/rpc/create_night_out*', async (route) => {
+      expect(route.request().postDataJSON()).toEqual({
+        p_night: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        p_title: null,
+        p_idempotency_key: expect.any(String),
+      });
+      await fulfillJson(200, PLAN_ID)(route);
+    });
+    await page.route('**/rest/v1/rpc/invite_to_night_out*', async (route) => {
+      expect(route.request().postDataJSON()).toEqual({ p_night_out: PLAN_ID, p_user: FRIEND_ID });
+      await fulfillJson(200, true)(route);
+    });
+    // The server's answer for an owner: their own plans are excluded. A mock
+    // cannot notice a server change, so this row and the marker below are
+    // updated BY HAND when the Night Out goal lands; the check that goes red on
+    // the server side the moment 0059:296 changes is
+    // src/lib/nightOutsRls.live.test.ts:909, which pins the exclusion today and
+    // must be inverted by that goal.
     await page.route('**/rest/v1/rpc/get_my_night_outs*', fulfillJson(200, []));
 
+    // Preconditions are HARD expectations: a failure here is a real failure,
+    // never something the known-defect marker below may absorb.
     await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
     await page.getByRole('button', { name: /start the official/i }).click();
     await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
-
+    await expect(page.getByRole('heading', { name: PLAN_ROW.title })).toBeVisible();
     await page.goto('/friends');
     await page.getByRole('tab', { name: 'Plans' }).click();
-    await expect(page.getByTestId('plan-invites')).toContainText(PLAN_ROW.title);
+    await expect(page.getByTestId('start-night-out')).toBeVisible();
+
+    // The one assertion that carries the defect. Marked expected-to-fail ONLY
+    // when the listing is missing, so an unrelated failure above stays red.
+    const listed = await page
+      .getByTestId('plan-invites')
+      .filter({ hasText: PLAN_ROW.title })
+      .count()
+      .then((n) => n > 0);
+    test.fail(!listed, 'V9-03 known product failure: get_my_night_outs excludes owned plans and no surface lists them — Night Out goal');
+    expect(listed, 'the plan the owner just created is listed under Plans').toBe(true);
   });
 
   /**
@@ -2055,10 +2126,19 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     ]);
     await openTheForm(page);
     await stubOwnerRpcs(page);
-    await page.route('**/rest/v1/rpc/create_night_out*', fulfillJson(200, PLAN_ID));
+    await page.route('**/rest/v1/rpc/create_night_out*', async (route) => {
+      expect(route.request().postDataJSON()).toEqual({
+        p_night: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        p_title: null,
+        p_idempotency_key: expect.any(String),
+      });
+      await fulfillJson(200, PLAN_ID)(route);
+    });
     const invited: string[] = [];
     await page.route('**/rest/v1/rpc/invite_to_night_out*', async (route) => {
-      invited.push((route.request().postDataJSON() as { p_user: string }).p_user);
+      const body = route.request().postDataJSON() as { p_night_out: string; p_user: string };
+      expect(body.p_night_out).toBe(PLAN_ID);
+      invited.push(body.p_user);
       await fulfillJson(200, true)(route);
     });
 

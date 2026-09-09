@@ -12,7 +12,7 @@ repairs and probes in this goal actually did.
 | Built artifact | `next build` production bundle, fresh per `scripts/run-e2e-release.mjs` run |
 | Base URL | `http://localhost:3517` (`PLAYWRIGHT_PORT`, per-worktree) |
 | Database | Supabase **staging** project (`NEXT_BAR_STAGING_PROJECT_REFS`), anon key only; the guard var `NEXT_BAR_PRODUCTION_PROJECT_REF` is set so production is refused |
-| Auth mode | signed-out by default; signed-in specs seed a session cookie only when `NEXT_PUBLIC_SUPABASE_URL` is present (29 `test.skip` sites in `night-out.spec.ts` otherwise, one per signed-in test) |
+| Auth mode | signed-out by default; signed-in specs seed a session cookie only when `NEXT_PUBLIC_SUPABASE_URL` is present (`test.skip` sites in `night-out.spec.ts`, one per signed-in test: 29 at the base, 32 at this candidate after the three V9-03/V9-04 cases) |
 | Catalog | bundled Manhattan catalog fixture; specs wait for `Loading the Manhattan catalog` to clear |
 | Engines / devices | Playwright `iPhone 13` (WebKit) and `Pixel 7` (Chromium) emulation. **Neither is the installed Capacitor app.** |
 | Providers | `NEXT_BAR_ROUTING_ENABLED=true`; route fixtures are mocked in specs; Google media disabled in the gate |
@@ -28,7 +28,7 @@ Supabase persistence. The owner's phone reports are a third evidence category th
 |---|---|---|---|---|---|
 | V9-01 | "Only 3 routes confirmed" copy; three results | none — no spec matches `routes confirmed` / `Checked … candidates` | `one-results-view.spec.ts` asserts five cards from a fixture catalog; `distance-routes.spec.ts` mocks route responses (8 `page.route`) | copy is only rendered when `ranked.length < count`; every fixture yields 5 routed results so the branch never renders | product copy + missing negative-state test |
 | V9-02 | plan form overflows the right edge on iPhone | **none for the form.** `mobile-controls.spec.ts` (4 `test()` declarations generating 12 cases per device: 1 + 5 routes × 2 + 1; 44px targets, on-screen check) runs only `PUBLIC_ROUTES` = `/`, `/map`, `/rankings`, `/settings`, `/install` (`:233`); `/friends/consensus` is not in it. `night-out.spec.ts` "the Start a Night Out form" tests reach the form but assert fields, not geometry | the control-geometry check never visits the planner; where it does run it used two **fixed waits** (1000 ms, 500 ms) and never opens native date/time selectors, types long names, or raises the keyboard | overflow appears on a route the geometry check never visits, in states no test enters; fixed waits also sample mid-layout | test gap (route + interaction states) |
-| V9-03 | created Night Out cannot be found again | `night-out.spec.ts` (39 `test()` declarations at the base) | twelve catch-all `page.route('**/rest/v1/**', fulfillJson(200, []))` sites answer **every** unstubbed REST/RPC call with an empty 200 — including `get_my_night_outs` | the create→navigate away→return journey was never asserted; a wrong or missing list request was indistinguishable from "no plans" because the stub returned `[]` for anything. **Repaired in §5: the journey now exists with a stateful list fixture.** | test defect (fail-open stub) + missing journey |
+| V9-03 | created Night Out cannot be found again | `night-out.spec.ts` (39 `test()` declarations at the base) | twelve catch-all `page.route('**/rest/v1/**', fulfillJson(200, []))` sites answer **every** unstubbed REST/RPC call with an empty 200 — including `get_my_night_outs` | the create→navigate away→return journey was never asserted; a wrong or missing list request was indistinguishable from "no plans" because the stub returned `[]` for anything. **§5: the journey now exists, the defect is reproduced with its cause, and the missing listing is pinned as a known failure.** | test defect (fail-open stub) + missing journey → **product gap reproduced** |
 | V9-04 | recipient picker is a wall of chips | no spec targets `inviteeSelection` / `GroupsAndPeople`; `night-out.spec.ts` seeds invitees via stubs | recipient set is never read back from the submitted request | submitted recipients are never compared with the visible selection | missing assertion |
 | V9-05 | no suggestions/voting/real invite in the flow; CTA position | `night-out.spec.ts` vote/RSVP cases (`respond_night_out`, `lock_night_out`, `rsvp_night_out_by_token`) | stubs return success without inspecting request bodies; the create→invite→accept→vote chain is split across tests with seeded state | a write that sends the wrong arguments still "succeeds"; the flow order is not asserted | fail-open stub + missing journey |
 | V9-06 | "No camera is available on this device" on iPhone | `add-story.spec.ts` (13 tests) mocks `getUserMedia` | browser emulation with a fake media stream | `ios/App/App/Info.plist` has no `NSCameraUsageDescription`; WKWebView permission behaviour is not reachable from Playwright at all | native gap — browser test cannot cover it |
@@ -89,10 +89,11 @@ Implemented by the delegated Codex slice (write scope `e2e/night-out.spec.ts`, `
   The fixture now returns the declined plan row and an empty board, and the test asserts the declined state renders
   ("You're out for this one…", `page.tsx:1251`) and the error banner does not. Nothing here is a V9-03/V9-05 question.
 - **V9-03 journey added** ("V9-03: a plan created once is discoverable again after leaving, returning and reloading"):
-  from the Plans entry point, create once (`create_night_out` body asserted), land on `/night-out/<token>` as owner,
-  leave for `/map`, return to Plans, reload, return again — the same plan must be listed each time and exactly one
-  create may have happened. The `get_my_night_outs` fixture is **stateful** (empty until the create RPC was issued,
-  shaped as the server answers). **V9-03 is REPRODUCED in the browser, with its cause.** `get_my_night_outs` excludes
+  from the Plans entry point, create once (`create_night_out` and `invite_to_night_out` bodies asserted exactly), land
+  on `/night-out/<token>` as owner, leave for `/map`, return to Plans, reload — Plans must re-read `get_my_night_outs`
+  after creation and exactly one create may ever happen. That fixture answers `[]` throughout because that is what the
+  server returns to an owner (below), so the journey asserts what holds today and does NOT claim the plan is listed.
+  **V9-03 is REPRODUCED in the browser, with its cause.** `get_my_night_outs` excludes
   the caller's own plans (`supabase/migrations/0059_night_outs_respond_revision.sql:296`, `n.owner_id <> auth.uid()`;
   restated at `src/lib/nightOuts.server.ts:355-357`), `PlansSection` renders only the Start link plus `PlanInvites`, and
   `StartNightOutButton.tsx:38-41` records "no surface lists plans you own" as a residual V8-3 gap. So after creating, the
@@ -100,9 +101,16 @@ Implemented by the delegated Codex slice (write scope `e2e/night-out.spec.ts`, `
   row and went green; the round-3 panel (both lanes) caught it as the fail-open this goal exists to remove. Now:
   the journey asserts what holds (one create, owner lands on the plan, Plans re-reads the list on return and reload,
   never a second create), and a separate case — "V9-03: the plan an owner just created is listed under Plans after
-  returning" — asserts the missing behaviour under `test.fail(true, …)` naming V9-03, so it reports as an expected
-  failure today and turns red when the Night Out goal adds an owner surface or includes owned plans in the list.
-  This is not a staging or device question; it is a product gap with a line number.
+  returning" — runs every precondition as a hard expectation and marks ONLY the listing assertion expected-to-fail
+  (dynamic `test.fail(!listed, …)` naming V9-03), so an unrelated failure in that case stays red. Honest limit: a mock
+  cannot observe the server fix — when the Night Out goal adds an owner surface (or includes owned plans in
+  `get_my_night_outs`), it updates that fixture and removes the marker by hand. The check that goes red on the server
+  side the moment `0059:296` changes is `src/lib/nightOutsRls.live.test.ts:909`, which pins the exclusion as intended
+  behaviour today and must be inverted by that goal. This is not a staging or device question; it is a product gap
+  with a line number. Fixture shapes were re-checked against the SQL: `get_night_out_anon_rsvps` is an ungrouped
+  aggregate that always returns exactly one row (`0068:2268-2282`), so every handler answers it with
+  `[{ going: 0, maybe: 0, declined: 0 }]`, never `[]`; unknown `get_night_out_*` suffixes fall back to the strict
+  recorder instead of a plan row.
 - **V9-04 default observed and pinned.** Running the journey under the strict fixture showed `invite_to_night_out`
   firing for the one circle member without the test selecting anyone. The cause is a **visible** default, not a silent
   one: the consensus page pre-selects every circle member (`src/app/friends/consensus/page.tsx`, `effectiveSelected`:
