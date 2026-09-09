@@ -380,3 +380,20 @@ test.describe('Add to Story — signed in', () => {
     await expect(page.getByText('Choose from library')).toBeVisible();
   });
 });
+
+/**
+ * V9-06: media capture belongs to THIS origin only. Inside the iPhone shell
+ * Capacitor's WKUIDelegate grants getUserMedia to any origin it is asked about,
+ * so the document itself must forbid capture for anything embedded in it —
+ * and the app never requests a microphone. Asserted on the response header of
+ * every kind of route the shell can load.
+ */
+test('every route forbids camera capture to other origins and the microphone entirely', async ({ page }) => {
+  for (const route of ['/', '/friends', '/map']) {
+    const response = await page.goto(route);
+    expect(response, route).not.toBeNull();
+    const policy = response!.headers()['permissions-policy'] ?? '';
+    expect(policy, `${route} permissions-policy`).toMatch(/camera=\(self\)/);
+    expect(policy, `${route} permissions-policy`).toMatch(/microphone=\(\)/);
+  }
+});

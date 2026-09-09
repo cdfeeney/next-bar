@@ -25,7 +25,7 @@ describe('noticeFor — every non-live state names its way forward', () => {
 
   it('a denial points at Settings, on the phone and in Safari', () => {
     const copy = noticeFor('denied', 'denied');
-    expect(copy).toMatch(/Settings › Next Bar › Camera/);
+    expect(copy).toMatch(/Settings › Privacy & Security › Camera › Next Bar/);
     expect(copy).toMatch(/Safari/);
     expect(copy).toMatch(/photo you already have/);
   });

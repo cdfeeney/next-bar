@@ -66,9 +66,17 @@ const config: CapacitorConfig = {
     // Safari (Capacitor default), which is what Apple review expects.
     // The canonical hosts stay allowed even when an override is active so
     // a DNS cutover mid-testing cannot strand an installed build.
-    allowNavigation: [
-      ...new Set([parsedOrigin.host, 'next-bar.com', 'www.next-bar.com']),
-    ],
+    // V9-06: the shell may navigate ONLY within its own origin. It used to
+    // allow-list the canonical hosts as well, so a staging-targeted binary
+    // could be navigated to production and — because Capacitor grants media
+    // capture to every origin it is asked about — hand the camera to an
+    // origin that is not the one the binary was built for. With an override
+    // the ONLY allowed host is the override; without one it is the canonical
+    // apex plus www (one origin's two spellings).
+    allowNavigation:
+      rawOverride === ''
+        ? ['next-bar.com', 'www.next-bar.com']
+        : [parsedOrigin.host],
   },
   ios: {
     backgroundColor: '#0a0a0a',
