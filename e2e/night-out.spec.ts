@@ -675,6 +675,14 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     let planReads = 0;
     await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
       const url = route.request().url();
+      // Every plan read names THIS plan, and set-returning reads get an empty set,
+      // never the plan row (round-3 panel: the broad glob shadowed both checks).
+      expect(route.request().postDataJSON()).toEqual(
+        expect.objectContaining({ p_night_out: PLAN_ID }),
+      );
+      if (/get_night_out_(voting|anon_rsvps|media)/.test(url)) {
+        return fulfillJson(200, [])(route);
+      }
       if (url.includes('get_night_out_members')) return fulfillJson(200, [])(route);
       if (url.includes('get_night_out_board')) return fulfillJson(200, [])(route);
       planReads += 1;
@@ -735,7 +743,9 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
       if (/get_night_out_(members|board|voting|anon_rsvps|media)/.test(url)) {
         return fulfillJson(200, [])(route);
       }
-      await fulfillJson(200, [{ ...PLAN_ROW, caller_status: 'declined' }])(route);
+      // share_token is returned only to accepted members (0059:236); a declined
+      // caller gets null.
+      await fulfillJson(200, [{ ...PLAN_ROW, caller_status: 'declined', share_token: null }])(route);
     });
     await page.route(
       '**/rest/v1/rpc/resolve_night_out_by_token*',
@@ -789,6 +799,14 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     // Re-stub the plan as decided — the RPCs reject writes in this state.
     await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
       const url = route.request().url();
+      // Every plan read names THIS plan, and set-returning reads get an empty set,
+      // never the plan row (round-3 panel: the broad glob shadowed both checks).
+      expect(route.request().postDataJSON()).toEqual(
+        expect.objectContaining({ p_night_out: PLAN_ID }),
+      );
+      if (/get_night_out_(voting|anon_rsvps|media)/.test(url)) {
+        return fulfillJson(200, [])(route);
+      }
       if (url.includes('get_night_out_members')) return fulfillJson(200, [])(route);
       if (url.includes('get_night_out_board')) {
         return fulfillJson(200, [
@@ -1667,6 +1685,14 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     await stubMemberRpcs(page, night);
     await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
       const url = route.request().url();
+      // Every plan read names THIS plan, and set-returning reads get an empty set,
+      // never the plan row (round-3 panel: the broad glob shadowed both checks).
+      expect(route.request().postDataJSON()).toEqual(
+        expect.objectContaining({ p_night_out: PLAN_ID }),
+      );
+      if (/get_night_out_(voting|anon_rsvps|media)/.test(url)) {
+        return fulfillJson(200, [])(route);
+      }
       if (url.includes('get_night_out_members')) return fulfillJson(200, [])(route);
       if (url.includes('get_night_out_board')) return fulfillJson(200, [])(route);
       return fulfillJson(200, [
@@ -1936,28 +1962,17 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       invited.push(body.p_user);
       await fulfillJson(200, true)(route);
     });
-    // Registered AFTER openTheForm's empty Plans-tab fixture, so it wins: the
-    // list is empty until the plan exists, and names it afterwards.
+    // Registered AFTER openTheForm's empty Plans-tab fixture, so it wins. It is
+    // shaped as the SERVER answers: `get_my_night_outs` excludes the caller's
+    // own plans (0059_night_outs_respond_revision.sql:296, `n.owner_id <>
+    // auth.uid()`; restated at src/lib/nightOuts.server.ts:355-357), so an
+    // owner's list stays EMPTY after creating — which is V9-03's symptom, and
+    // is asserted as the known failure in the test that follows this one. The
+    // first draft of this fixture returned the owner's row, and the round-3
+    // panel caught it as the exact fail-open this file exists to remove.
     await page.route('**/rest/v1/rpc/get_my_night_outs*', async (route) => {
-      if (createdNight === null) return fulfillJson(200, [])(route);
-      listReadsAfterCreate += 1;
-      await fulfillJson(200, [
-        {
-          night_out_id: PLAN_ID,
-          night: createdNight,
-          title: PLAN_ROW.title,
-          status: 'open',
-          owner_handle: 'me',
-          owner_display_name: 'Me',
-          my_status: 'accepted',
-          responded_at: '2026-07-24T23:30:00.000Z',
-          accepted_count: 1,
-          share_token: TOKEN,
-          plan_updated: false,
-          is_past: false,
-          my_revision: 0,
-        },
-      ])(route);
+      if (createdNight !== null) listReadsAfterCreate += 1;
+      await fulfillJson(200, [])(route);
     });
 
     await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
@@ -1968,37 +1983,72 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
     await expect(page.getByRole('heading', { name: PLAN_ROW.title })).toBeVisible();
 
-    // Leave for another tab, come back: the plan is listed.
+    // Leave for another tab, come back, reload: Plans re-reads the list each
+    // time and NEVER creates a second plan.
     await page.goto('/map');
     await expect(page.locator('main')).toBeVisible();
     await page.goto('/friends');
     await page.getByRole('tab', { name: 'Plans' }).click();
-    await expect(page.getByTestId('plan-invites')).toContainText(PLAN_ROW.title);
-    expect(listReadsAfterCreate, 'Plans did not re-read the list after creation').toBeGreaterThan(0);
-
-    // Reload: still there, and it is the same plan.
+    await expect.poll(() => listReadsAfterCreate, { timeout: 10_000 }).toBeGreaterThan(0);
     await page.reload();
     await page.getByRole('tab', { name: 'Plans' }).click();
-    await expect(page.getByTestId('plan-invites')).toContainText(PLAN_ROW.title);
+    await expect(page.getByTestId('start-night-out')).toBeVisible();
     expect(createCalls, 'returning or reloading must never create a second plan').toBe(1);
   });
 
   /**
-   * V9-04 — "do not silently invite everyone because of an implicit default".
-   * KNOWN PRODUCT FAILURE on this base (2026-09-09, surfaced by the V9-03
-   * journey above): starting a plan with NO recipient selected invites the
-   * circle anyway. `test.fail` keeps it visible — this case is expected to fail
-   * until the Night Out goal (V9-04) fixes the picker, and will turn red the
-   * moment it starts passing, which is the signal to delete the annotation.
-   * See docs/V9-COVERAGE-AUDIT-2026-09-09.md §5.
+   * V9-03 — the owner's report, reproduced: after starting a night the owner
+   * cannot find it. KNOWN PRODUCT FAILURE on this base. Root cause, not a
+   * guess: `get_my_night_outs` excludes plans the caller owns (0059:296) and no
+   * surface lists plans you own (StartNightOutButton.tsx:38-41 records it as a
+   * residual gap from V8-3). So the server's real answer to the owner's Plans
+   * tab is `[]`, and the plan they just created is not listed anywhere.
+   * `test.fail` keeps it visible until the Night Out goal adds an owner surface
+   * (or includes owned plans in the list); it turns red when fixed.
    */
-  test('V9-04: starting a plan with nobody selected invites nobody', async ({
+  test('V9-03: the plan an owner just created is listed under Plans after returning', async ({
     page,
     context,
     baseURL,
   }) => {
     test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
-    test.fail(true, 'V9-04 known product failure: implicit default invites the circle — Night Out goal');
+    test.fail(true, 'V9-03 known product failure: get_my_night_outs excludes owned plans and no surface lists them — Night Out goal');
+    await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await openTheForm(page);
+    await stubOwnerRpcs(page);
+    await page.route('**/rest/v1/rpc/create_night_out*', fulfillJson(200, PLAN_ID));
+    await page.route('**/rest/v1/rpc/invite_to_night_out*', fulfillJson(200, true));
+    // The server's answer for an owner: their own plans are excluded.
+    await page.route('**/rest/v1/rpc/get_my_night_outs*', fulfillJson(200, []));
+
+    await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
+    await page.getByRole('button', { name: /start the official/i }).click();
+    await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
+
+    await page.goto('/friends');
+    await page.getByRole('tab', { name: 'Plans' }).click();
+    await expect(page.getByTestId('plan-invites')).toContainText(PLAN_ROW.title);
+  });
+
+  /**
+   * V9-04 — "make actual recipients clear before submission; do not silently
+   * invite everyone because of an implicit default". What the page does today
+   * (2026-09-09): it pre-selects EVERY circle member (aria-pressed=true on each
+   * chip, consensus/page.tsx:176-207), so the one friend in this fixture is
+   * invited unless the owner deselects them. The default is visible, not
+   * silent — a design question for V9-04, recorded in the audit. What must hold
+   * regardless of the default: the invite set equals the VISIBLE selection, so
+   * deselecting everyone invites nobody.
+   */
+  test('V9-04: the invite set equals the visible selection — deselecting everyone invites nobody', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
     await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
     await context.addCookies([
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
@@ -2013,10 +2063,17 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     });
 
     await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
+    // The circle member arrives pre-selected (accessible name "Sam — no ranked
+    // bars yet", since this friend has no ratings); deselect them explicitly.
+    const sam = page.getByRole('button', { name: /^Sam\b/ });
+    await expect(sam).toHaveAttribute('aria-pressed', 'true');
+    await sam.click();
+    await expect(sam).toHaveAttribute('aria-pressed', 'false');
+
     await page.getByRole('button', { name: /start the official/i }).click();
     await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
 
-    expect(invited, 'nobody was selected, so nobody may be invited').toEqual([]);
+    expect(invited, 'nobody is selected, so nobody may be invited').toEqual([]);
   });
 
   test('Social → Plans reaches a form whose three rows are editable in place', async ({

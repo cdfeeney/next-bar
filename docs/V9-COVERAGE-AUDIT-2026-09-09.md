@@ -92,18 +92,27 @@ Implemented by the delegated Codex slice (write scope `e2e/night-out.spec.ts`, `
   from the Plans entry point, create once (`create_night_out` body asserted), land on `/night-out/<token>` as owner,
   leave for `/map`, return to Plans, reload, return again — the same plan must be listed each time and exactly one
   create may have happened. The `get_my_night_outs` fixture is **stateful** (empty until the create RPC was issued,
-  then the created row), so a list that does not re-read after creation fails instead of passing against `[]`.
-  **Result on this base: passes on both devices** (`fb3-e2e-slice-2.log`): one create, the owner lands on the plan, and
-  Plans re-reads and lists it after leaving and after reload. So the browser-level create→discover path is sound with
-  honest fixtures; the owner's phone symptom is not reproduced here and belongs to the *staging integration* or
-  *device* categories (§4) — a live `get_my_night_outs` answer (RLS, night cutoff, account) rather than the UI flow.
-  That narrows V9-03 for the Night Out goal instead of closing it.
-- **V9-04 product defect surfaced, kept visible with `test.fail`.** Running the journey under the strict fixture showed
-  that starting a plan with **no recipient selected** still issues `invite_to_night_out` for the one person in the
-  circle — exactly the queue's "do not silently invite everyone because of an implicit default". A dedicated case
-  ("V9-04: starting a plan with nobody selected invites nobody") asserts the correct behaviour and is annotated
-  `test.fail(true, …)` naming V9-04, so the gate reports it as an expected failure today and turns red the moment the
-  Night Out goal fixes the picker — the signal to remove the annotation. Nothing is skipped or weakened.
+  shaped as the server answers). **V9-03 is REPRODUCED in the browser, with its cause.** `get_my_night_outs` excludes
+  the caller's own plans (`supabase/migrations/0059_night_outs_respond_revision.sql:296`, `n.owner_id <> auth.uid()`;
+  restated at `src/lib/nightOuts.server.ts:355-357`), `PlansSection` renders only the Start link plus `PlanInvites`, and
+  `StartNightOutButton.tsx:38-41` records "no surface lists plans you own" as a residual V8-3 gap. So after creating, the
+  owner's Plans tab is genuinely empty — the phone report, exactly. A first draft of this fixture returned the owner's
+  row and went green; the round-3 panel (both lanes) caught it as the fail-open this goal exists to remove. Now:
+  the journey asserts what holds (one create, owner lands on the plan, Plans re-reads the list on return and reload,
+  never a second create), and a separate case — "V9-03: the plan an owner just created is listed under Plans after
+  returning" — asserts the missing behaviour under `test.fail(true, …)` naming V9-03, so it reports as an expected
+  failure today and turns red when the Night Out goal adds an owner surface or includes owned plans in the list.
+  This is not a staging or device question; it is a product gap with a line number.
+- **V9-04 default observed and pinned.** Running the journey under the strict fixture showed `invite_to_night_out`
+  firing for the one circle member without the test selecting anyone. The cause is a **visible** default, not a silent
+  one: the consensus page pre-selects every circle member (`src/app/friends/consensus/page.tsx`, `effectiveSelected`:
+  "Everyone you follow starts selected — including members with no ratings"; each chip renders `aria-pressed="true"`,
+  a no-ratings friend as "Sam — no ranked bars yet"). Whether "everyone by default" is the right default is V9-04's design call ("make actual
+  recipients clear before submission"). What must hold regardless is pinned by "V9-04: the invite set equals the
+  visible selection — deselecting everyone invites nobody": the chip starts pressed, the test deselects it, starts the
+  plan, and asserts zero invites. **Passes on this base** (`fb4-e2e-slice-2.log`) — the invariant holds; only the
+  default is in question. A first draft of this case asserted
+  "nobody selected" without deselecting and mislabelled the default as silent; the round-3 Codex lane caught it.
 - **`e2e/mobile-controls.spec.ts`.** Both fixed waits (1000 ms, 500 ms) replaced by `waitForStableControls`: an
   `expect.poll` that samples every control's bounding box and every element's `scrollTop` on two consecutive
   animation frames and requires them equal. Assertions unchanged.
@@ -167,8 +176,9 @@ the installed app.
 
 ## 8. Remaining gaps after this goal
 
-- The V9-03 discoverability journey (create once → land on the plan → leave → return → reload → same plan listed) now
-  exists in `night-out.spec.ts` ("V9-03: a plan created once is discoverable again…") with a stateful
-  `get_my_night_outs` fixture; its result on this base is recorded in §5. The V9-04/05 journeys (select → inspect
-  invite set; invite → accept → vote) land with the Night Out goal, against the strict fixtures from §5.
+- V9-03 is reproduced with a cause (§5): owned plans are excluded from `get_my_night_outs` and no surface lists them.
+  The Night Out goal owns the fix (owner surface or list inclusion) and removes the `test.fail` annotation when it
+  lands. The V9-04 default-all selection is a design decision for that goal; the invite-set-equals-selection invariant
+  is already pinned. The V9-05 journey (invite → accept → vote) lands with the Night Out goal, against the strict
+  fixtures from §5.
 - Staging integration and physical-device categories are untouched by this goal.
