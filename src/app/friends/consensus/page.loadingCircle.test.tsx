@@ -141,7 +141,8 @@ describe('ConsensusPage — starting a night out while follows load', () => {
     await userEvent.click(startButton());
 
     await waitFor(() => expect(createNightOut).toHaveBeenCalledTimes(1));
-    // …and the invitee list is the loaded circle, not the empty one.
+    // …and the invitee list is the loaded circle (V9-04: everyone you follow is
+    // the default, shown explicitly as the selection), not the empty one.
     expect(inviteToNightOut).toHaveBeenCalledTimes(1);
     expect(inviteToNightOut.mock.calls[0][2]).toBe(FRIEND_ID);
   });

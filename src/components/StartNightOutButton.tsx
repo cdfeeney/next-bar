@@ -7,6 +7,7 @@ import { getBrowserSupabase } from '@/lib/supabase/client';
 import { nycNightKey } from '@/lib/nightKey';
 import { createNightOut, getNightOut } from '@/lib/nightOuts.server';
 import { inviteAll, startOutcome } from '@/lib/nightOutStart';
+import { rememberOwnedNightOut } from '@/lib/ownedNightOut';
 import { useNightOutPlanFields, type PlanEditOutcome } from './NightOutPlanFields';
 
 /**
@@ -884,6 +885,10 @@ export default function StartNightOutButton({
       // Parked BEFORE the follow-up read, because the window this closes is the
       // one where the read is still in flight and the user navigates away.
       rememberStarted(owner, { planId, nightKey });
+      // V9-03: the durable "this is the plan I made tonight" record, read by
+      // YourPlanTonight under Plans. Separate from the parked record above,
+      // which the plan page spends on open.
+      rememberOwnedNightOut(owner, { planId, nightKey });
       setCreatedPlanId(planId);
       // The CREATE is over here, not after the read (round 3, Codex). Holding
       // the marker until the follow-up read settles means a component that was

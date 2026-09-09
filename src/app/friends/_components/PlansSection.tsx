@@ -33,6 +33,7 @@
 
 import Link from 'next/link';
 import PlanInvites from '@/components/PlanInvites';
+import YourPlanTonight from './YourPlanTonight';
 
 export default function PlansSection(): JSX.Element {
   return (
@@ -67,6 +68,11 @@ export default function PlansSection(): JSX.Element {
           ›
         </span>
       </Link>
+
+      {/* V9-03: the plan THIS account started tonight. `get_my_night_outs`
+          excludes owned plans, so without this card a creator could not find
+          their own plan again. Renders nothing when nothing was started. */}
+      <YourPlanTonight />
 
       {/* Invitations addressed to this account, and the way into an accepted
           plan's shortlist. Renders nothing when there are none. */}

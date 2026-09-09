@@ -2037,19 +2037,63 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
   });
 
   /**
-   * V9-03 — the owner's report, reproduced: after starting a night the owner
-   * cannot find it. KNOWN PRODUCT FAILURE on this base. Root cause, not a
-   * guess: `get_my_night_outs` excludes plans the caller owns (0059:296) and no
-   * surface lists plans you own (StartNightOutButton.tsx:38-41 records it as a
-   * residual gap from V8-3). So the server's real answer to the owner's Plans
-   * tab is `[]`, and the plan they just created is not listed anywhere.
-   * The listing assertion is marked expected-to-fail ONLY when the listing is
-   * missing (dynamic `test.fail`), so every other failure in this case stays
-   * red. A mock cannot notice the server fix: when the Night Out goal lands an
-   * owner surface, it updates the `get_my_night_outs` fixture here and removes
-   * the marker by hand. The check that goes red on the server side the moment
-   * 0059:296 changes is src/lib/nightOutsRls.live.test.ts:909, which pins the
-   * exclusion today and must be inverted by that goal.
+   * V9-02 — the plan form spills past the right edge on iPhone. Geometry, not a
+   * screenshot: after the form has long content and the deadline picker open,
+   * the document must not be wider than the viewport and every field must end
+   * inside it. This is the regression the phone report asked for; it fails on
+   * the known-bad layout and passes on the correction.
+   */
+  test('V9-02: the plan form never exceeds the viewport width, with long content and the deadline picker open', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await openTheForm(page);
+    await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
+
+    // Long content in every free-text field, and the second datetime-local open.
+    await page.getByLabel(/^Area/).fill('Lower East Side below Houston and east of the Bowery, near the bridges');
+    await page.getByLabel('Pick a time').check();
+    await expect(page.getByLabel('Voting closes at')).toBeVisible();
+
+    const geometry = await page.evaluate(() => {
+      const vw = window.innerWidth;
+      const fields = document.querySelector('[data-testid="night-out-plan-fields"]');
+      const controls = fields
+        ? Array.from(fields.querySelectorAll<HTMLElement>('input, select, textarea, button'))
+        : [];
+      const spill = controls
+        .map((el) => ({ tag: el.tagName, id: el.id || el.getAttribute('aria-label') || '', right: Math.round(el.getBoundingClientRect().right) }))
+        .filter((c) => c.right > vw);
+      return {
+        vw,
+        docWidth: document.documentElement.scrollWidth,
+        bodyWidth: document.body.scrollWidth,
+        spill,
+      };
+    });
+    expect(geometry.docWidth, `document is wider than the viewport: ${JSON.stringify(geometry)}`).toBeLessThanOrEqual(geometry.vw);
+    expect(geometry.bodyWidth, `body is wider than the viewport: ${JSON.stringify(geometry)}`).toBeLessThanOrEqual(geometry.vw);
+    expect(geometry.spill, `controls end past the viewport: ${JSON.stringify(geometry.spill)}`).toEqual([]);
+    // The primary action is still reachable.
+    await expect(page.getByRole('button', { name: /start the official/i })).toBeInViewport();
+  });
+
+  /**
+   * V9-03 — the owner's report: after starting a night the owner could not find
+   * it. Cause: `get_my_night_outs` excludes plans the caller owns (0059:296) and
+   * no surface listed owned plans (StartNightOutButton.tsx:38-41). Foundation B
+   * reproduced this as a known failure; the Night Out goal fixed it on the
+   * CLIENT with `YourPlanTonight`, which lists the plan the Start button parked
+   * for tonight (localStorage, keyed by account + night) by reading it through
+   * `get_night_out`. The `get_my_night_outs` fixture stays `[]` — the server's
+   * real answer for an owner — so this test passes only because the new surface
+   * exists, and it would go red again if the card were removed.
    */
   test('V9-03: the plan an owner just created is listed under Plans after returning', async ({
     page,
@@ -2093,32 +2137,29 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await page.getByRole('tab', { name: 'Plans' }).click();
     await expect(page.getByTestId('start-night-out')).toBeVisible();
 
-    // The strict-REST postcondition is asserted INLINE here, before the marker
-    // below: once test.fail() is set, the file-level afterEach would report an
-    // unexpected request into a test already marked expected-to-fail.
+    // V9-03 FIXED (Night Out goal): `get_my_night_outs` still excludes owned
+    // plans — the fixture above stays [] because that is the server's answer —
+    // and the owner's plan is now listed by `YourPlanTonight`, which reads the
+    // plan the Start button parked for tonight back through `get_night_out`.
+    const card = page.getByTestId('your-plan-tonight');
+    await expect(card).toContainText(PLAN_ROW.title);
+    await expect(card).toHaveAttribute('href', `/night-out/${TOKEN}`);
+    // Reload: the record survives (localStorage, keyed by account + night).
+    await page.reload();
+    await page.getByRole('tab', { name: 'Plans' }).click();
+    await expect(page.getByTestId('your-plan-tonight')).toContainText(PLAN_ROW.title);
     assertNoUnexpectedRest(page);
-    // The one assertion that carries the defect. Marked expected-to-fail ONLY
-    // when the listing is missing, so an unrelated failure above stays red.
-    const listed = await page
-      .getByTestId('plan-invites')
-      .filter({ hasText: PLAN_ROW.title })
-      .count()
-      .then((n) => n > 0);
-    test.fail(!listed, 'V9-03 known product failure: get_my_night_outs excludes owned plans and no surface lists them — Night Out goal');
-    expect(listed, 'the plan the owner just created is listed under Plans').toBe(true);
   });
 
   /**
    * V9-04 — "make actual recipients clear before submission; do not silently
-   * invite everyone because of an implicit default". What the page does today
-   * (2026-09-09): it pre-selects EVERY circle member (aria-pressed=true on each
-   * chip, consensus/page.tsx:176-207), so the one friend in this fixture is
-   * invited unless the owner deselects them. The default is visible, not
-   * silent — a design question for V9-04, recorded in the audit. What must hold
-   * regardless of the default: the invite set equals the VISIBLE selection, so
-   * deselecting everyone invites nobody.
+   * invite everyone because of an implicit default". The default is still
+   * everyone you follow, but it is no longer silent: the RecipientPicker states
+   * it ("Selected · 1 person") with a remove control per person. Two things
+   * must hold: the stated selection is exactly who gets invited, and removing
+   * everyone from it invites nobody.
    */
-  test('V9-04: the invite set equals the visible selection — deselecting everyone invites nobody', async ({
+  test('V9-04: the default selection is stated, editable, and removing everyone invites nobody', async ({
     page,
     context,
     baseURL,
@@ -2147,17 +2188,54 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     });
 
     await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
-    // The circle member arrives pre-selected (accessible name "Sam — no ranked
-    // bars yet", since this friend has no ratings); deselect them explicitly.
+    // The default is stated, not silent: the one circle member is selected and
+    // the summary says so, with a remove control.
+    await expect(page.getByText(/Selected · 1 (person|people)/)).toBeVisible();
     const sam = page.getByRole('button', { name: /^Sam\b/ });
     await expect(sam).toHaveAttribute('aria-pressed', 'true');
-    await sam.click();
+    await expect(page.getByRole('button', { name: /^Remove Sam/ })).toBeVisible();
+    // Remove from the summary: back to nobody, visibly, and the chip agrees.
+    await page.getByRole('button', { name: /^Remove Sam/ }).click();
+    await expect(page.getByText(/Selected · 0 people/)).toBeVisible();
     await expect(sam).toHaveAttribute('aria-pressed', 'false');
 
     await page.getByRole('button', { name: /start the official/i }).click();
     await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
-
     expect(invited, 'nobody is selected, so nobody may be invited').toEqual([]);
+  });
+
+  test('V9-04: a picked person is exactly who gets invited', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await openTheForm(page);
+    await stubOwnerRpcs(page);
+    await page.route('**/rest/v1/rpc/create_night_out*', fulfillJson(200, PLAN_ID));
+    const invited: string[] = [];
+    await page.route('**/rest/v1/rpc/invite_to_night_out*', async (route) => {
+      const body = route.request().postDataJSON() as { p_night_out: string; p_user: string };
+      expect(body.p_night_out).toBe(PLAN_ID);
+      invited.push(body.p_user);
+      await fulfillJson(200, true)(route);
+    });
+
+    await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
+    // Clear the stated default, then pick Sam back explicitly through search.
+    await page.getByRole('button', { name: /^Remove Sam/ }).click();
+    await expect(page.getByText(/Selected · 0 people/)).toBeVisible();
+    await page.getByLabel('Search people').fill('sam');
+    await page.getByRole('button', { name: /^Sam\b/ }).click();
+    await expect(page.getByText(/Selected · 1 (person|people)/)).toBeVisible();
+
+    await page.getByRole('button', { name: /start the official/i }).click();
+    await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
+    expect(invited, 'exactly the visible selection is invited').toEqual([FRIEND_ID]);
   });
 
   test('Social → Plans reaches a form whose three rows are editable in place', async ({

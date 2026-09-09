@@ -2,10 +2,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import Avatar from '@/components/Avatar';
 import ShareButton from '@/components/ShareButton';
 import TonightSuggestions from '@/components/TonightSuggestions';
-import { deriveInviteeIds } from '@/lib/inviteeSelection';
+import { deriveInviteeIds, mergeSelection } from '@/lib/inviteeSelection';
 import StartNightOutButton from '@/components/StartNightOutButton';
 import { buildPickPath, sharePickText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
@@ -31,6 +30,9 @@ import {
   type ConsensusParticipant,
   type ConsensusEntry,
 } from '@/lib/demo';
+
+import RecipientPicker, { PersonChip } from './RecipientPicker';
+import type { GroupMember } from '@/lib/groups.server';
 
 const YOU_ID = 'you';
 
@@ -62,6 +64,11 @@ function initialsFor(label: string): string {
 }
 
 export default function ConsensusPage(): JSX.Element {
+  const auth = useAuth();
+  return <ConsensusContent key={auth.status === 'signed-in' ? auth.user.id : auth.status} />;
+}
+
+function ConsensusContent(): JSX.Element {
   // 0019 swap-day rule: barById feeds Group Favorites — subscribe so a
   // live server-catalog swap re-renders (checklist in catalog.ts).
   useBars();
@@ -124,7 +131,7 @@ export default function ConsensusPage(): JSX.Element {
       return {
         people: demoFollowed.map((f) => ({
           id: f.handle,
-          label: f.displayName.split(' ')[0],
+          label: f.displayName,
           initials: f.initials,
           seed: f.handle,
           ratings: f.ratings,
@@ -140,7 +147,7 @@ export default function ConsensusPage(): JSX.Element {
         unrated++;
         continue;
       }
-      const label = (p.displayName ?? `@${p.handle}`).split(' ')[0];
+      const label = (p.displayName ?? `@${p.handle}`);
       rated.push({
         id: p.id,
         label,
@@ -178,7 +185,7 @@ export default function ConsensusPage(): JSX.Element {
       .filter((p) => !rated.has(p.id))
       .map((p) => ({
         id: p.id,
-        label: (p.displayName ?? `@${p.handle}`).split(' ')[0],
+        label: (p.displayName ?? `@${p.handle}`),
         initials: initialsFor(p.displayName ?? p.handle),
         seed: p.handle,
         ratings: [],
@@ -187,24 +194,71 @@ export default function ConsensusPage(): JSX.Element {
 
   const youHasRatings = ratings.length > 0;
 
-  // Selection: start with You (if you have ratings) + everyone followed.
+  // V9-04: the default is EVERYONE you follow — but explicit, never silent. The
+  // RecipientPicker shows it as "Selected · N people" with a remove control per
+  // person, so the recipients are clear before submission and editable without
+  // the whole circle rendering as a wall of chips. (An empty default was tried
+  // and emptied Group Favorites on arrival, which is the approved UX-B view of
+  // the selected circle.) You still participates when rated.
   const [selected, setSelected] = useState<Set<string> | null>(null);
+  const defaultSelection = useMemo(
+    () =>
+      new Set<string>([
+        ...(youHasRatings ? [YOU_ID] : []),
+        ...(isServer ? circle.map((p) => p.id) : followedFriends.map((f) => f.id)),
+      ]),
+    [youHasRatings, isServer, circle, followedFriends],
+  );
+  const [groupMembers, setGroupMembers] = useState<Record<string, GroupMember[]>>({});
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const [membersLoading, setMembersLoading] = useState(false);
+  const groupPeople = useMemo<Person[]>(() => {
+    const known = new Set([...people, ...unratedCircle].map((p) => p.id));
+    const members = new Map(Object.values(groupMembers).flat().map((p) => [p.profileId, p]));
+    return [...members.values()].filter((p) => !known.has(p.profileId)).map((p) => ({
+      id: p.profileId,
+      label: p.displayName ?? (p.handle ? `@${p.handle}` : p.profileId),
+      initials: initialsFor(p.displayName ?? p.handle ?? '?'),
+      seed: p.handle ?? p.profileId,
+      ratings: [],
+    }));
+  }, [groupMembers, people, unratedCircle]);
+  const recipientPeople = useMemo(() => [...people, ...unratedCircle, ...groupPeople],
+    [people, unratedCircle, groupPeople]);
   const effectiveSelected = useMemo(() => {
-    if (selected) return selected;
-    // Everyone you follow starts selected — including members with no ratings,
-    // who are invitable even though they contribute no picks.
-    const init = new Set<string>(
-      isServer ? circle.map((p) => p.id) : followedFriends.map((f) => f.id),
-    );
-    if (youHasRatings) init.add(YOU_ID);
-    return init;
-  }, [selected, isServer, circle, followedFriends, youHasRatings]);
+    const direct = selected ?? defaultSelection;
+    const merged = mergeSelection({ direct, groupMembers: Object.values(groupMembers).map(
+      (members) => members.map((p) => p.profileId),
+    ) });
+    const known = new Set(recipientPeople.map((p) => p.id));
+    return new Set([...merged].filter((id) => !excluded.has(id)
+      && (id === YOU_ID || known.has(id))));
+  }, [selected, groupMembers, excluded, youHasRatings, recipientPeople]);
 
   const toggle = (id: string) => {
-    const next = new Set(effectiveSelected);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+    const next = new Set(selected ?? defaultSelection);
+    const removed = new Set(excluded);
+    if (effectiveSelected.has(id)) {
+      next.delete(id);
+      removed.add(id);
+    } else {
+      next.add(id);
+      removed.delete(id);
+    }
     setSelected(next);
+    setExcluded(removed);
+  };
+
+  const changeGroup = (id: string, members: GroupMember[] | null) => {
+    setGroupMembers((current) => {
+      const next = { ...current };
+      if (members === null) delete next[id];
+      else next[id] = members;
+      return next;
+    });
+    if (members) setExcluded((current) => new Set([...current].filter(
+      (id) => !members.some((p) => p.profileId === id),
+    )));
   };
 
   /**
@@ -233,10 +287,10 @@ export default function ConsensusPage(): JSX.Element {
     () =>
       deriveInviteeIds({
         isServer,
-        circleIds: circle.map((p) => p.id),
+        circleIds: recipientPeople.map((p) => p.id),
         selected: effectiveSelected,
       }),
-    [isServer, circle, effectiveSelected],
+    [isServer, recipientPeople, effectiveSelected],
   );
 
   /**
@@ -257,9 +311,9 @@ export default function ConsensusPage(): JSX.Element {
         selected: effectiveSelected,
         you: youHasRatings ? { id: YOU_ID, label: 'You', ratings } : null,
         ratedPeople: followedFriends,
-        unratedPeople: unratedCircle,
+        unratedPeople: [...unratedCircle, ...groupPeople],
       }),
-    [effectiveSelected, followedFriends, unratedCircle, ratings, youHasRatings],
+    [effectiveSelected, followedFriends, unratedCircle, groupPeople, ratings, youHasRatings],
   );
 
   const { overlap, alsoConsider } = useMemo(
@@ -322,7 +376,7 @@ export default function ConsensusPage(): JSX.Element {
             lands on its invite-link surface. */}
         <StartNightOutButton
           inviteeIds={inviteeIds}
-          disabled={followsLoading || !circleReady}
+          disabled={followsLoading || !circleReady || membersLoading}
         />
         {/* A held button with no explanation is its own defect (round-3 panel,
             Claude): the only primary CTA on the page renders greyed out for the
@@ -352,28 +406,21 @@ export default function ConsensusPage(): JSX.Element {
               onClick={() => toggle(YOU_ID)}
             />
           ) : null}
-          {followedFriends.map((f) => (
-            <PersonChip
-              key={f.id}
-              label={f.label}
-              initials={f.initials}
-              seed={f.seed}
-              selected={effectiveSelected.has(f.id)}
-              onClick={() => toggle(f.id)}
-            />
-          ))}
-          {unratedCircle.map((f) => (
-            <PersonChip
-              key={f.id}
-              label={f.label}
-              initials={f.initials}
-              seed={f.seed}
-              selected={effectiveSelected.has(f.id)}
-              onClick={() => toggle(f.id)}
-              noPicks
-            />
-          ))}
         </div>
+
+        <RecipientPicker
+          people={recipientPeople}
+          circleIds={isServer ? circle.map((p) => p.id) : followedFriends.map((p) => p.id)}
+          selected={effectiveSelected}
+          groupMembers={groupMembers}
+          onToggle={toggle}
+          onGroupChange={changeGroup}
+          onBusy={setMembersLoading}
+          userId={auth.status === 'signed-in' ? auth.user.id : null}
+          isServer={isServer}
+          loading={followsLoading || (!circleReady && !circleFailed)}
+          failed={circleFailed}
+        />
 
         {/* UX-F v1 nudge, moved UNDER the chips (QA3: the operator
             couldn't find it in the header on mobile) — an invite link
@@ -477,57 +524,6 @@ export default function ConsensusPage(): JSX.Element {
         {isServer ? <TonightSuggestions /> : null}
       </section>
     </main>
-  );
-}
-
-function PersonChip({
-  label,
-  initials,
-  seed,
-  selected,
-  onClick,
-  noPicks = false,
-}: {
-  label: string;
-  initials: string;
-  seed: string;
-  selected: boolean;
-  onClick: () => void;
-  /**
-   * This person has ranked nothing, so they sway no picks — but they are still
-   * invitable, and hiding them was the defect. The marker exists so an empty
-   * contribution reads as expected rather than broken, which is what the
-   * original "inert chip reads as broken" comment was really about.
-   */
-  noPicks?: boolean;
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      aria-label={noPicks ? `${label} — no ranked bars yet` : label}
-      onClick={onClick}
-      className={[
-        'flex items-center gap-2 pl-1 pr-4 py-1 rounded-full border transition-colors min-h-[44px] touch-manipulation',
-        selected
-          ? 'border-accent bg-accent/10 text-text'
-          : 'border-border bg-surface text-muted',
-      ].join(' ')}
-    >
-      <Avatar initials={initials} seed={seed} size="sm" />
-      <span className="font-display text-sm">{label}</span>
-      {noPicks ? (
-        <span className="text-[10px] uppercase tracking-wider text-muted">
-          no picks
-        </span>
-      ) : null}
-      <span
-        aria-hidden="true"
-        className={selected ? 'text-accent' : 'text-muted'}
-      >
-        {selected ? '✓' : '+'}
-      </span>
-    </button>
   );
 }
 

@@ -24,6 +24,13 @@ const UUID_RE =
 
 export const YOU_ID = 'you';
 
+export function mergeSelection({ direct, groupMembers }: {
+  direct: Iterable<string>;
+  groupMembers: readonly Iterable<string>[];
+}): Set<string> {
+  return new Set([...direct, ...groupMembers.flatMap((members) => [...members])]);
+}
+
 export function deriveInviteeIds({
   isServer,
   circleIds,

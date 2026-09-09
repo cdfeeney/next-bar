@@ -185,8 +185,10 @@ test.describe('Friends + consensus', () => {
   test('consensus needs at least two people selected', async ({ page }) => {
     await page.goto('/friends/consensus');
 
-    // Deselect john, leaving only claire → not enough for consensus.
-    await page.getByRole('button', { name: /John/ }).click();
+    // Deselect john, leaving only claire → not enough for consensus. The chip
+    // is the button whose name STARTS with John; the selection summary also has
+    // a "Remove John" control (V9-04), so the old /John/ matched two elements.
+    await page.getByRole('button', { name: /^John/ }).click();
     await expect(page.getByText(/Pick at least two people/i)).toBeVisible();
   });
 
