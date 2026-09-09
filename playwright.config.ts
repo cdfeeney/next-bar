@@ -28,6 +28,11 @@ const baseURL = `http://localhost:${port}`;
 
 export default defineConfig({
   testDir: './e2e',
+  // The V9-11 evidence capture is a tool, not a check: it runs only when a
+  // capture directory is named, and is ignored otherwise so the release gate
+  // never reports its cases as "skipped" (a skip in the gate is a smell —
+  // docs/V9-COVERAGE-AUDIT-2026-09-09.md §3).
+  testIgnore: process.env.VISUAL_CAPTURE_DIR ? [] : ['**/visual-capture.spec.ts'],
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: true,

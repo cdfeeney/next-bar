@@ -1,4 +1,6 @@
 import { expect, test, type Page, type Route } from './helpers/test';
+import { assertNoUnexpectedRest, stubStrictRest } from './helpers/strictRest';
+import { CATALOG_ROUTE, fulfillCatalog } from './helpers/catalogTest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 // Shared with src/lib/authenticatedE2eConfig.test.ts, which is what puts this
@@ -25,6 +27,10 @@ import {
  *   4. signed-in + stored context, landing ANYWHERE → redirected to that
  *                          exact plan (criterion 7, second half)
  */
+
+test.afterEach(async ({ page }) => {
+  assertNoUnexpectedRest(page);
+});
 
 const TOKEN = '123e4567-e89b-42d3-a456-426614174000';
 const PLAN_ID = '223e4567-e89b-42d3-a456-426614174000';
@@ -169,12 +175,22 @@ const CLOSED_WINDOW_NIGHT = '2020-01-01';
  * The client renders that instant and computes no hour of its own, which is why
  * the assertion can be on a fixed "9:00 PM".
  */
+async function stubNightOutRest(page: Page): Promise<void> {
+  await stubStrictRest(page);
+  // Root-layout reads: a curated catalog and an account with no profile yet.
+  await page.route(CATALOG_ROUTE, fulfillCatalog);
+  await page.route('**/rest/v1/profiles?*', async route => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    await fulfillJson(200, [])(route);
+  });
+}
+
 async function stubBearerRpcs(page: Page): Promise<void> {
   // ORDER MATTERS TWICE OVER. Playwright matches routes last-registered-first,
   // and `preview_night_out*` is a prefix of all three bearer functions' names —
   // so the general patterns go FIRST and the specific ones after, or the 0044
   // preview's stub would answer `preview_night_out_shortlist` with a plan row.
-  await page.route('**/rest/v1/**', fulfillJson(200, []));
+  await stubNightOutRest(page);
   await page.route(
     '**/rest/v1/rpc/preview_night_out*',
     fulfillJson(200, [PREVIEW_ROW]),
@@ -203,11 +219,27 @@ async function stubMemberRpcs(page: Page, night?: string): Promise<void> {
   const planRow = night === undefined ? PLAN_ROW : { ...PLAN_ROW, night };
   // Playwright matches routes LAST-registered-first: the catch-all must be
   // registered BEFORE the specific RPC stubs or it shadows them.
-  await page.route('**/rest/v1/**', fulfillJson(200, []));
+  await stubNightOutRest(page);
+  // App-shell reads that every page issues regardless of route: the
+  // follow-request inbox badge and the server ratings sync. The old blanket
+  // `[]` answered these silently; the strict fixture surfaced them (36 tests,
+  // 2026-09-09). They are shell traffic, not Night Out behaviour, so an empty
+  // inbox and an empty ratings set are the honest fixtures here.
+  await page.route('**/rest/v1/rpc/get_follow_requests*', fulfillJson(200, []));
+  await page.route('**/rest/v1/ratings?*', fulfillJson(200, []));
+  await page.route('**/rest/v1/rpc/night_out_media_window', fulfillJson(200, [{
+    opens_at: '2026-08-21T01:00:00.000Z',
+    expires_at: '2026-08-22T01:00:00.000Z',
+    is_open: false,
+    state: 'closed',
+  }]));
   await page.route('**/auth/v1/**', fulfillJson(200, {}));
   await page.route(
     '**/rest/v1/rpc/join_night_out_by_token*',
-    fulfillJson(200, PLAN_ID),
+    async route => {
+      expect(route.request().postDataJSON()).toEqual({ p_token: TOKEN });
+      await fulfillJson(200, PLAN_ID)(route);
+    },
   );
   // Viewing never mutates: existing members RESOLVE (read) to their plan.
   await page.route(
@@ -254,7 +286,20 @@ async function stubMemberRpcs(page: Page, night?: string): Promise<void> {
  * a board that renders in RPC order fails the ranking assertion.
  */
 async function stubOwnerRpcs(page: Page): Promise<void> {
-  await page.route('**/rest/v1/**', fulfillJson(200, []));
+  await stubNightOutRest(page);
+  // App-shell reads that every page issues regardless of route: the
+  // follow-request inbox badge and the server ratings sync. The old blanket
+  // `[]` answered these silently; the strict fixture surfaced them (36 tests,
+  // 2026-09-09). They are shell traffic, not Night Out behaviour, so an empty
+  // inbox and an empty ratings set are the honest fixtures here.
+  await page.route('**/rest/v1/rpc/get_follow_requests*', fulfillJson(200, []));
+  await page.route('**/rest/v1/ratings?*', fulfillJson(200, []));
+  await page.route('**/rest/v1/rpc/night_out_media_window', fulfillJson(200, [{
+    opens_at: '2026-08-21T01:00:00.000Z',
+    expires_at: '2026-08-22T01:00:00.000Z',
+    is_open: false,
+    state: 'closed',
+  }]));
   await page.route('**/auth/v1/**', fulfillJson(200, {}));
   await page.route(
     '**/rest/v1/rpc/resolve_night_out_by_token*',
@@ -362,6 +407,9 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     const sent: Record<string, unknown>[] = [];
     await page.route('**/rest/v1/rpc/rsvp_night_out_by_token*', async (route) => {
       sent.push(route.request().postDataJSON() as Record<string, unknown>);
+      expect(sent.at(-1)).toEqual({
+        p_token: TOKEN, p_key: expect.any(String), p_response: 'maybe',
+      });
       await fulfillJson(200, true)(route);
     });
 
@@ -408,7 +456,12 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     await stubBearerRpcs(page);
     await page.route(
       '**/rest/v1/rpc/rsvp_night_out_by_token*',
-      fulfillJson(500, { message: 'boom' }),
+      async route => {
+        expect(route.request().postDataJSON()).toEqual({
+          p_token: TOKEN, p_key: expect.any(String), p_response: 'going',
+        });
+        await fulfillJson(500, { message: 'boom' })(route);
+      },
     );
 
     await page.goto(`/night-out/${TOKEN}`);
@@ -488,6 +541,7 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     let lockedWith: Record<string, unknown> | null = null;
     await page.route('**/rest/v1/rpc/lock_night_out*', async (route) => {
       lockedWith = route.request().postDataJSON() as Record<string, unknown>;
+      expect(lockedWith).toEqual({ p_night_out: PLAN_ID });
       await fulfillJson(200, 'attaboy')(route);
     });
 
@@ -577,7 +631,13 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
       return fulfillJson(200, [PLAN_ROW])(route);
     });
     // The row moved on in the other tab, so this render's pair is stale.
-    await page.route('**/rest/v1/rpc/respond_night_out*', fulfillJson(200, false));
+    await page.route('**/rest/v1/rpc/respond_night_out*', async route => {
+      expect(route.request().postDataJSON()).toEqual({
+        p_night_out: PLAN_ID, p_accept: false,
+        p_expected_status: 'accepted', p_expected_revision: 0,
+      });
+      await fulfillJson(200, false)(route);
+    });
 
     await page.goto(`/night-out/${TOKEN}`);
     await expect(page.getByRole('heading', { name: /birthday crawl/i })).toBeVisible();
@@ -604,8 +664,17 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
     // Non-member: resolve finds nothing, so the page shows the bearer preview.
-    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await stubNightOutRest(page);
     await page.route('**/auth/v1/**', fulfillJson(200, {}));
+    await page.route('**/rest/v1/rpc/get_follow_requests*', fulfillJson(200, []));
+    // OBSERVED 2026-09-09 under the strict fixture: once the decline resolves,
+    // the page reads the plan board — get_night_out, _board, _members, _voting,
+    // _anon_rsvps — for a plan this user is NOT a member of. RLS answers a
+    // non-member with nothing, so that is what these return; the old blanket
+    // `[]` hid that the reads happen at all. Whether the page should issue
+    // them after "Not tonight" is a Night Out question, recorded in
+    // docs/V9-COVERAGE-AUDIT-2026-09-09.md §5 for V9-03/V9-05.
+    await page.route('**/rest/v1/rpc/get_night_out*', fulfillJson(200, []));
     await page.route(
       '**/rest/v1/rpc/resolve_night_out_by_token*',
       fulfillJson(200, null),
@@ -618,6 +687,7 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     let declineCalled = false;
     await page.route('**/rest/v1/rpc/join_night_out_by_token*', async (route) => {
       joinCalled = true;
+      expect(route.request().postDataJSON()).toEqual({ p_token: TOKEN });
       await fulfillJson(200, PLAN_ID)(route);
     });
     await page.route('**/rest/v1/rpc/decline_night_out_by_token*', async (route) => {

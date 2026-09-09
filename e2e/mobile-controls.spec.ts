@@ -201,6 +201,24 @@ async function unreachableControls(
   }, [MIN_TAP_PX, mode] as [number, string]);
 }
 
+async function waitForStableControls(page: Page): Promise<void> {
+  await expect.poll(() => page.evaluate(async () => {
+    const sample = () => {
+      const main = document.querySelector('main') ?? document.body;
+      return JSON.stringify({
+        boxes: Array.from(main.querySelectorAll<HTMLElement>(
+          'button, a[href], [role="button"], input, select',
+        ), el => el.getBoundingClientRect().toJSON()),
+        scroll: Array.from(document.querySelectorAll('*'), el => el.scrollTop),
+      });
+    };
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const before = sample();
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    return sample() === before;
+  }), { message: 'Control boxes and scrollTop must be stable across consecutive animation frames' }).toBe(true);
+}
+
 function describeFailures(route: string, bad: BadControl[]): string {
   return [
     `${bad.length} unreachable control(s) on ${route}:`,
@@ -253,7 +271,7 @@ test.describe('mobile controls are reachable', () => {
       // The saved WebKit trace placed its final page response inside the old
       // 500ms measurement pause. Measure only after the list has settled.
       await expect(page.getByText(/Loading the Manhattan catalog/)).toHaveCount(0, { timeout: 15_000 });
-      await page.waitForTimeout(1_000);
+      await waitForStableControls(page);
     }
 
     test(`${route} — every visible control is on-screen and a 44px target`, async ({
@@ -304,7 +322,7 @@ test.describe('mobile controls are reachable', () => {
         pageScroller.style.scrollBehavior = 'auto';
         pageScroller.scrollTop = pageScroller.scrollHeight;
       });
-      await page.waitForTimeout(500);
+      await waitForStableControls(page);
 
       const covered = (await unreachableControls(page, 'coverage-only')).filter((b) =>
         b.reason.startsWith('covered by'),
