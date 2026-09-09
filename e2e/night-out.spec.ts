@@ -1961,16 +1961,16 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
   }
 
   /**
-   * Open the Plans sub-tab with ONE tap, after the page is interactive. The
-   * Tonight panel's follow stats render only on the client, so their presence
-   * is the hydration marker: a tap before it would be swallowed (measured on a
-   * loaded 3-worker gate right after a reload, 2026-09-09) — and that swallowed
-   * first tap is what a real user on a slow phone gets too, which is why this
-   * waits for readiness rather than clicking until it sticks (round-1 panel).
+   * Open the Plans sub-tab with ONE tap. The tabs are disabled until the page
+   * has mounted (src/app/friends/page.tsx — the VibeQuiz pattern), so
+   * Playwright's own enabled-wait IS the hydration signal; before that fix a
+   * tap in the pre-hydration window was silently swallowed for tests and real
+   * users alike (measured on a loaded 3-worker gate after a reload, 2026-09-09;
+   * round-1/round-2 panels).
    */
   async function openPlansTab(page: Page): Promise<void> {
-    await expect(page.getByTestId('follow-stats')).toBeVisible({ timeout: 15_000 });
     const plans = page.getByRole('tab', { name: 'Plans' });
+    await expect(plans).toBeEnabled({ timeout: 15_000 });
     await plans.click();
     await expect(plans).toHaveAttribute('aria-selected', 'true');
   }

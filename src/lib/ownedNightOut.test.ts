@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  forgetAllOwnedNightOut,
   forgetOwnedNightOut,
   recallOwnedNightOut,
   rememberOwnedNightOut,
@@ -35,6 +36,26 @@ describe('ownedNightOut', () => {
     expect(recallOwnedNightOut(USER, '2026-07-24')).not.toBeNull();
     forgetOwnedNightOut(USER, PLAN);
     expect(recallOwnedNightOut(USER, '2026-07-24')).toBeNull();
+  });
+
+  it('the deletion sweep drops only that account, removes the key when nothing is left, and erases what it cannot parse', () => {
+    const KEY = 'next-bar:owned-night-out:v1';
+    rememberOwnedNightOut(USER, { planId: PLAN, nightKey: '2026-07-24' });
+    rememberOwnedNightOut(OTHER, { planId: PLAN_B, nightKey: '2026-07-24' });
+    forgetAllOwnedNightOut(USER);
+    expect(recallOwnedNightOut(USER, '2026-07-24')).toBeNull();
+    expect(recallOwnedNightOut(OTHER, '2026-07-24')).not.toBeNull();
+    forgetAllOwnedNightOut(OTHER);
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+
+    // A malformed value cannot be handled selectively: it goes whole.
+    window.localStorage.setItem(KEY, `{"${USER}":{"planId":"${PLAN}","nightKey":"2026-08-1`);
+    forgetAllOwnedNightOut(USER);
+    expect(window.localStorage.getItem(KEY)).toBeNull();
+    // A valid map with an unreadable entry for this account still loses that entry.
+    window.localStorage.setItem(KEY, JSON.stringify({ [USER]: { planId: PLAN, nightKey: 'bad' }, [OTHER]: { planId: PLAN_B, nightKey: '2026-07-24' } }));
+    forgetAllOwnedNightOut(USER);
+    expect(JSON.parse(window.localStorage.getItem(KEY) ?? '{}')).toEqual({ [OTHER]: { planId: PLAN_B, nightKey: '2026-07-24' } });
   });
 
   it('ignores malformed ids and corrupt storage', () => {

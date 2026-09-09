@@ -76,26 +76,60 @@ export function recallOwnedNightOut(userId: string, nightKey: string): OwnedNigh
   return record !== undefined && record.nightKey === nightKey ? record : null;
 }
 
-/**
- * Drop everything this account recorded — the account-deletion sweep. The
- * value holds the account's own id and a plan uuid, and after deletion the
- * account can never sign in to forget it itself (round-1 panel, both lanes).
- */
-export function forgetAllOwnedNightOut(userId: string): void {
-  const all = readAll();
-  if (all[userId] === undefined) return;
-  const { [userId]: _drop, ...rest } = all;
-  writeAll(rest);
-}
-
 /** Whole-device wipe (deletion with no account id to be selective about). */
 export function clearOwnedNightOuts(): void {
-  writeAll({});
+  memory = {};
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.removeItem(OWNED_KEY);
   } catch {
     // storage blocked — the in-memory copy is already empty
+  }
+}
+
+/**
+ * Drop everything this account recorded — the account-deletion sweep. The
+ * value holds the account's own id and a plan uuid, and after deletion the
+ * account can never sign in to forget it itself (round-1 panel, both lanes).
+ *
+ * Works on the RAW stored value, not the validated view: a value we cannot
+ * parse, or an entry we cannot read, is a value we cannot be selective about
+ * and is removed whole — otherwise a malformed record would survive the
+ * strongest erase the app offers (round-2 panel, both lanes; the same rule
+ * the parked-record sweep in accountCache follows).
+ */
+export function forgetAllOwnedNightOut(userId: string): void {
+  memory = Object.fromEntries(Object.entries(memory).filter(([id]) => id !== userId));
+  if (typeof window === 'undefined') return;
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(OWNED_KEY);
+  } catch {
+    return;
+  }
+  if (raw === null) return;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    clearOwnedNightOuts();
+    return;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    clearOwnedNightOuts();
+    return;
+  }
+  const rest = Object.fromEntries(
+    Object.entries(parsed as Record<string, unknown>).filter(([id]) => id !== userId),
+  );
+  if (Object.keys(rest).length === 0) {
+    clearOwnedNightOuts();
+    return;
+  }
+  try {
+    window.localStorage.setItem(OWNED_KEY, JSON.stringify(rest));
+  } catch {
+    // storage blocked — nothing more we can do here
   }
 }
 

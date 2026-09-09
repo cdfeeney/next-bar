@@ -68,6 +68,15 @@ export default function SocialPage(): JSX.Element {
   useNightRefresh(() => setNight(nycNightKey()));
 
   const [tab, setTab] = useState<Tab>('tonight');
+  // The sub-tabs are server-rendered and hit-testable before React attaches
+  // their handlers, so a tap in that window is silently swallowed (Tonight
+  // stays selected). Same fix as VibeQuiz: disabled until mounted, so a real
+  // user's first tap is never lost and a test's "enabled" wait is a true
+  // hydration signal (Night Out goal, round-2 panel, both lanes).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   // Closing returns you to whichever sub-tab opened the viewer for free: the
   // tab is never changed on the way in, so only EXHAUSTION has to move it.
   const [viewer, setViewer] = useState<string | null>(null);
@@ -170,6 +179,7 @@ export default function SocialPage(): JSX.Element {
               id={`social-tab-${entry.id}`}
               aria-selected={tab === entry.id}
               aria-controls={`social-panel-${entry.id}`}
+              disabled={!mounted}
               onClick={() => setTab(entry.id)}
               className={[
                 'flex-1 min-h-[44px] rounded-xl font-display text-xs uppercase tracking-widest touch-manipulation transition-colors',

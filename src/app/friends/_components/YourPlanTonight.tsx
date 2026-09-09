@@ -35,10 +35,18 @@ export default function YourPlanTonight(): JSX.Element | null {
     | { kind: 'none' }
   >({ kind: 'idle' });
 
+  // The rendered state belongs to ONE account. When the account changes in
+  // place, reset synchronously — during this very render, before anything is
+  // committed — so not even one frame of the previous account's plan (and its
+  // bearer link) reaches the screen. The epoch below then guards the async
+  // part (round-1 and round-2 panels, Codex).
+  const [stateFor, setStateFor] = useState<string | null>(userId);
+  if (stateFor !== userId) {
+    setStateFor(userId);
+    setState({ kind: 'idle' });
+  }
   // Every load is stamped; a result that arrives after the account changed,
   // after a newer load started, or after unmount is dropped on the floor.
-  // Without this an in-place account switch could paint the PREVIOUS account's
-  // plan — and its bearer share link — for the next one (round-1 panel, Codex).
   const epoch = useRef(0);
   const load = useCallback(async (): Promise<void> => {
     const mine = ++epoch.current;
