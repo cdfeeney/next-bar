@@ -174,11 +174,15 @@ test.describe('Friends + consensus', () => {
     // carries the star/share moment reserved for a unanimous pick.
     await expect(page.getByTestId('no-unanimous-pick')).toBeVisible();
     const cards = page.locator('article');
-    // `count()` does not wait; the cards render once the ratings merge has
-    // settled, which under a loaded gate can trail the notice above.
+    // Group Favorites resolves its bars through the catalog, and the catalog
+    // can re-fetch mid-page (the 0019 swap-day check; same window
+    // mobile-controls waits out). Under a loaded gate that re-fetch landed
+    // between "cards visible" and `count()`, which does not wait, and read 0.
+    // Wait for the catalog to settle, then count once it is stable.
+    await expect(page.getByText(/Loading the Manhattan catalog/)).toHaveCount(0, { timeout: 15_000 });
     await expect(cards.first()).toBeVisible();
+    await expect.poll(() => cards.count(), { timeout: 10_000 }).toBeGreaterThan(0);
     const cardCount = await cards.count();
-    expect(cardCount).toBeGreaterThan(0);
     await expect(page.getByTestId('near-miss-badge')).toHaveCount(cardCount);
     await expect(
       page.getByRole('button', { name: /^Share the pick/ }),
