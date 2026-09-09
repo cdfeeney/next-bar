@@ -47,6 +47,20 @@ not a knob. Warm loads paint the webfont directly.
   against `docs/design-reference/approved/next-bar-five-bars-typography-refinement.png` (notes in the goal record).
 - Full production e2e gate (both viewports) with the fonts applied — see the goal's store evidence for counts.
 
+### Screenshot inspection (iPhone 13 + Pixel 7 captures, fonts applied)
+
+- **Home / Next Bar?** — wordmark, eyebrow, heading, primary button and nav labels render in Playfair Display;
+  body copy and the secondary link in Nunito Sans. Hierarchy matches the approved refinement (eyebrow → one serif
+  title → body → one filled primary). **Defect found and fixed:** the centre "Next Bar?" nav pill wrapped to two
+  lines on iPhone 13 — Playfair uppercase with tracking is wider than Poppins at the pill's 84px minimum. Fixed
+  with `whitespace-nowrap` on the pill (`BottomNav.tsx`); the pill widens instead of wrapping.
+- **Rankings** — eyebrow, "Bar Rankings" title, empty-state heading, outlined + filled actions: hierarchy as
+  approved; no wraps, weights 600 display / 400 body only.
+- **Social (Pixel 7)** — the "You tonight" chips wrap "Going out / Maybe later / Not going out" onto two lines; the
+  same wrap is present in foundation B's Poppins capture of the same screen (`actual-2026-09-09/social--Pixel-7.png`),
+  so it is pre-existing at that viewport width, not a typography regression. Left alone (no unrelated restyling).
+- **Map** — floating search/Filters/Locate in Nunito Sans; Leaflet chrome keeps its own face by design.
+
 ## The 2026-09-03 blocker (`vibe-tweak-ranking.spec.ts:160`) — status
 
 On `release/v8` (parent `fa295e3`) the same three-file change failed "opening the surface and cancelling leaves the

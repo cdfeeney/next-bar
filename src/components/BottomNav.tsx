@@ -96,7 +96,9 @@ export default function BottomNav(): JSX.Element | null {
                   aria-current="page"
                   className={[
                     'flex flex-col items-center justify-center text-center touch-manipulation',
-                    'min-h-[60px] min-w-[84px] -mt-7 px-6 py-3 rounded-full',
+                    // whitespace-nowrap: in Playfair Display (wider than Poppins, uppercase +
+                    // tracking) the label wrapped to two lines on iPhone 13 (V9-11 capture).
+                    'min-h-[60px] min-w-[84px] -mt-7 px-6 py-3 rounded-full whitespace-nowrap',
                     'bg-accent text-bg font-display text-[13px] uppercase tracking-wider',
                     'shadow-lg shadow-accent/40 transition-transform active:scale-95',
                   ].join(' ')}
