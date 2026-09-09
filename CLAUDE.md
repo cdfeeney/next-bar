@@ -163,6 +163,32 @@ a `0020` and a `0021`; ours were renumbered to `0043`/`0044` to clear it.
 
 ## Other ground rules
 
+- **V9 phone feedback / native SDK practice (operator, 2026-09-08):** the saved
+  fix/refactor queue is `docs/V9-OVERNIGHT-QUEUE-2026-09-08.md`. Prepare this work
+  for staging; saving the queue did not authorize running it or another release.
+  For iOS changes, check current primary Apple SDK documentation and use native
+  APIs where applicable, including permissions, safe areas and corner geometry.
+  Most app content is HTML/CSS inside WKWebView: UIKit/SwiftUI corner APIs do not
+  directly style those tiles. Preserve web fallbacks and verify native changes
+  on an actual iPhone. Inspect the uploaded build's origin, not just the current
+  Capacitor default, before telling a tester which environment they are using.
+  Connor also requires critical visual/typography comparison with the approved
+  design and a feedback-to-test coverage audit (V9-11/12). Loaded fonts, mocked
+  browser flows, live staging integration and physical TestFlight behavior are
+  distinct evidence; passing Playwright counts do not certify all four.
+  **Font correction from Connor:** the later chosen design replaced Poppins
+  with different header and body font families. Recover the exact approved
+  pair/weights before changing fonts; old all-Poppins code and the August
+  “Poppins-like” recovery note are not the target. See V9-11; do not guess.
+  **V9 execution order:** repair misleading Playwright coverage, then verify
+  existing refactor work and complete the bounded shared-code foundation,
+  then start dependent feature lanes from the same reviewed commit. Record
+  real dependencies; do not launch features early or rewrite the whole app.
+  UI reviews must explicitly apply current Apple Human Interface Guidelines
+  and relevant SDK docs, with source-linked findings and on-device evidence
+  where required. Preserve the chosen brand fonts; HIG review is not approval
+  to substitute system typography. See the V9-10/11 review rubric.
+
 - **Connor is on Windows.** No Mac. The iOS App Store path uses PWABuilder +
   iTMSTransporter (Java, runs on Windows) or cloud Mac CI — never assume a
   local `xcodebuild`.
