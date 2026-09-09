@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { MapContainer, Marker, Popup, ZoomControl, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { maplibreGL } from '@maplibre/maplibre-gl-leaflet';
@@ -8,6 +9,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import 'leaflet-gesture-handling/dist/leaflet-gesture-handling.css';
 import { GestureHandling } from 'leaflet-gesture-handling';
 import { displayHood } from '@/lib/hoodDisplay';
+import BarLightbox from '@/components/BarLightbox';
 import type { Bar, Coords } from '@/types';
 
 type BarMapProps = {
@@ -198,19 +200,69 @@ function PanToUser({ coords }: { coords: Coords | null | undefined }) {
 /**
  * The ONE venue popup. Both ways a venue surfaces on the map — tapping its
  * marker and arriving via map search — open this same content on the bar's own
- * marker, so the detail entry V9-07 adds here (name → photos & hours) exists
- * exactly once. Before this there were two builders: this React popup and a
- * DOM `textContent` popup in FocusBar with slightly different content.
+ * marker, so the detail entry (V9-07: name → photos & hours) exists exactly
+ * once. Before this there were two builders: this React popup and a DOM
+ * `textContent` popup in FocusBar with slightly different content.
+ *
+ * The name is a button, not a link: it opens the shared BarLightbox for THIS
+ * bar in place, and the lightbox hands focus back to it on close. Leaflet's
+ * popup wrapper stops mousedown/touchstart propagation, not click, so React's
+ * delegated onClick still fires. Blue rather than the coral accent so it reads
+ * as "opens something" against the popup's white card; sky-600 keeps 4.5:1 on
+ * white, which the paler blues do not.
  */
-function BarPopupContent({ bar }: { bar: Bar }) {
+function BarPopupContent({ bar, onOpen }: { bar: Bar; onOpen: (bar: Bar) => void }) {
   return (
     <>
-      <div className="font-bold">{bar.name}</div>
+      <button
+        type="button"
+        onClick={(e) => {
+          // WebKit does not focus a button on tap. The lightbox returns focus
+          // to whatever was active when it opened, so without this a tapped
+          // name on iOS hands focus back to the page, not to the name.
+          e.currentTarget.focus({ preventScroll: true });
+          onOpen(bar);
+        }}
+        aria-label={`${bar.name}, photos and hours`}
+        className="font-bold text-sky-600 underline underline-offset-2 text-left min-h-[44px] touch-manipulation"
+      >
+        {bar.name}
+      </button>
       <div className="text-xs">
         {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
       </div>
     </>
   );
+}
+
+/**
+ * Publishes the map's motion state and pose on its container as data
+ * attributes: `data-map-moving` while a pan/fly/zoom is in progress, and
+ * `data-map-center` / `data-map-zoom` on every settle. Leaflet's flyTo moves
+ * layers by pixel origin, not by the pane transform, so nothing in the DOM
+ * otherwise says whether the map is still in flight — the V9-07 journeys
+ * assert "closing the detail view leaves the map where it was" on these.
+ */
+function MapPose() {
+  const map = useMap();
+  useEffect(() => {
+    const el = map.getContainer();
+    const publish = (): void => {
+      const c = map.getCenter();
+      el.dataset.mapCenter = `${c.lat.toFixed(5)},${c.lng.toFixed(5)}`;
+      el.dataset.mapZoom = String(map.getZoom());
+    };
+    const start = (): void => { el.dataset.mapMoving = 'true'; };
+    const end = (): void => { delete el.dataset.mapMoving; publish(); };
+    map.on('movestart', start);
+    map.on('moveend', end);
+    publish();
+    return () => {
+      map.off('movestart', start);
+      map.off('moveend', end);
+    };
+  }, [map]);
+  return null;
 }
 
 /**
@@ -247,6 +299,15 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
   // of building a second one (one venue popup — see BarPopupContent).
   const markerRefs = useRef(new Map<string, L.Marker>());
   const getMarker = useCallback((id: string) => markerRefs.current.get(id), []);
+  // V9-07: the venue whose photos & hours are open. The map stays mounted
+  // underneath, so center, zoom, the open popup and the caller's filters are
+  // untouched by opening and closing; BarLightbox restores focus to the popup
+  // name that opened it. Portaled to <body>: the popup lives in a transformed
+  // Leaflet pane (which would re-anchor a `fixed` overlay) and the /map surface
+  // is a fixed <main> that sits BELOW the bottom nav's stacking order.
+  const [detail, setDetail] = useState<Bar | null>(null);
+  const openDetail = useCallback((bar: Bar) => setDetail(bar), []);
+  const closeDetail = useCallback(() => setDetail(null), []);
   const center: Coords = useMemo(() => {
     if (userCoords) return userCoords;
     return computeCentroid(bars);
@@ -316,6 +377,7 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
             style={{ height: '100%', width: '100%' }}
           >
             <ZoomControl position={fill ? 'bottomright' : 'topleft'} />
+            <MapPose />
             {oneFingerPan ? null : <GestureController />}
             {fitToBars ? <FitBounds bars={bars} /> : null}
             {panToUser ? <PanToUser coords={userCoords} /> : null}
@@ -360,7 +422,7 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
                   }}
                 >
                   <Popup>
-                    <BarPopupContent bar={bar} />
+                    <BarPopupContent bar={bar} onOpen={openDetail} />
                   </Popup>
                 </Marker>
               );
@@ -368,6 +430,12 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
           </MapContainer>
         </div>
       </div>
+      {detail
+        ? createPortal(
+            <BarLightbox bar={detail} origin={userCoords ?? undefined} onClose={closeDetail} />,
+            document.body,
+          )
+        : null}
     </section>
   );
 }

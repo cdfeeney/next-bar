@@ -342,3 +342,141 @@ test.describe('/map filter sheet (locked: draft until "Show N bars")', () => {
     await expect(page.getByRole('button', { name: /^Filters$/ })).toBeVisible();
   });
 });
+
+/**
+ * V9-07 — venue name in the map popup opens the shared photos & hours view;
+ * closing it (top-right X, or Escape) leaves the map exactly where it was and
+ * hands focus back to the name. "Where it was" is asserted on the map pane's
+ * transform and the popup's screen rectangle (center + zoom + selection), not
+ * on visibility alone. Google media is off in the browser gate, so the
+ * lightbox takes its fallback path; the entry and the restore are what is
+ * under test here, not the photo provider.
+ */
+type MapPose = { center: string; zoom: string; popup: string; scroll: string };
+async function mapPose(page: Page): Promise<MapPose> {
+  return page.evaluate(() => {
+    // Every scroll container between the map and the window. An overflow:hidden
+    // ancestor can still be scrolled programmatically (focus reveal, autoPan),
+    // which moves the map on screen without touching the pane transform.
+    const offsets: Record<string, [number, number]> = { window: [window.scrollX, window.scrollY] };
+    let el: HTMLElement | null = document.querySelector('.leaflet-container');
+    while (el) {
+      if (el.scrollLeft !== 0 || el.scrollTop !== 0) offsets[el.className.split(' ')[0] || el.tagName] = [el.scrollLeft, el.scrollTop];
+      el = el.parentElement;
+    }
+    const container = document.querySelector<HTMLElement>('.leaflet-container');
+    return {
+      center: container?.dataset.mapCenter ?? '',
+      zoom: container?.dataset.mapZoom ?? '',
+      popup: JSON.stringify(document.querySelector('.leaflet-popup')?.getBoundingClientRect() ?? null),
+      scroll: JSON.stringify(offsets),
+    };
+  });
+}
+/**
+ * The map's own moveend is the readiness signal (BarMap publishes it as
+ * `data-map-moving`); a fly-to can stall for whole frames in headless WebKit,
+ * so sampling the popup's rectangle for stability is not enough on its own.
+ */
+async function settledPose(page: Page): Promise<MapPose> {
+  await expect(page.locator('.leaflet-container[data-map-moving]')).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.locator('.leaflet-container[data-map-center]')).toHaveCount(1);
+  return mapPose(page);
+}
+
+test.describe('/map venue detail (V9-07)', () => {
+  test('search entry: the popup name opens photos & hours by keyboard; X restores map pose and focus', async ({
+    page,
+  }) => {
+    await gotoLoadedMap(page);
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('searchbox', { name: /Search bars/i }).fill('Attaboy');
+    await page.getByRole('list', { name: /Matching bars/i }).getByRole('button', { name: /Attaboy/ }).click();
+    const popup = page.locator('.leaflet-popup');
+    const name = popup.getByRole('button', { name: 'Attaboy, photos and hours' });
+    await expect(name).toBeVisible({ timeout: 10_000 });
+    // Visibly a control: blue (sky-600), not the popup's body text colour.
+    await expect(name).toHaveCSS('color', 'rgb(2, 132, 199)');
+    const before = await settledPose(page);
+
+    await name.focus();
+    await page.keyboard.press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'Attaboy details' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('heading', { level: 2, name: 'Attaboy' })).toBeVisible();
+    const close = dialog.getByRole('button', { name: 'Close' });
+    await expect(close).toBeFocused();
+    // Top-right, and not under the status bar.
+    const box = (await close.boundingBox())!;
+    const viewport = page.viewportSize()!;
+    expect(box.x + box.width / 2).toBeGreaterThan(viewport.width / 2);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    // No rehosted photos, ever.
+    await expect(dialog.locator('img[src^="/bar-photos/"]')).toHaveCount(0);
+
+    await close.click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(popup).toContainText('Attaboy');
+    await expect(name).toBeFocused();
+    expect(await mapPose(page)).toEqual(before);
+  });
+
+  test('marker entry: tapping a pin then its name opens that venue; Escape restores map pose and focus', async ({
+    page,
+  }) => {
+    await gotoLoadedMap(page);
+    await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({ timeout: 15_000 });
+    // Street-level zoom first: at the fit-to-catalog zoom the Manhattan pins
+    // overlap and a tap on one lands on its neighbour. Searching flies to zoom
+    // 16 and opens Attaboy's popup; the pin under test is a DIFFERENT one.
+    await page.getByRole('searchbox', { name: /Search bars/i }).fill('Attaboy');
+    await page.getByRole('list', { name: /Matching bars/i }).getByRole('button', { name: /Attaboy/ }).click();
+    const popup = page.locator('.leaflet-popup');
+    await expect(popup).toContainText('Attaboy', { timeout: 10_000 });
+    await settledPose(page);
+    // Close the search popup first: a tap on a pin whose popup is already open
+    // TOGGLES it closed (Leaflet), which is not the marker entry under test.
+    await popup.getByRole('button', { name: 'Close popup' }).click();
+    await expect(popup).toHaveCount(0);
+    // A pin that is on screen, clear of the floating controls, the legend and
+    // the nav, and that actually receives a tap at its centre (no neighbour on
+    // top of it) — asserted with the same hit test the tap will use.
+    const index = await page.evaluate(() => {
+      const icons = Array.from(document.querySelectorAll<HTMLElement>('.leaflet-marker-icon'));
+      return icons.findIndex((el) => {
+        if (!el.querySelector('[data-tier]')) return false;
+        const r = el.getBoundingClientRect();
+        if (!(r.width > 0 && r.top > 200 && r.bottom < window.innerHeight - 200 && r.left > 24 && r.right < window.innerWidth - 80)) return false;
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return hit !== null && el.contains(hit);
+      });
+    });
+    expect(index).toBeGreaterThanOrEqual(0);
+    await page.locator('.leaflet-marker-icon').nth(index).click();
+    const name = popup.getByRole('button', { name: /, photos and hours$/ });
+    await expect(name).toBeVisible({ timeout: 10_000 });
+    const venue = (await name.textContent())!.trim();
+    expect(venue.length).toBeGreaterThan(0);
+    const before = await settledPose(page);
+
+    await name.click();
+    const dialog = page.getByRole('dialog', { name: `${venue} details` });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('heading', { level: 2, name: venue })).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(popup).toContainText(venue);
+    // The name is the active element again. Asserted on activeElement rather
+    // than toBeFocused: after a keyboard-driven close, headless WebKit reports
+    // the element as active but the document as not (`inactive`) — the same
+    // artifact CLAUDE.md records for the lightbox focus-restore contract test.
+    // The click-driven journey above keeps the strict toBeFocused form.
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? null))
+      .toBe(`${venue}, photos and hours`);
+    expect(await mapPose(page)).toEqual(before);
+  });
+});

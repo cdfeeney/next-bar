@@ -200,6 +200,13 @@ export default function BarLightbox({
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
+        // A modal owns Escape while it is open. Registered in the CAPTURE
+        // phase and stopped here so nothing underneath sees it: Leaflet's
+        // keyboard handler listens on `document` and closes the open venue
+        // popup on Escape (closeOnEscapeKey), which took the map's selection
+        // — and the element this dialog returns focus to — away with it
+        // (V9-07 marker journey, Pixel 7).
+        e.stopPropagation();
         onCloseRef.current();
         return;
       }
@@ -208,10 +215,10 @@ export default function BarLightbox({
       // triplicating this is how they drifted apart.
       cycleFocusWithin(dialogRef.current, e);
     };
-    window.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
     const unlockScroll = lockBodyScroll();
     return () => {
-      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onKey, true);
       unlockScroll();
       // preventScroll: focus() otherwise scrolls the opener back into view and
       // overrides the position unlockScroll() just restored (observed landing
@@ -240,7 +247,10 @@ export default function BarLightbox({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="max-w-lg mx-auto min-h-full px-4 py-6 flex flex-col gap-4">
+      {/* V9-07: the header (and its top-right ✕) clears the status bar and
+          notch — this overlay is edge to edge, so without the safe-area inset
+          the close control sits under iOS chrome on the map surface. */}
+      <div className="max-w-lg mx-auto min-h-full px-4 pt-[max(1.5rem,env(safe-area-inset-top))] pb-6 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <p className="text-accent uppercase tracking-[0.25em] text-xs">
             {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
