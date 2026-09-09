@@ -39,9 +39,12 @@ not a knob. Warm loads paint the webfont directly.
 
 ## Evidence (candidate-bound)
 
-- `e2e/typography-contract.spec.ts` on `/`, `/rankings`, `/map`, both Playwright devices: loaded faces are exactly
-  Playfair Display 600/700 and Nunito Sans 400/600/700 (no Poppins), body resolves to Nunito Sans, `.font-display`
-  resolves to Playfair Display, no synthetic weights, no foreign family on rendered text.
+- `e2e/typography-contract.spec.ts` on `/`, `/rankings`, `/map`, both Playwright devices: the faces DECLARED are
+  exactly Playfair Display 600/700 and Nunito Sans 400/600/700 (no Poppins); at least one face of each family is
+  loaded; body resolves to Nunito Sans and `.font-display` to Playfair Display; every rendered (family, weight) is a
+  face that is declared at that weight AND loaded — the synthetic-weight check; no rendered text on a system face
+  (Leaflet chrome excluded). Declared ≠ loaded on purpose: Chromium fetches a face only when rendered text needs it,
+  so an unused weight (Playfair 700 on these screens) legitimately stays `unloaded` on Pixel 7 while WebKit loads all.
 - `e2e/visual-capture.spec.ts` with `VISUAL_CAPTURE_DIR` → `docs/design-reference/actual-2026-09-09/fonts/`, one
   full-page PNG per screen per viewport after `document.fonts.ready`, loaded faces logged per capture; inspected
   against `docs/design-reference/approved/next-bar-five-bars-typography-refinement.png` (notes in the goal record).
