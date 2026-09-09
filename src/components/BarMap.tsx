@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, Marker, Popup, ZoomControl, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { maplibreGL } from '@maplibre/maplibre-gl-leaflet';
@@ -196,10 +196,39 @@ function PanToUser({ coords }: { coords: Coords | null | undefined }) {
 }
 
 /**
- * UX-C: flies to a searched bar and opens a popup on it. Id-keyed so a
- * re-render with the same focus never re-flies against the user's pan.
+ * The ONE venue popup. Both ways a venue surfaces on the map — tapping its
+ * marker and arriving via map search — open this same content on the bar's own
+ * marker, so the detail entry V9-07 adds here (name → photos & hours) exists
+ * exactly once. Before this there were two builders: this React popup and a
+ * DOM `textContent` popup in FocusBar with slightly different content.
  */
-function FocusBar({ bar, nonce }: { bar: Bar | null; nonce?: number }) {
+function BarPopupContent({ bar }: { bar: Bar }) {
+  return (
+    <>
+      <div className="font-bold">{bar.name}</div>
+      <div className="text-xs">
+        {displayHood(bar.neighborhood)} · {'$'.repeat(bar.priceTier)}
+      </div>
+    </>
+  );
+}
+
+/**
+ * UX-C: flies to a searched bar and opens ITS MARKER's popup. Id-keyed so a
+ * re-render with the same focus never re-flies against the user's pan. The
+ * marker is looked up by id; markers register themselves in `getMarker`'s map
+ * during commit, before this effect runs, and the focused bar always comes from
+ * the rendered `bars`, so a missing marker is a programming error, not a state.
+ */
+function FocusBar({
+  bar,
+  nonce,
+  getMarker,
+}: {
+  bar: Bar | null;
+  nonce?: number;
+  getMarker: (id: string) => L.Marker | undefined;
+}) {
   const map = useMap();
   const barId = bar?.id ?? null;
   useEffect(() => {
@@ -207,20 +236,17 @@ function FocusBar({ bar, nonce }: { bar: Bar | null; nonce?: number }) {
     map.flyTo([bar.lat, bar.lng], Math.max(map.getZoom(), 16), {
       duration: 0.6,
     });
-    // textContent-built popup — never string-interpolated HTML.
-    const el = document.createElement('div');
-    const name = document.createElement('b');
-    name.textContent = bar.name;
-    const sub = document.createElement('div');
-    sub.textContent = `${displayHood(bar.neighborhood)} · ${'$'.repeat(bar.priceTier)}`;
-    el.append(name, sub);
-    map.openPopup(L.popup().setLatLng([bar.lat, bar.lng]).setContent(el));
+    getMarker(bar.id)?.openPopup();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- barId+nonce stand in for bar
   }, [map, barId, nonce]);
   return null;
 }
 
 export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusNonce, highlightIds, suggestedIds, fitToBars, oneFingerPan, fill }: BarMapProps) {
+  // Marker instances by bar id, so map search opens a bar's OWN popup instead
+  // of building a second one (one venue popup — see BarPopupContent).
+  const markerRefs = useRef(new Map<string, L.Marker>());
+  const getMarker = useCallback((id: string) => markerRefs.current.get(id), []);
   const center: Coords = useMemo(() => {
     if (userCoords) return userCoords;
     return computeCentroid(bars);
@@ -296,6 +322,7 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
             <FocusBar
               bar={focusBarId ? (bars.find((b) => b.id === focusBarId) ?? null) : null}
               nonce={focusNonce}
+              getMarker={getMarker}
             />
             <DarkBasemap />
             {userCoords && (
@@ -327,10 +354,13 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
                   position={[bar.lat, bar.lng]}
                   icon={icon}
                   zIndexOffset={isTiered ? TIER_Z_OFFSET[tier] : 0}
+                  ref={(marker) => {
+                    if (marker) markerRefs.current.set(bar.id, marker);
+                    else markerRefs.current.delete(bar.id);
+                  }}
                 >
                   <Popup>
-                    <div className="font-bold">{bar.name}</div>
-                    <div className="text-xs">{displayHood(bar.neighborhood)}</div>
+                    <BarPopupContent bar={bar} />
                   </Popup>
                 </Marker>
               );

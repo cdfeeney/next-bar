@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { nycNightKey } from '@/lib/nightKey';
-import { createNightOut, getNightOut, inviteToNightOut } from '@/lib/nightOuts.server';
+import { createNightOut, getNightOut } from '@/lib/nightOuts.server';
+import { inviteAll, startOutcome } from '@/lib/nightOutStart';
 import { useNightOutPlanFields, type PlanEditOutcome } from './NightOutPlanFields';
 
 /**
@@ -968,15 +969,9 @@ export default function StartNightOutButton({
       // a selection the plan does not have. Disabling it while `busy` is the
       // fix, and it belongs to that page's owner. Snapshotting here at least
       // makes the semantic explicit rather than an accident of closure capture.
-      const accounts = invitedAtTap.filter((id) => UUID_RE.test(id));
-      let failed = 0;
-      for (const id of accounts) {
-        // Sequential on purpose: invite_to_night_out serialises on a per-plan
-        // advisory lock, so firing them in parallel would just queue on the lock.
-        if (!(await inviteToNightOut(supabase, planId, id))) failed += 1;
-      }
+      const { failed } = await inviteAll(supabase, planId, invitedAtTap);
       if (owner !== liveUserId.current) return;
-      setInviteFailures(failed);
+      setInviteFailures(failed.length);
 
       const plan = await getNightOut(supabase, planId);
       if (owner !== liveUserId.current) return;
@@ -1013,10 +1008,12 @@ export default function StartNightOutButton({
       // held for the same reason: the owner was shown one night and the plan is
       // for another, and that is not something to discover on the plan page.
       if (
-        refusedEdits.length > 0
-        || failed > 0
-        || planEdits.nightMoved !== null
-        || editsTimedOut
+        startOutcome({
+          refusedEdits,
+          failedInvites: failed.length,
+          nightMoved: planEdits.nightMoved,
+          editsTimedOut,
+        }) === 'hold'
       ) {
         setBusy(false);
         setRefusedEdits(refusedEdits);

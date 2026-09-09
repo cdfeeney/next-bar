@@ -2093,6 +2093,10 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await page.getByRole('tab', { name: 'Plans' }).click();
     await expect(page.getByTestId('start-night-out')).toBeVisible();
 
+    // The strict-REST postcondition is asserted INLINE here, before the marker
+    // below: once test.fail() is set, the file-level afterEach would report an
+    // unexpected request into a test already marked expected-to-fail.
+    assertNoUnexpectedRest(page);
     // The one assertion that carries the defect. Marked expected-to-fail ONLY
     // when the listing is missing, so an unrelated failure above stays red.
     const listed = await page

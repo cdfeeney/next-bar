@@ -232,3 +232,18 @@ and crashed before the suite started (exit `0xC0000409`, 2s). Invoking
   fresh whole-repository scan, and not a release attestation.
 - The restored reader has **no mounted caller**. It is preserved compatibility
   code awaiting a deliberate migration — the migration itself is still owed.
+
+## Correction — 2026-09-09, after the rebase onto the V9 base
+
+Section 5 and "Candidate commit vs tested commit" above describe the slice as it sat on `6e8fab1`
+(candidate `e8828f7`, tested commit `5d43558`, identical `src`/`e2e` trees). On 2026-09-09 the same
+six commits were cherry-picked onto the V9 base `3d29726` (= `1eae20a` + docs) as foundation A,
+candidate `21b50d9`. At that commit the tree claims above no longer hold by construction — the base
+moved nine commits, so `src` (`7b191dfa` → `99fe3213`) and `e2e` (`b7ac53db` → `3460dd5a`) differ
+from `5d43558` in 33 files. The numbers in this document therefore certify `e8828f7`, not `21b50d9`.
+
+What certifies the rebased slice is recorded on goal `g-ef0ee16f` and in the run directory
+`D:/harness-handoffs/nextbar-v9-overnight/nb-v9-overnight-20260908/`: full Vitest exit 0 (92 s),
+production Playwright `night-out` + `v7-continuity` + `rankings-score` + `where-next-path` 108/108 on
+both devices, retired files absent, `saved.ts`/`saved.test.ts`/`types/saved.ts` blob-identical to
+`e8828f7`, zero dangling imports; panel Fable clean, Codex one MEDIUM (this very staleness), finalized.

@@ -107,7 +107,10 @@ Implemented by the delegated Codex slice (write scope `e2e/night-out.spec.ts`, `
   `get_my_night_outs`), it updates that fixture and removes the marker by hand. The check that goes red on the server
   side the moment `0059:296` changes is `src/lib/nightOutsRls.live.test.ts:909`, which pins the exclusion as intended
   behaviour today and must be inverted by that goal. This is not a staging or device question; it is a product gap
-  with a line number. Fixture shapes were re-checked against the SQL: `get_night_out_anon_rsvps` is an ungrouped
+  with a line number. Reading the gate summary: Playwright counts an expected failure as **passed** and the list
+  reporter prints it with a tick; the V9-03 known failure is visible as a `fail` annotation in the HTML report, not in
+  the pass count — so "742 passed" does not mean V9-03 is fixed. The strict-REST postcondition is asserted inline in
+  that case before the marker, so an unexpected request there still fails red. Fixture shapes were re-checked against the SQL: `get_night_out_anon_rsvps` is an ungrouped
   aggregate that always returns exactly one row (`0068:2268-2282`), so every handler answers it with
   `[{ going: 0, maybe: 0, declined: 0 }]`, never `[]`; unknown `get_night_out_*` suffixes fall back to the strict
   recorder instead of a plan row.
