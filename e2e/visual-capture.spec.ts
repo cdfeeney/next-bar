@@ -18,7 +18,7 @@ const SCREENS: Array<{ name: string; route: string; ready: RegExp | string }> = 
   { name: 'rankings', route: '/rankings', ready: /Rankings/i },
   { name: 'social', route: '/friends', ready: /Friends|Social/i },
   { name: 'plan-night-out-form', route: '/friends/consensus', ready: /night out|plan/i },
-  { name: 'settings', route: '/settings', ready: /Settings/i },
+  { name: 'settings', route: '/settings', ready: /Account|Settings/i },
   { name: 'nights', route: '/nights', ready: /night/i },
 ];
 

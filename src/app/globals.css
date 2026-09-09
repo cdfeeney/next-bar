@@ -47,11 +47,14 @@ body::-webkit-scrollbar { display: none; }
 .scrollbar-none { scrollbar-width: none; }
 .scrollbar-none::-webkit-scrollbar { display: none; }
 
-/* Brand kit 2026-07-23: Poppins headlines are Bold. font-display only sets the
-   family, so give it the brand weight here (base layer — explicit font-*
-   utilities still override). */
+/* Brand type 2026-09-03 (operator): Playfair Display headlines sit at 600, not
+   the 700 the Poppins kit used — Playfair is a high-contrast serif and 700 at
+   the sizes this app sets headings reads heavy rather than confident. Only 600
+   and 700 are loaded, so any rule asking for 500 here would silently synthesise.
+   font-display sets the family only, so the weight belongs here (base layer —
+   explicit font-* utilities still override). */
 @layer base {
-  .font-display { font-weight: 700; }
+  .font-display { font-weight: 600; }
 }
 html { scroll-behavior: smooth; }
 

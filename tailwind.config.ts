@@ -35,8 +35,8 @@ const config: Config = {
       // Brand kit 2026-07-23: Poppins everywhere (Bold headlines via
       // .font-display weight rule in globals.css; Regular body).
       fontFamily: {
-        display: ['var(--font-poppins)', 'ui-sans-serif', 'sans-serif'],
-        sans: ['var(--font-poppins)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        display: ['var(--font-display)', 'Georgia', 'serif'],
+        sans: ['var(--font-sans)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
     },
   },

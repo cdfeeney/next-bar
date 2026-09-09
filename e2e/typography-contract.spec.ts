@@ -1,0 +1,96 @@
+/**
+ * typography-contract.spec.ts — V9-11
+ *
+ * The approved pair (owner, 2026-09-08): Playfair Display for display /
+ * headings, Nunito Sans for body. This pins what a screenshot cannot: which
+ * faces are actually LOADED, which family each role resolves to, and that no
+ * rendered weight is synthesised (every computed weight is one the face ships).
+ * See docs/V9-TYPOGRAPHY-CONTRACT-2026-09-09.md for the tokens and mapping.
+ *
+ * next/font self-hosts both faces under mangled family names
+ * (`__Playfair_Display_<hash>`), so families are matched by prefix.
+ */
+import { test, expect } from './helpers/catalogTest';
+import { denyGeolocation } from './helpers/geo';
+
+type LoadedFace = { family: string; weight: string; status: string };
+
+const DISPLAY = /^__Playfair_Display/;
+const BODY = /^__Nunito_Sans/;
+const DISPLAY_WEIGHTS = ['600', '700'];
+const BODY_WEIGHTS = ['400', '600', '700'];
+
+async function loadedFaces(page: import('@playwright/test').Page): Promise<LoadedFace[]> {
+  return page.evaluate(async () => {
+    const fonts = (document as Document & { fonts: FontFaceSet }).fonts;
+    await fonts.ready;
+    const out: LoadedFace[] = [];
+    fonts.forEach((f) => out.push({ family: f.family.replace(/"/g, ''), weight: f.weight, status: f.status }));
+    return out;
+  });
+}
+
+/** Every visible text element's resolved family + weight, deduplicated. */
+async function renderedTypography(page: import('@playwright/test').Page): Promise<Array<{ family: string; weight: string; sample: string }>> {
+  return page.evaluate(() => {
+    const seen = new Map<string, string>();
+    for (const el of Array.from(document.body.querySelectorAll<HTMLElement>('*'))) {
+      const text = Array.from(el.childNodes).some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').trim().length > 0);
+      if (!text) continue;
+      // Third-party map chrome (Leaflet attribution/controls) sets its own
+      // family; it is not app typography and is left to the map contract.
+      if (el.closest('.leaflet-container')) continue;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+      const family = cs.fontFamily.split(',')[0].replace(/"/g, '').trim();
+      const key = `${family}|${cs.fontWeight}`;
+      if (!seen.has(key)) seen.set(key, (el.textContent ?? '').trim().slice(0, 40));
+    }
+    return Array.from(seen, ([key, sample]) => {
+      const [family, weight] = key.split('|');
+      return { family, weight, sample };
+    });
+  });
+}
+
+for (const route of ['/', '/rankings', '/map']) {
+  test(`typography contract on ${route}: approved faces loaded, roles resolve, no synthetic weights`, async ({ page }) => {
+    await denyGeolocation(page.context());
+    await page.goto(route);
+    await expect(page.getByText(/Loading the Manhattan catalog/)).toHaveCount(0);
+
+    const faces = await loadedFaces(page);
+    // The approved pair is DECLARED at exactly the weights the layout ships, and
+    // Poppins is gone. Declared, not loaded: Chromium fetches a face only when
+    // rendered text needs it, so an unused weight legitimately stays `unloaded`
+    // (measured on Pixel 7 — Playfair 700 is declared but nothing on these
+    // screens renders it). What must be LOADED is every face that is in use —
+    // asserted per rendered (family, weight) below, which is also the synthetic
+    // weight check: a rendered weight with no loaded face of that weight is
+    // being faked by the engine.
+    for (const w of DISPLAY_WEIGHTS) expect(faces.some((f) => DISPLAY.test(f.family) && f.weight === w), `Playfair Display ${w} declared`).toBe(true);
+    for (const w of BODY_WEIGHTS) expect(faces.some((f) => BODY.test(f.family) && f.weight === w), `Nunito Sans ${w} declared`).toBe(true);
+    expect(faces.filter((f) => /Poppins/i.test(f.family))).toHaveLength(0);
+    const loaded = faces.filter((f) => f.status === 'loaded');
+    expect(loaded.some((f) => DISPLAY.test(f.family)), 'a Playfair Display face is loaded').toBe(true);
+    expect(loaded.some((f) => BODY.test(f.family)), 'a Nunito Sans face is loaded').toBe(true);
+
+    // Roles: body text is Nunito Sans; display text is Playfair Display.
+    const body = await page.locator('body').evaluate((el) => getComputedStyle(el).fontFamily);
+    expect(body).toMatch(BODY);
+    const display = page.locator('.font-display').first();
+    await expect(display).toBeVisible();
+    expect(await display.evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(DISPLAY);
+
+    // No synthetic weights: every rendered (family, weight) is a face that is
+    // declared at that weight AND loaded.
+    const rendered = await renderedTypography(page);
+    const offenders = rendered.filter((r) =>
+      (DISPLAY.test(r.family) || BODY.test(r.family)) &&
+      !loaded.some((f) => f.family === r.family && f.weight === r.weight));
+    expect(offenders, JSON.stringify(offenders)).toEqual([]);
+    // And nothing on the page fell through to a system face.
+    const foreign = rendered.filter((r) => !DISPLAY.test(r.family) && !BODY.test(r.family));
+    expect(foreign, JSON.stringify(foreign)).toEqual([]);
+  });
+}

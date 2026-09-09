@@ -23,7 +23,9 @@ import { denyGeolocation } from './helpers/geo';
 
 // Same fixed clock as where-next-path.spec.ts: the live surfaces hard-filter
 // KNOWN-closed bars, so counts are only deterministic under a mocked clock.
-const FRIDAY_NIGHT = new Date('2026-07-24T23:00:00');
+// Explicit offset: a timezone-free literal is host-local and pins a different
+// night on a UTC runner (V9-11; same species fixed for night-out.spec.ts in 9a5e6fa).
+const FRIDAY_NIGHT = new Date('2026-07-24T23:00:00-04:00');
 
 /**
  * Bars carrying Attaboy's own tags (cocktail / speakeasy / polished), all
