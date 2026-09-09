@@ -1961,22 +1961,18 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
   }
 
   /**
-   * Open the Plans sub-tab and CONFIRM it is selected. A click that lands
-   * before the tab strip is interactive (a loaded 3-worker gate, right after
-   * a reload) is swallowed and Tonight stays selected — measured 2026-09-09.
-   * Re-clicking until `aria-selected` says so is readiness, not a retry of an
-   * assertion.
+   * Open the Plans sub-tab with ONE tap, after the page is interactive. The
+   * Tonight panel's follow stats render only on the client, so their presence
+   * is the hydration marker: a tap before it would be swallowed (measured on a
+   * loaded 3-worker gate right after a reload, 2026-09-09) — and that swallowed
+   * first tap is what a real user on a slow phone gets too, which is why this
+   * waits for readiness rather than clicking until it sticks (round-1 panel).
    */
   async function openPlansTab(page: Page): Promise<void> {
+    await expect(page.getByTestId('follow-stats')).toBeVisible({ timeout: 15_000 });
     const plans = page.getByRole('tab', { name: 'Plans' });
-    await expect(plans).toBeVisible();
-    await expect
-      .poll(async () => {
-        if ((await plans.getAttribute('aria-selected')) === 'true') return true;
-        await plans.click();
-        return (await plans.getAttribute('aria-selected')) === 'true';
-      }, { timeout: 15_000 })
-      .toBe(true);
+    await plans.click();
+    await expect(plans).toHaveAttribute('aria-selected', 'true');
   }
 
   /**
@@ -2021,8 +2017,8 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     // "implicit default" symptom, asserted in its own test below; here the
     // invite is answered so the V9-03 journey can continue, and recorded.
     const invited: string[] = [];
-    await page.route('**/rest/v1/rpc/invite_to_night_out*', async (route) => {
-      expect(route.request().postDataJSON()).toEqual({ p_night_out: PLAN_ID, p_user: FRIEND_ID });
+    await page.route('**/rest/v1/rpc/invite_one_to_night_out*', async (route) => {
+      expect(route.request().postDataJSON()).toEqual({ p_night_out: PLAN_ID, p_user: FRIEND_ID, p_group: null });
       invited.push(FRIEND_ID);
       await fulfillJson(200, true)(route);
     });
@@ -2065,10 +2061,13 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
 
   /**
    * V9-02 — the plan form spills past the right edge on iPhone. Geometry, not a
-   * screenshot: after the form has long content and the deadline picker open,
-   * the document must not be wider than the viewport and every field must end
-   * inside it. This is the regression the phone report asked for; it fails on
-   * the known-bad layout and passes on the correction.
+   * screenshot: with long content in the free-text field and the deadline TIME
+   * FIELD shown (the "Pick a time" radio; emulation cannot open the native
+   * datetime picker chrome or raise the on-screen keyboard — those are the
+   * attended iPhone step), the document must not be wider than the viewport
+   * and every field must end inside it. On this base the layout passes in both
+   * emulators, so the phone overflow is NOT reproduced here; this case keeps
+   * the CSS-layout half of the report under the gate for any future change.
    */
   test('V9-02: the plan form never exceeds the viewport width, with long content and the deadline picker open', async ({
     page,
@@ -2142,8 +2141,8 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       });
       await fulfillJson(200, PLAN_ID)(route);
     });
-    await page.route('**/rest/v1/rpc/invite_to_night_out*', async (route) => {
-      expect(route.request().postDataJSON()).toEqual({ p_night_out: PLAN_ID, p_user: FRIEND_ID });
+    await page.route('**/rest/v1/rpc/invite_one_to_night_out*', async (route) => {
+      expect(route.request().postDataJSON()).toEqual({ p_night_out: PLAN_ID, p_user: FRIEND_ID, p_group: null });
       await fulfillJson(200, true)(route);
     });
     // The server's answer for an owner: their own plans are excluded. A mock
@@ -2207,7 +2206,7 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       await fulfillJson(200, PLAN_ID)(route);
     });
     const invited: string[] = [];
-    await page.route('**/rest/v1/rpc/invite_to_night_out*', async (route) => {
+    await page.route('**/rest/v1/rpc/invite_one_to_night_out*', async (route) => {
       const body = route.request().postDataJSON() as { p_night_out: string; p_user: string };
       expect(body.p_night_out).toBe(PLAN_ID);
       invited.push(body.p_user);
@@ -2245,7 +2244,7 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await stubOwnerRpcs(page);
     await page.route('**/rest/v1/rpc/create_night_out*', fulfillJson(200, PLAN_ID));
     const invited: string[] = [];
-    await page.route('**/rest/v1/rpc/invite_to_night_out*', async (route) => {
+    await page.route('**/rest/v1/rpc/invite_one_to_night_out*', async (route) => {
       const body = route.request().postDataJSON() as { p_night_out: string; p_user: string };
       expect(body.p_night_out).toBe(PLAN_ID);
       invited.push(body.p_user);

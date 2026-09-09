@@ -1,15 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { inviteToNightOut } from '@/lib/nightOuts.server';
+import { inviteOneToNightOut } from '@/lib/nightOuts.server';
 import { inviteAll, startOutcome } from '@/lib/nightOutStart';
 
-vi.mock('@/lib/nightOuts.server', () => ({ inviteToNightOut: vi.fn() }));
+vi.mock('@/lib/nightOuts.server', () => ({ inviteOneToNightOut: vi.fn() }));
 
 const supabase = {} as SupabaseClient;
 const planId = '00000000-0000-0000-0000-000000000001';
 const first = 'AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA';
 const second = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
-const invite = vi.mocked(inviteToNightOut);
+const invite = vi.mocked(inviteOneToNightOut);
 
 beforeEach(() => vi.resetAllMocks());
 
@@ -20,9 +20,9 @@ describe('inviteAll', () => {
     await expect(inviteAll(supabase, planId, ['you', first, '@demo', second, '', first]))
       .resolves.toEqual({ invited: [first, first], failed: [second] });
     expect(invite.mock.calls).toEqual([
-      [supabase, planId, first],
-      [supabase, planId, second],
-      [supabase, planId, first],
+      [supabase, planId, first, null],
+      [supabase, planId, second, null],
+      [supabase, planId, first, null],
     ]);
   });
 
@@ -32,16 +32,29 @@ describe('inviteAll', () => {
       .mockResolvedValueOnce(false);
 
     const result = inviteAll(supabase, planId, [first, second]);
-    expect(invite.mock.calls).toEqual([[supabase, planId, first]]);
+    expect(invite.mock.calls).toEqual([[supabase, planId, first, null]]);
     resolveFirst(true);
     await expect(result).resolves.toEqual({ invited: [first], failed: [second] });
-    expect(invite.mock.calls).toEqual([[supabase, planId, first], [supabase, planId, second]]);
+    expect(invite.mock.calls).toEqual([[supabase, planId, first, null], [supabase, planId, second, null]]);
   });
 
   it('returns empty results without calling invite when no UUIDs remain', async () => {
     await expect(inviteAll(supabase, planId, ['you', 'demo']))
       .resolves.toEqual({ invited: [], failed: [] });
     expect(invite).not.toHaveBeenCalled();
+  });
+});
+
+describe('inviteAll — group provenance', () => {
+  it('passes the group a person was picked through, and null for direct picks', async () => {
+    invite.mockResolvedValue(true);
+    const group = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+    await expect(inviteAll(supabase, planId, [first, second], { [second]: group }))
+      .resolves.toEqual({ invited: [first, second], failed: [] });
+    expect(invite.mock.calls).toEqual([
+      [supabase, planId, first, null],
+      [supabase, planId, second, group],
+    ]);
   });
 });
 

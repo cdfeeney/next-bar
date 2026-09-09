@@ -11,7 +11,7 @@ const buttonClass = 'rounded-full border border-border bg-surface px-3 py-2 text
 
 export default function RecipientPicker({
   people, circleIds, selected, groupMembers, onToggle, onGroupChange, onBusy,
-  userId, isServer, loading, failed,
+  userId, isServer, loading, failed, disabled = false,
 }: {
   people: readonly Person[];
   circleIds: readonly string[];
@@ -24,6 +24,8 @@ export default function RecipientPicker({
   isServer: boolean;
   loading: boolean;
   failed: boolean;
+  /** Frozen while a create is in flight: the submitted set is already snapshotted. */
+  disabled?: boolean;
 }): JSX.Element {
   const [query, setQuery] = useState('');
   const [showAll, setShowAll] = useState(false);
@@ -86,7 +88,7 @@ export default function RecipientPicker({
         <label htmlFor="recipient-search" className="block text-sm text-muted mb-1">Search people</label>
         <input id="recipient-search" type="search" value={query}
           className="w-full rounded-xl border border-border bg-surface px-3 py-2 min-h-[44px] text-text"
-          onChange={(event) => setQuery(event.target.value)} disabled={loading || failed}
+          onChange={(event) => setQuery(event.target.value)} disabled={disabled || loading || failed}
           onKeyDown={(event) => {
             if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
             event.preventDefault();
@@ -103,7 +105,7 @@ export default function RecipientPicker({
         : circle.length === 0 ? <p className="text-sm text-muted">Follow people to add them to your circle.</p>
         : <>
           <div className="flex flex-wrap gap-2">
-            {suggestions.map((p) => <PersonChip key={p.id} label={p.label} initials={p.initials}
+            {suggestions.map((p) => <PersonChip key={p.id} disabled={disabled} label={p.label} initials={p.initials}
               seed={p.seed} selected={selected.has(p.id)} noPicks={p.ratings.length === 0}
               onClick={() => onToggle(p.id)} />)}
           </div>
@@ -122,13 +124,13 @@ export default function RecipientPicker({
           : groups.length === 0 ? <p className="text-sm text-muted">You have no groups yet.</p>
           : <div className="flex flex-wrap gap-2">{groups.map((group) => (
             <button type="button" key={group.id} aria-label={group.name}
-              aria-pressed={Boolean(groupMembers[group.id])} disabled={pending !== null || loading || failed}
+              aria-pressed={Boolean(groupMembers[group.id])} disabled={disabled || pending !== null || loading || failed}
               className={`${buttonClass} ${groupMembers[group.id] ? 'border-accent bg-accent/10 text-text' : 'text-muted'}`}
               onClick={() => void toggleGroup(group)}>{group.name}</button>
           ))}</div>}
         {pending ? <p role="status">Loading group members…</p> : null}
         {memberError ? <div role="alert" className="text-sm text-red-400">{memberError.message}{' '}
-          <button type="button" className={buttonClass} disabled={pending !== null}
+          <button type="button" className={buttonClass} disabled={disabled || pending !== null}
             onClick={() => void toggleGroup(memberError.group)}>Retry {memberError.group.name}</button>
         </div> : null}
         {emptyGroup ? <p role="status">{emptyGroup} has no other members to invite.</p> : null}
@@ -136,7 +138,7 @@ export default function RecipientPicker({
       <div role="group" aria-label="Selected" className="space-y-2">
         <p className="font-display text-sm" aria-live="polite">Selected · {recipients.length} {recipients.length === 1 ? 'person' : 'people'}</p>
         <div className="flex flex-wrap gap-2">{recipients.map((p) => (
-          <button type="button" key={p.id} aria-label={`Remove ${p.label}`} className={buttonClass}
+          <button type="button" key={p.id} aria-label={`Remove ${p.label}`} className={buttonClass} disabled={disabled}
             onClick={() => onToggle(p.id)}>{p.label} <span aria-hidden="true">×</span></button>
         ))}</div>
       </div>
@@ -150,6 +152,7 @@ export function PersonChip({
   seed,
   selected,
   onClick,
+  disabled = false,
   noPicks = false,
 }: {
   label: string;
@@ -157,6 +160,8 @@ export function PersonChip({
   seed: string;
   selected: boolean;
   onClick: () => void;
+  /** Frozen while a create is in flight (the picker passes its own `disabled`). */
+  disabled?: boolean;
   /**
    * This person has ranked nothing, so they sway no picks — but they are still
    * invitable, and hiding them was the defect. The marker exists so an empty
@@ -169,6 +174,7 @@ export function PersonChip({
     <button
       type="button"
       aria-pressed={selected}
+      disabled={disabled}
       aria-label={noPicks ? `${label} — no ranked bars yet` : label}
       onClick={onClick}
       className={[

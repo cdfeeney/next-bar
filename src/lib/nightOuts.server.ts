@@ -120,6 +120,31 @@ export async function inviteToNightOut(
   return !error && data === true;
 }
 
+/**
+ * The block-aware invitation (0067 `invite_one_to_night_out`). Unlike the
+ * inherited `invite_to_night_out` (0050, no `is_blocked_between` check — the
+ * gap recorded against HFX-R-103), this refuses a pair that has blocked either
+ * way, and when `groupId` is given it also verifies on the server that the
+ * person is a CURRENT member of that group, so a client-cached roster can never
+ * invite someone the caller may not reach. The plan-start flow uses this for
+ * every recipient (V9-04, round-1 panel).
+ */
+export async function inviteOneToNightOut(
+  supabase: SupabaseClient,
+  nightOutId: string,
+  userId: string,
+  groupId: string | null = null,
+): Promise<boolean> {
+  if (!UUID_RE.test(nightOutId) || !UUID_RE.test(userId)) return false;
+  if (groupId !== null && !UUID_RE.test(groupId)) return false;
+  const { data, error } = await supabase.rpc('invite_one_to_night_out', {
+    p_night_out: nightOutId,
+    p_user: userId,
+    p_group: groupId,
+  });
+  return !error && data === true;
+}
+
 /** accept=true, or "Not tonight" (declined) with accept=false. */
 /**
  * `expectedStatus` and `expectedRevision` are the state the UI was showing when

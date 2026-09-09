@@ -39,7 +39,7 @@ let slowInvite = false;
 vi.mock('@/lib/nightOuts.server', () => ({
   createNightOut: async () => PLAN_ID,
   getNightOut: async () => ({ id: PLAN_ID, shareToken: 'tok-1', status: 'open' }),
-  inviteToNightOut: async () => {
+  inviteOneToNightOut: async () => {
     if (slowInvite) {
       await new Promise((resolve) => {
         setTimeout(resolve, 15_000);

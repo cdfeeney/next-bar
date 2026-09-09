@@ -98,7 +98,7 @@ vi.mock('@/lib/nightOuts.server', () => ({
     if (heldRead !== null) return heldRead;
     return readFails ? null : { id: PLAN_ID, shareToken: 'tok-1', status: 'open' };
   },
-  inviteToNightOut: async (_s: unknown, planId: string, userId: string) => {
+  inviteOneToNightOut: async (_s: unknown, planId: string, userId: string) => {
     invited.push([planId, userId]);
     return !inviteFails;
   },

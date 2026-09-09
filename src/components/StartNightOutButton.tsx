@@ -448,10 +448,19 @@ function forgetStarted(userId: string, planId: string): void {
 
 export default function StartNightOutButton({
   inviteeIds = [],
+  inviteeGroupByUser = {},
+  onBusyChange,
   disabled = false,
 }: {
   /** Selected people from the consensus list; non-account entries are dropped. */
   inviteeIds?: readonly string[];
+  /**
+   * V9-04: for each invitee picked THROUGH a group, the group id; the server
+   * re-checks current membership for those (`invite_one_to_night_out`).
+   */
+  inviteeGroupByUser?: Readonly<Record<string, string | null>>;
+  /** Fires with true while a create/invite/read is in flight, false after. */
+  onBusyChange?: (busy: boolean) => void;
   /**
    * The invitee list is not settled yet — hold the button.
    *
@@ -468,6 +477,12 @@ export default function StartNightOutButton({
   const auth = useAuth();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  // V9-04: the recipient set is snapshotted at the tap, so the page freezes
+  // its picker while a create is in flight — otherwise the visible selection
+  // could drift from the one being submitted (round-1 panel, Codex).
+  useEffect(() => {
+    onBusyChange?.(busy);
+  }, [busy, onBusyChange]);
   const [error, setError] = useState(false);
   const [readFailed, setReadFailed] = useState(false);
   const [retryFailed, setRetryFailed] = useState(false);
@@ -842,6 +857,7 @@ export default function StartNightOutButton({
      * and belongs to that page's owner.
      */
     const invitedAtTap = inviteeIds;
+    const groupsAtTap = inviteeGroupByUser;
     try {
       // ONE reading of the clock for this whole attempt (cycle 1, Codex). The
       // night key was read again when parking, so a 6am NYC rollover landing
@@ -974,7 +990,7 @@ export default function StartNightOutButton({
       // a selection the plan does not have. Disabling it while `busy` is the
       // fix, and it belongs to that page's owner. Snapshotting here at least
       // makes the semantic explicit rather than an accident of closure capture.
-      const { failed } = await inviteAll(supabase, planId, invitedAtTap);
+      const { failed } = await inviteAll(supabase, planId, invitedAtTap, groupsAtTap);
       if (owner !== liveUserId.current) return;
       setInviteFailures(failed.length);
 

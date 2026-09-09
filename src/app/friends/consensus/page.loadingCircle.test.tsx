@@ -44,7 +44,7 @@ let follows: {
 
 const createNightOut =
   vi.fn<(...args: unknown[]) => Promise<string>>(async () => PLAN_ID);
-const inviteToNightOut =
+const inviteOneToNightOut =
   vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true);
 
 vi.mock('next/navigation', () => ({
@@ -86,7 +86,7 @@ vi.mock('@/lib/follows.server', () => ({
 vi.mock('@/components/TonightSuggestions', () => ({ default: () => null }));
 vi.mock('@/lib/nightOuts.server', () => ({
   createNightOut: (...args: unknown[]) => createNightOut(...args),
-  inviteToNightOut: (...args: unknown[]) => inviteToNightOut(...args),
+  inviteOneToNightOut: (...args: unknown[]) => inviteOneToNightOut(...args),
   getNightOut: async () => ({ id: PLAN_ID, shareToken: TOKEN }),
 }));
 
@@ -120,7 +120,7 @@ describe('ConsensusPage — starting a night out while follows load', () => {
     // The real assertion: no plan was created. A plan made here would exist,
     // be un-unmakeable, and have no guests.
     expect(createNightOut).not.toHaveBeenCalled();
-    expect(inviteToNightOut).not.toHaveBeenCalled();
+    expect(inviteOneToNightOut).not.toHaveBeenCalled();
   });
 
   it('starts the night out once the circle has loaded, and invites it', async () => {
@@ -143,8 +143,8 @@ describe('ConsensusPage — starting a night out while follows load', () => {
     await waitFor(() => expect(createNightOut).toHaveBeenCalledTimes(1));
     // …and the invitee list is the loaded circle (V9-04: everyone you follow is
     // the default, shown explicitly as the selection), not the empty one.
-    expect(inviteToNightOut).toHaveBeenCalledTimes(1);
-    expect(inviteToNightOut.mock.calls[0][2]).toBe(FRIEND_ID);
+    expect(inviteOneToNightOut).toHaveBeenCalledTimes(1);
+    expect(inviteOneToNightOut.mock.calls[0][2]).toBe(FRIEND_ID);
   });
 
   it('cannot start a night out when the circle fetch FAILED', async () => {
@@ -166,7 +166,7 @@ describe('ConsensusPage — starting a night out while follows load', () => {
     await userEvent.click(startButton(), { pointerEventsCheck: 0 });
 
     expect(createNightOut).not.toHaveBeenCalled();
-    expect(inviteToNightOut).not.toHaveBeenCalled();
+    expect(inviteOneToNightOut).not.toHaveBeenCalled();
 
     // …and the user is told why, rather than staring at a dead button.
     expect(

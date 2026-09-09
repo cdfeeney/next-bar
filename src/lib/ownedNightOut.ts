@@ -76,6 +76,29 @@ export function recallOwnedNightOut(userId: string, nightKey: string): OwnedNigh
   return record !== undefined && record.nightKey === nightKey ? record : null;
 }
 
+/**
+ * Drop everything this account recorded — the account-deletion sweep. The
+ * value holds the account's own id and a plan uuid, and after deletion the
+ * account can never sign in to forget it itself (round-1 panel, both lanes).
+ */
+export function forgetAllOwnedNightOut(userId: string): void {
+  const all = readAll();
+  if (all[userId] === undefined) return;
+  const { [userId]: _drop, ...rest } = all;
+  writeAll(rest);
+}
+
+/** Whole-device wipe (deletion with no account id to be selective about). */
+export function clearOwnedNightOuts(): void {
+  writeAll({});
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(OWNED_KEY);
+  } catch {
+    // storage blocked — the in-memory copy is already empty
+  }
+}
+
 /** Drop the record for exactly this plan (cancelled, or gone on the server). */
 export function forgetOwnedNightOut(userId: string, planId: string): void {
   const all = readAll();

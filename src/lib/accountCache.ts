@@ -1,3 +1,4 @@
+import { clearOwnedNightOuts, forgetAllOwnedNightOut } from '@/lib/ownedNightOut';
 /**
  * Per-account localStorage cache guard (santa-loop round-1 fix).
  *
@@ -403,6 +404,10 @@ export function destroyAccountDataOnDeletion(userId?: string): void {
     // Private mode / quota — the account-cache wipe above already ran.
   }
   dropParkedNightOut(userId);
+  // V9-03: the owned-plan record holds the account's own id and a plan uuid,
+  // same as the parked one — dropped by the same sweep (round-1 panel, both lanes).
+  if (userId === undefined) clearOwnedNightOuts();
+  else forgetAllOwnedNightOut(userId);
 }
 
 /**

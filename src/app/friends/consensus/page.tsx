@@ -292,6 +292,30 @@ function ConsensusContent(): JSX.Element {
       }),
     [isServer, recipientPeople, effectiveSelected],
   );
+  /**
+   * V9-04 provenance: an invitee who is NOT a direct pick came in through a
+   * group, and the server must re-check that membership (and blocks) per
+   * person — `invite_one_to_night_out(p_group)`. A client-cached roster is a
+   * suggestion, never an authorization (round-1 panel, Codex).
+   */
+  const inviteeGroupByUser = useMemo<Record<string, string | null>>(() => {
+    const direct = selected ?? defaultSelection;
+    const out: Record<string, string | null> = {};
+    for (const id of inviteeIds) {
+      if (direct.has(id)) {
+        out[id] = null;
+        continue;
+      }
+      const viaGroup = Object.entries(groupMembers).find(([, members]) =>
+        members.some((m) => m.profileId === id),
+      );
+      out[id] = viaGroup ? viaGroup[0] : null;
+    }
+    return out;
+  }, [inviteeIds, selected, defaultSelection, groupMembers]);
+  // While a create is in flight the recipient set is already snapshotted; the
+  // picker freezes so what the owner sees is what was submitted.
+  const [creating, setCreating] = useState(false);
 
   /**
    * The unanimity DENOMINATOR, so every selected person counts — including
@@ -376,6 +400,8 @@ function ConsensusContent(): JSX.Element {
             lands on its invite-link surface. */}
         <StartNightOutButton
           inviteeIds={inviteeIds}
+          inviteeGroupByUser={inviteeGroupByUser}
+          onBusyChange={setCreating}
           disabled={followsLoading || !circleReady || membersLoading}
         />
         {/* A held button with no explanation is its own defect (round-3 panel,
@@ -420,6 +446,7 @@ function ConsensusContent(): JSX.Element {
           isServer={isServer}
           loading={followsLoading || (!circleReady && !circleFailed)}
           failed={circleFailed}
+          disabled={creating}
         />
 
         {/* UX-F v1 nudge, moved UNDER the chips (QA3: the operator

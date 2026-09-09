@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getNightOut, type NightOut } from '@/lib/nightOuts.server';
@@ -35,7 +35,14 @@ export default function YourPlanTonight(): JSX.Element | null {
     | { kind: 'none' }
   >({ kind: 'idle' });
 
+  // Every load is stamped; a result that arrives after the account changed,
+  // after a newer load started, or after unmount is dropped on the floor.
+  // Without this an in-place account switch could paint the PREVIOUS account's
+  // plan — and its bearer share link — for the next one (round-1 panel, Codex).
+  const epoch = useRef(0);
   const load = useCallback(async (): Promise<void> => {
+    const mine = ++epoch.current;
+    const live = (): boolean => epoch.current === mine;
     if (userId === null) {
       setState({ kind: 'none' });
       return;
@@ -52,6 +59,7 @@ export default function YourPlanTonight(): JSX.Element | null {
     }
     setState({ kind: 'loading' });
     const plan = await getNightOut(supabase, owned.planId);
+    if (!live()) return;
     if (plan === null) {
       // A failed READ is not "no plan": say so and offer a retry.
       setState({ kind: 'failed' });
@@ -67,6 +75,9 @@ export default function YourPlanTonight(): JSX.Element | null {
 
   useEffect(() => {
     void load();
+    return () => {
+      epoch.current += 1;
+    };
   }, [load]);
 
   if (state.kind === 'idle' || state.kind === 'none') return null;
