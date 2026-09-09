@@ -101,8 +101,10 @@ it('distinguishes pending routes from a confirmed empty search for refresh histo
  * V9-01 short-results diagnosis (docs/V9-01-SHORT-RESULTS-2026-09-09.md).
  * The walkable band's candidate pool is every bar within RADIUS_CAB miles
  * straight-line, ordered by taste with exact miles only as a tie-breaker, then
- * cut at ROUTE_CANDIDATE_CAP (15). With a quiz prior or rating history that
- * order is taste-first, so the fifteen slots go to the best-matching bars up to
+ * cut at ROUTE_CANDIDATE_CAP (15). With rating history, an applied vibe or the
+ * late-night bias (Near you — the quiz profile never reaches that surface) or
+ * a seed bar's tags ("From {bar}") that order is score-first, so the fifteen
+ * slots go to the best-scoring bars up to
  * four miles out, and only those are asked for a walking route. If three of
  * them are within a 15-minute walk, the page shows three — while nearer bars
  * that WOULD be walkable were never routed because taste ranked them below the
@@ -119,6 +121,7 @@ it('V9-01: a taste-ordered walkable search can confirm only three because the 15
     ...Array.from({ length: 14 }, (_, i) => ({ ...bars[0], id: `far-cocktail-${i}`, name: `Far cocktail ${i}`, lat: 40.75 + 0.03 + i / 1000, tags: ['cocktail'] })),
     ...[0, 1, 2].map(i => ({ ...bars[0], id: `near-pub-${i}`, name: `Near pub ${i}`, lat: 40.75 + 0.001 + i / 1000, tags: ['pub'] })),
   ];
+  const original = bars.slice();
   bars.splice(0, bars.length, ...pool);
   try {
     const { rerender } = render(<ResultsView {...props} profile={taste} />);
@@ -144,7 +147,36 @@ it('V9-01: a taste-ordered walkable search can confirm only three because the 15
     expect(screen.getByText('About travel times')).toBeInTheDocument();
     expect(screen.getByText(/openrouteservice/)).toBeInTheDocument();
   } finally {
+    bars.splice(0, bars.length, ...original);
     routing.mockReset();
     routing.mockImplementation(() => ({ status: 'loading', calculate: vi.fn() }));
+  }
+});
+
+/**
+ * V9-01, the Near-you variant: no profile, no ratings — only the late-night
+ * bias (22:00–03:59 NYC, +0.12 for club/dance) on an otherwise all-zero pool.
+ * That alone puts every club within 4 miles ahead of every nearer bar at the
+ * cut, so the fifteen routed candidates can all be far clubs while the bars a
+ * few blocks away are never asked for a walking route.
+ */
+it('V9-01: at bar o\'clock the late-night bias alone fills the 15 slots with far clubs on Near you', () => {
+  const original = bars.slice();
+  const pool = [
+    ...Array.from({ length: 16 }, (_, i) => ({ ...bars[0], id: `far-club-${i}`, name: `Far club ${i}`, lat: 40.75 + 0.03 + i / 1000, tags: ['club'] })),
+    ...[0, 1, 2].map(i => ({ ...bars[0], id: `near-pub-${i}`, name: `Near pub ${i}`, lat: 40.75 + 0.001 + i / 1000, tags: ['pub'] })),
+  ];
+  bars.splice(0, bars.length, ...pool);
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-09-10T03:00:00Z')); // 23:00 America/New_York
+  try {
+    render(<ResultsView {...props} profile={{ tags: [], archetype: '', preferredNeighborhoods: [] }} hideClosedNow />);
+    const sent = candidatesSentToRouting().map(b => b.id);
+    expect(sent).toHaveLength(15);
+    expect(sent.every(id => id.startsWith('far-club'))).toBe(true);
+    expect(sent.some(id => id.startsWith('near-pub'))).toBe(false);
+  } finally {
+    vi.useRealTimers();
+    bars.splice(0, bars.length, ...original);
   }
 });
