@@ -12,7 +12,7 @@ repairs and probes in this goal actually did.
 | Built artifact | `next build` production bundle, fresh per `scripts/run-e2e-release.mjs` run |
 | Base URL | `http://localhost:3517` (`PLAYWRIGHT_PORT`, per-worktree) |
 | Database | Supabase **staging** project (`NEXT_BAR_STAGING_PROJECT_REFS`), anon key only; the guard var `NEXT_BAR_PRODUCTION_PROJECT_REF` is set so production is refused |
-| Auth mode | signed-out by default; signed-in specs seed a session cookie only when `NEXT_PUBLIC_SUPABASE_URL` is present (eight `test.skip` sites in `night-out.spec.ts` otherwise) |
+| Auth mode | signed-out by default; signed-in specs seed a session cookie only when `NEXT_PUBLIC_SUPABASE_URL` is present (29 `test.skip` sites in `night-out.spec.ts` otherwise, one per signed-in test) |
 | Catalog | bundled Manhattan catalog fixture; specs wait for `Loading the Manhattan catalog` to clear |
 | Engines / devices | Playwright `iPhone 13` (WebKit) and `Pixel 7` (Chromium) emulation. **Neither is the installed Capacitor app.** |
 | Providers | `NEXT_BAR_ROUTING_ENABLED=true`; route fixtures are mocked in specs; Google media disabled in the gate |
@@ -27,8 +27,8 @@ Supabase persistence. The owner's phone reports are a third evidence category th
 | Item | Owner symptom | Existing coverage | What the existing test actually exercises | Why the phone failure escaped | Classification |
 |---|---|---|---|---|---|
 | V9-01 | "Only 3 routes confirmed" copy; three results | none — no spec matches `routes confirmed` / `Checked … candidates` | `one-results-view.spec.ts` asserts five cards from a fixture catalog; `distance-routes.spec.ts` mocks route responses (8 `page.route`) | copy is only rendered when `ranked.length < count`; every fixture yields 5 routed results so the branch never renders | product copy + missing negative-state test |
-| V9-02 | plan form overflows the right edge on iPhone | **none for the form.** `mobile-controls.spec.ts` (4 tests, 44px targets, on-screen check) runs only `PUBLIC_ROUTES` = `/`, `/map`, `/rankings`, `/settings`, `/install` (`:233`); `/friends/consensus` is not in it. `night-out.spec.ts` "the Start a Night Out form" tests reach the form but assert fields, not geometry | the control-geometry check never visits the planner; where it does run it used two **fixed waits** (1000 ms, 500 ms) and never opens native date/time selectors, types long names, or raises the keyboard | overflow appears on a route the geometry check never visits, in states no test enters; fixed waits also sample mid-layout | test gap (route + interaction states) |
-| V9-03 | created Night Out cannot be found again | `night-out.spec.ts` (39 tests) | four catch-all `page.route('**/rest/v1/**', fulfillJson(200, []))` answer **every** unstubbed REST/RPC call with an empty 200 — including `get_my_night_outs` | the create→navigate away→return journey is never asserted; a wrong or missing list request is indistinguishable from "no plans" because the stub returns `[]` for anything | test defect (fail-open stub) + missing journey |
+| V9-02 | plan form overflows the right edge on iPhone | **none for the form.** `mobile-controls.spec.ts` (4 `test()` declarations generating 12 cases per device: 1 + 5 routes × 2 + 1; 44px targets, on-screen check) runs only `PUBLIC_ROUTES` = `/`, `/map`, `/rankings`, `/settings`, `/install` (`:233`); `/friends/consensus` is not in it. `night-out.spec.ts` "the Start a Night Out form" tests reach the form but assert fields, not geometry | the control-geometry check never visits the planner; where it does run it used two **fixed waits** (1000 ms, 500 ms) and never opens native date/time selectors, types long names, or raises the keyboard | overflow appears on a route the geometry check never visits, in states no test enters; fixed waits also sample mid-layout | test gap (route + interaction states) |
+| V9-03 | created Night Out cannot be found again | `night-out.spec.ts` (39 `test()` declarations at the base) | twelve catch-all `page.route('**/rest/v1/**', fulfillJson(200, []))` sites answer **every** unstubbed REST/RPC call with an empty 200 — including `get_my_night_outs` | the create→navigate away→return journey was never asserted; a wrong or missing list request was indistinguishable from "no plans" because the stub returned `[]` for anything. **Repaired in §5: the journey now exists with a stateful list fixture.** | test defect (fail-open stub) + missing journey |
 | V9-04 | recipient picker is a wall of chips | no spec targets `inviteeSelection` / `GroupsAndPeople`; `night-out.spec.ts` seeds invitees via stubs | recipient set is never read back from the submitted request | submitted recipients are never compared with the visible selection | missing assertion |
 | V9-05 | no suggestions/voting/real invite in the flow; CTA position | `night-out.spec.ts` vote/RSVP cases (`respond_night_out`, `lock_night_out`, `rsvp_night_out_by_token`) | stubs return success without inspecting request bodies; the create→invite→accept→vote chain is split across tests with seeded state | a write that sends the wrong arguments still "succeeds"; the flow order is not asserted | fail-open stub + missing journey |
 | V9-06 | "No camera is available on this device" on iPhone | `add-story.spec.ts` (13 tests) mocks `getUserMedia` | browser emulation with a fake media stream | `ios/App/App/Info.plist` has no `NSCameraUsageDescription`; WKWebView permission behaviour is not reachable from Playwright at all | native gap — browser test cannot cover it |
@@ -44,9 +44,12 @@ Supabase persistence. The owner's phone reports are a third evidence category th
   grepped for the one-line form and missed the other eight, which the round-1 panel caught. Plus `**/auth/v1/**` → `{}`
   beside each. **These are the fail-open pattern.**
 - Env-gated skips: `night-out.spec.ts` **29** `test.skip(SUPABASE_URL === null, …)` call sites (one per signed-in test);
-  `plan-invites.spec.ts` 1; `add-story.spec.ts` 1. Acknowledged by `assertAuthenticatedE2eConfigured`, which fails loudly
-  outside CI — correct, keep; with the URL present none of them skip (the gate reports 0 skipped from this file).
-- Fixed waits: `mobile-controls.spec.ts` :256 (1000 ms), :307 (500 ms); `map-interaction.spec.ts` 1.
+  `plan-invites.spec.ts` 1; `add-story.spec.ts` 1; `story-rail.spec.ts` 1; `suggestions.spec.ts` 1. Acknowledged by
+  `assertAuthenticatedE2eConfigured`, which fails loudly outside CI — correct, keep; with the URL present none of them
+  skip (the gate reports 0 skipped from these files).
+- Fixed waits at the base: `mobile-controls.spec.ts` :256 (1000 ms), :307 (500 ms) — **repaired here**;
+  `map-interaction.spec.ts` 1, `app-shell-smoke.spec.ts:21` (250 ms), `claim-handle.spec.ts:239` (700 ms),
+  `onboarding-identity.spec.ts:313` (1000 ms) — untouched, none guards a V9 item.
 - Force/soft/retry markers across 14 specs (claim-handle 2, follow-requests 4, friends-real 3, others 1 each) — reviewed, not repaired here; none guard a V9 item.
 - Timezone-free clock literal: `vibe-tweak-ranking.spec.ts:26` `new Date('2026-07-24T23:00:00')` — parsed in the host zone, the same species as the night-out pin fixed in `9a5e6fa`. Latent, not the cause of the font failure (see §6).
 
@@ -85,6 +88,22 @@ Implemented by the delegated Codex slice (write scope `e2e/night-out.spec.ts`, `
   would have hidden the resulting "Couldn't send that — the link may have expired." after a decline that succeeded.
   The fixture now returns the declined plan row and an empty board, and the test asserts the declined state renders
   ("You're out for this one…", `page.tsx:1251`) and the error banner does not. Nothing here is a V9-03/V9-05 question.
+- **V9-03 journey added** ("V9-03: a plan created once is discoverable again after leaving, returning and reloading"):
+  from the Plans entry point, create once (`create_night_out` body asserted), land on `/night-out/<token>` as owner,
+  leave for `/map`, return to Plans, reload, return again — the same plan must be listed each time and exactly one
+  create may have happened. The `get_my_night_outs` fixture is **stateful** (empty until the create RPC was issued,
+  then the created row), so a list that does not re-read after creation fails instead of passing against `[]`.
+  **Result on this base: passes on both devices** (`fb3-e2e-slice-2.log`): one create, the owner lands on the plan, and
+  Plans re-reads and lists it after leaving and after reload. So the browser-level create→discover path is sound with
+  honest fixtures; the owner's phone symptom is not reproduced here and belongs to the *staging integration* or
+  *device* categories (§4) — a live `get_my_night_outs` answer (RLS, night cutoff, account) rather than the UI flow.
+  That narrows V9-03 for the Night Out goal instead of closing it.
+- **V9-04 product defect surfaced, kept visible with `test.fail`.** Running the journey under the strict fixture showed
+  that starting a plan with **no recipient selected** still issues `invite_to_night_out` for the one person in the
+  circle — exactly the queue's "do not silently invite everyone because of an implicit default". A dedicated case
+  ("V9-04: starting a plan with nobody selected invites nobody") asserts the correct behaviour and is annotated
+  `test.fail(true, …)` naming V9-04, so the gate reports it as an expected failure today and turns red the moment the
+  Night Out goal fixes the picker — the signal to remove the annotation. Nothing is skipped or weakened.
 - **`e2e/mobile-controls.spec.ts`.** Both fixed waits (1000 ms, 500 ms) replaced by `waitForStableControls`: an
   `expect.poll` that samples every control's bounding box and every element's `scrollTop` on two consecutive
   animation frames and requires them equal. Assertions unchanged.
@@ -148,5 +167,8 @@ the installed app.
 
 ## 8. Remaining gaps after this goal
 
-- Journeys for V9-03/04/05 (create → discover after reload; select → inspect invite set; invite → accept → vote) land with the Night Out goal, against the strict fixtures from §5.
+- The V9-03 discoverability journey (create once → land on the plan → leave → return → reload → same plan listed) now
+  exists in `night-out.spec.ts` ("V9-03: a plan created once is discoverable again…") with a stateful
+  `get_my_night_outs` fixture; its result on this base is recorded in §5. The V9-04/05 journeys (select → inspect
+  invite set; invite → accept → vote) land with the Night Out goal, against the strict fixtures from §5.
 - Staging integration and physical-device categories are untouched by this goal.

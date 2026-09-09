@@ -289,6 +289,11 @@ async function stubMemberRpcs(page: Page, night?: string): Promise<void> {
     expect(route.request().postDataJSON()).toEqual(
       expect.objectContaining({ p_night_out: PLAN_ID }),
     );
+    // Set-returning reads with their own row shapes: an empty set is the honest
+    // default, never the plan row the bare `get_night_out` returns.
+    if (/get_night_out_(voting|anon_rsvps|media)/.test(url)) {
+      return fulfillJson(200, [])(route);
+    }
     if (url.includes('get_night_out_members')) {
       return fulfillJson(200, [
         {
@@ -347,6 +352,11 @@ async function stubOwnerRpcs(page: Page): Promise<void> {
     expect(route.request().postDataJSON()).toEqual(
       expect.objectContaining({ p_night_out: PLAN_ID }),
     );
+    // Set-returning reads with their own row shapes: an empty set is the honest
+    // default, never the plan row the bare `get_night_out` returns.
+    if (/get_night_out_(voting|anon_rsvps|media)/.test(url)) {
+      return fulfillJson(200, [])(route);
+    }
     if (url.includes('get_night_out_members')) {
       return fulfillJson(200, [
         {
@@ -713,18 +723,16 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     // here is the plan with caller_status 'declined' and an empty board — and
     // the page must paint the declined state, not the expired-link error. The
     // old blanket `[]` made loadMemberView fail and hid that paint entirely.
-    await page.route('**/rest/v1/rpc/night_out_media_window', fulfillJson(200, [{
-      opens_at: '2026-08-21T01:00:00.000Z',
-      expires_at: '2026-08-22T01:00:00.000Z',
-      is_open: false,
-      state: 'closed',
-    }]));
+    // The member view also mounts NightOutMedia, whose two reads are gated on
+    // night_out_role() being non-null — and that is NULL for a declined member
+    // (0044:203-210), so the server returns ZERO rows for both. Named as such.
+    await page.route('**/rest/v1/rpc/night_out_media_window', fulfillJson(200, []));
     await page.route('**/rest/v1/rpc/get_night_out*', async (route) => {
       const url = route.request().url();
       expect(route.request().postDataJSON()).toEqual(
         expect.objectContaining({ p_night_out: PLAN_ID }),
       );
-      if (/get_night_out_(members|board|voting|anon_rsvps)/.test(url)) {
+      if (/get_night_out_(members|board|voting|anon_rsvps|media)/.test(url)) {
         return fulfillJson(200, [])(route);
       }
       await fulfillJson(200, [{ ...PLAN_ROW, caller_status: 'declined' }])(route);
@@ -746,6 +754,9 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     });
     await page.route('**/rest/v1/rpc/decline_night_out_by_token*', async (route) => {
       declineCalled = true;
+      // The decline names THIS invite; a fixture that accepted any token would
+      // keep an exact-invite regression green.
+      expect(route.request().postDataJSON()).toEqual({ p_token: TOKEN });
       await fulfillJson(200, PLAN_ID)(route);
     });
 
@@ -1875,6 +1886,138 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await page.getByRole('tab', { name: 'Plans' }).click();
     await page.getByTestId('start-night-out').click();
   }
+
+  /**
+   * V9-03 — the owner's reported failure: "after starting a night I can no
+   * longer find it". The journey the phone report describes, end to end, from
+   * the visible entry point: create once → land on the plan → leave for another
+   * tab → come back → reload → the SAME plan is still listed. The `get_my_night_outs`
+   * fixture is stateful — empty until the create RPC has been issued, then the
+   * created row — so a list that does not re-read after creation, or a create
+   * that never happens, fails here instead of passing against a blanket `[]`.
+   */
+  test('V9-03: a plan created once is discoverable again after leaving, returning and reloading', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await openTheForm(page);
+    // Landing on the created plan reads it as its owner.
+    await stubOwnerRpcs(page);
+
+    let createdNight: string | null = null;
+    let createCalls = 0;
+    let listReadsAfterCreate = 0;
+    await page.route('**/rest/v1/rpc/create_night_out*', async (route) => {
+      const body = route.request().postDataJSON() as { p_night: string; p_idempotency_key: string | null };
+      expect(body).toEqual(
+        expect.objectContaining({
+          p_night: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+          p_idempotency_key: expect.any(String),
+        }),
+      );
+      createCalls += 1;
+      createdNight = body.p_night;
+      await fulfillJson(200, PLAN_ID)(route);
+    });
+    // OBSERVED under the strict fixture (2026-09-09): with nobody selected, the
+    // Start action still invites the one person in the circle. That is V9-04's
+    // "implicit default" symptom, asserted in its own test below; here the
+    // invite is answered so the V9-03 journey can continue, and recorded.
+    const invited: string[] = [];
+    await page.route('**/rest/v1/rpc/invite_to_night_out*', async (route) => {
+      const body = route.request().postDataJSON() as { p_night_out: string; p_user: string };
+      expect(body.p_night_out).toBe(PLAN_ID);
+      invited.push(body.p_user);
+      await fulfillJson(200, true)(route);
+    });
+    // Registered AFTER openTheForm's empty Plans-tab fixture, so it wins: the
+    // list is empty until the plan exists, and names it afterwards.
+    await page.route('**/rest/v1/rpc/get_my_night_outs*', async (route) => {
+      if (createdNight === null) return fulfillJson(200, [])(route);
+      listReadsAfterCreate += 1;
+      await fulfillJson(200, [
+        {
+          night_out_id: PLAN_ID,
+          night: createdNight,
+          title: PLAN_ROW.title,
+          status: 'open',
+          owner_handle: 'me',
+          owner_display_name: 'Me',
+          my_status: 'accepted',
+          responded_at: '2026-07-24T23:30:00.000Z',
+          accepted_count: 1,
+          share_token: TOKEN,
+          plan_updated: false,
+          is_past: false,
+          my_revision: 0,
+        },
+      ])(route);
+    });
+
+    await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
+    await page.getByRole('button', { name: /start the official/i }).click();
+
+    // Created once, and landed on that exact plan.
+    await expect.poll(() => createCalls, { timeout: 10_000 }).toBe(1);
+    await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
+    await expect(page.getByRole('heading', { name: PLAN_ROW.title })).toBeVisible();
+
+    // Leave for another tab, come back: the plan is listed.
+    await page.goto('/map');
+    await expect(page.locator('main')).toBeVisible();
+    await page.goto('/friends');
+    await page.getByRole('tab', { name: 'Plans' }).click();
+    await expect(page.getByTestId('plan-invites')).toContainText(PLAN_ROW.title);
+    expect(listReadsAfterCreate, 'Plans did not re-read the list after creation').toBeGreaterThan(0);
+
+    // Reload: still there, and it is the same plan.
+    await page.reload();
+    await page.getByRole('tab', { name: 'Plans' }).click();
+    await expect(page.getByTestId('plan-invites')).toContainText(PLAN_ROW.title);
+    expect(createCalls, 'returning or reloading must never create a second plan').toBe(1);
+  });
+
+  /**
+   * V9-04 — "do not silently invite everyone because of an implicit default".
+   * KNOWN PRODUCT FAILURE on this base (2026-09-09, surfaced by the V9-03
+   * journey above): starting a plan with NO recipient selected invites the
+   * circle anyway. `test.fail` keeps it visible — this case is expected to fail
+   * until the Night Out goal (V9-04) fixes the picker, and will turn red the
+   * moment it starts passing, which is the signal to delete the annotation.
+   * See docs/V9-COVERAGE-AUDIT-2026-09-09.md §5.
+   */
+  test('V9-04: starting a plan with nobody selected invites nobody', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    test.fail(true, 'V9-04 known product failure: implicit default invites the circle — Night Out goal');
+    await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await openTheForm(page);
+    await stubOwnerRpcs(page);
+    await page.route('**/rest/v1/rpc/create_night_out*', fulfillJson(200, PLAN_ID));
+    const invited: string[] = [];
+    await page.route('**/rest/v1/rpc/invite_to_night_out*', async (route) => {
+      invited.push((route.request().postDataJSON() as { p_user: string }).p_user);
+      await fulfillJson(200, true)(route);
+    });
+
+    await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
+    await page.getByRole('button', { name: /start the official/i }).click();
+    await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
+
+    expect(invited, 'nobody was selected, so nobody may be invited').toEqual([]);
+  });
 
   test('Social → Plans reaches a form whose three rows are editable in place', async ({
     page,
