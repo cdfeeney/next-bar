@@ -295,10 +295,7 @@ export default function ResultsView({
             <p>{travel.status === 'stale' ? 'Travel times expired.' : 'Travel times unavailable.'} This travel band could not be confirmed.</p>
             <button type="button" onClick={travel.calculate} className="min-h-[44px] text-accent underline">Recalculate from this starting point</button>
           </> : null}
-          {travel.data ? <>
-            {travel.data.incomplete ? <p>Some route checks failed; only confirmed estimates are shown.</p> : null}
-            {ranked.length < count ? <p>Only {ranked.length} routes confirmed in this search.</p> : null}
-          </> : null}
+          {travel.data?.incomplete ? <p>Some route checks failed; only confirmed estimates are shown.</p> : null}
         </div>
         <h2 className="font-display text-3xl md:text-4xl text-center mb-8">
           {ranked.length === 1
@@ -352,7 +349,6 @@ export default function ResultsView({
             <p>{walkingSearch ? 'Walkable: estimated route of 15 minutes or less.' : nearbyCandidates ? 'Matching nearby bars.' : maxMiles === RADIUS_CAB ? 'Beyond a 15-minute walk, within 4 miles straight-line.' : 'Beyond 4 miles straight-line, within the service area.'}</p>
             <p>Times are estimates; driving excludes traffic and pickup waits.</p>
             {travel.status !== 'disabled' ? <p>Travel times calculate automatically from this starting point. No location history is saved by Next Bar.</p> : null}
-            {travel.data?.limited ? <p>Checked {travel.data.checked} candidates; this is not an exhaustive search.</p> : null}
           </details>
           {travel.data ? <p className="text-xs">© <a href="https://openrouteservice.org/" target="_blank" rel="noopener noreferrer" className="underline">openrouteservice</a> by HeiGIT · Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer" className="underline">OpenStreetMap contributors</a></p> : null}
         </div>

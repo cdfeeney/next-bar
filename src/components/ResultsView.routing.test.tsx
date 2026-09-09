@@ -96,3 +96,55 @@ it('distinguishes pending routes from a confirmed empty search for refresh histo
   rerender(<ResultsView {...props} profile={profile} onRanked={onRanked} />);
   expect(onRanked).toHaveBeenLastCalledWith([], true);
 });
+
+/**
+ * V9-01 short-results diagnosis (docs/V9-01-SHORT-RESULTS-2026-09-09.md).
+ * The walkable band's candidate pool is every bar within RADIUS_CAB miles
+ * straight-line, ordered by taste with exact miles only as a tie-breaker, then
+ * cut at ROUTE_CANDIDATE_CAP (15). With a quiz prior or rating history that
+ * order is taste-first, so the fifteen slots go to the best-matching bars up to
+ * four miles out, and only those are asked for a walking route. If three of
+ * them are within a 15-minute walk, the page shows three — while nearer bars
+ * that WOULD be walkable were never routed because taste ranked them below the
+ * cut. Fewer than five is therefore a valid answer for the pool as defined;
+ * this pins the mechanism (and the copy that no longer narrates it).
+ */
+it('V9-01: a taste-ordered walkable search can confirm only three because the 15-candidate cut precedes routing', () => {
+  const taste = { tags: ['cocktail'], archetype: '', preferredNeighborhoods: [] } satisfies VibeProfile;
+  // Origin 40.75,-74. ~0.0145° lat per mile. Three cocktail bars within a
+  // 15-minute walk, fourteen cocktail bars 2–3 miles out (inside RADIUS_CAB,
+  // far beyond WALKABLE_SECONDS), three pubs a few blocks away.
+  const pool = [
+    ...[0, 1, 2].map(i => ({ ...bars[0], id: `near-cocktail-${i}`, name: `Near cocktail ${i}`, lat: 40.75 + 0.003 + i / 1000, tags: ['cocktail'] })),
+    ...Array.from({ length: 14 }, (_, i) => ({ ...bars[0], id: `far-cocktail-${i}`, name: `Far cocktail ${i}`, lat: 40.75 + 0.03 + i / 1000, tags: ['cocktail'] })),
+    ...[0, 1, 2].map(i => ({ ...bars[0], id: `near-pub-${i}`, name: `Near pub ${i}`, lat: 40.75 + 0.001 + i / 1000, tags: ['pub'] })),
+  ];
+  bars.splice(0, bars.length, ...pool);
+  try {
+    const { rerender } = render(<ResultsView {...props} profile={taste} />);
+    const sent = candidatesSentToRouting().map(b => b.id);
+    expect(sent).toHaveLength(15);
+    expect(sent.filter(id => id.startsWith('near-cocktail'))).toHaveLength(3);
+    // The nearest bars on the map were never routed: taste outranked them at the cut.
+    expect(sent.some(id => id.startsWith('near-pub'))).toBe(false);
+    const near = sent.filter(id => id.startsWith('near-cocktail'));
+    routing.mockReturnValue({ status: 'ready', calculate: vi.fn(), data: {
+      routes: near.map(id => {
+        const bar = pool.find(b => b.id === id)!;
+        return { id, destination: { lat: bar.lat, lng: bar.lng }, walking: { seconds: 600, meters: 800 }, driving: null };
+      }),
+      checked: 15, limited: true, incomplete: false,
+    } });
+    rerender(<ResultsView {...props} profile={taste} />);
+    expect(screen.getAllByRole('article')).toHaveLength(3);
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Your next 3 bars');
+    // V9-01: the surface no longer narrates its routing budget.
+    expect(screen.queryByText(/routes confirmed in this search/)).toBeNull();
+    expect(screen.queryByText(/candidates; this is not an exhaustive search/)).toBeNull();
+    expect(screen.getByText('About travel times')).toBeInTheDocument();
+    expect(screen.getByText(/openrouteservice/)).toBeInTheDocument();
+  } finally {
+    routing.mockReset();
+    routing.mockImplementation(() => ({ status: 'loading', calculate: vi.fn() }));
+  }
+});
