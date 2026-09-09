@@ -29,7 +29,15 @@ test.describe('V9-11 visual evidence capture', () => {
     test(`capture ${screen.name}`, async ({ page }, testInfo) => {
       await page.goto(screen.route);
       await expect(page.locator('main')).toBeVisible({ timeout: 20_000 });
-      await page.waitForLoadState('networkidle').catch(() => undefined);
+      // The per-screen readiness text is what makes this a capture of the
+      // screen and not of its loading shell.
+      await expect(page.getByText(screen.ready).first()).toBeVisible({ timeout: 20_000 });
+      // Network idle is a best-effort settle, not a gate: a page that keeps a
+      // long-poll open never goes idle. Record when it did not, never hide it.
+      const idle = await page
+        .waitForLoadState('networkidle', { timeout: 10_000 })
+        .then(() => true, () => false);
+      testInfo.annotations.push({ type: 'networkidle', description: String(idle) });
       const fonts = await page.evaluate(async () => {
         await (document as Document & { fonts: FontFaceSet }).fonts.ready;
         const faces: string[] = [];

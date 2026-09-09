@@ -27,7 +27,7 @@ Supabase persistence. The owner's phone reports are a third evidence category th
 | Item | Owner symptom | Existing coverage | What the existing test actually exercises | Why the phone failure escaped | Classification |
 |---|---|---|---|---|---|
 | V9-01 | "Only 3 routes confirmed" copy; three results | none — no spec matches `routes confirmed` / `Checked … candidates` | `one-results-view.spec.ts` asserts five cards from a fixture catalog; `distance-routes.spec.ts` mocks route responses (8 `page.route`) | copy is only rendered when `ranked.length < count`; every fixture yields 5 routed results so the branch never renders | product copy + missing negative-state test |
-| V9-02 | plan form overflows the right edge on iPhone | `mobile-controls.spec.ts` (4 tests, 44px targets, on-screen check) — `/friends/consensus` is in its route list | measures control bounding boxes after two **fixed waits** (1000 ms, 500 ms); does not open native date/time selectors, does not type long names, does not raise the keyboard | overflow appears after selector/keyboard interaction and with long content — states the test never enters; fixed waits also sample mid-layout | test gap (interaction states) |
+| V9-02 | plan form overflows the right edge on iPhone | **none for the form.** `mobile-controls.spec.ts` (4 tests, 44px targets, on-screen check) runs only `PUBLIC_ROUTES` = `/`, `/map`, `/rankings`, `/settings`, `/install` (`:233`); `/friends/consensus` is not in it. `night-out.spec.ts` "the Start a Night Out form" tests reach the form but assert fields, not geometry | the control-geometry check never visits the planner; where it does run it used two **fixed waits** (1000 ms, 500 ms) and never opens native date/time selectors, types long names, or raises the keyboard | overflow appears on a route the geometry check never visits, in states no test enters; fixed waits also sample mid-layout | test gap (route + interaction states) |
 | V9-03 | created Night Out cannot be found again | `night-out.spec.ts` (39 tests) | four catch-all `page.route('**/rest/v1/**', fulfillJson(200, []))` answer **every** unstubbed REST/RPC call with an empty 200 — including `get_my_night_outs` | the create→navigate away→return journey is never asserted; a wrong or missing list request is indistinguishable from "no plans" because the stub returns `[]` for anything | test defect (fail-open stub) + missing journey |
 | V9-04 | recipient picker is a wall of chips | no spec targets `inviteeSelection` / `GroupsAndPeople`; `night-out.spec.ts` seeds invitees via stubs | recipient set is never read back from the submitted request | submitted recipients are never compared with the visible selection | missing assertion |
 | V9-05 | no suggestions/voting/real invite in the flow; CTA position | `night-out.spec.ts` vote/RSVP cases (`respond_night_out`, `lock_night_out`, `rsvp_night_out_by_token`) | stubs return success without inspecting request bodies; the create→invite→accept→vote chain is split across tests with seeded state | a write that sends the wrong arguments still "succeeds"; the flow order is not asserted | fail-open stub + missing journey |
@@ -37,8 +37,15 @@ Supabase persistence. The owner's phone reports are a third evidence category th
 
 ## 3. Smell inventory (measured on the base, `e2e/*.spec.ts`, 46 specs)
 
-- Catch-all REST stubs returning `[]`/`{}`: `night-out.spec.ts` :177, :206, :257, :607 (`**/rest/v1/**`), plus `**/auth/v1/**` → `{}` at :207, :258, :608. **These are the fail-open pattern.**
-- Env-gated skips: `night-out.spec.ts` 8× `test.skip(SUPABASE_URL === null)`; `plan-invites.spec.ts` 1; `add-story.spec.ts` 1. Acknowledged by `assertAuthenticatedE2eConfigured`, which fails loudly outside CI — correct, keep.
+- Catch-all REST stubs returning `[]`: **twelve** sites in `night-out.spec.ts` at the base — `stubBearerRpcs` :177,
+  `stubMemberRpcs` :206, `stubOwnerRpcs` :257, the non-member decline test :607, the invite-token trio :790, the
+  dead-link test :839, `stubTonight` :1055, the failed-own-pin test :1265, three Saved Nights Out tests :1656/:1724/:1754,
+  and `openTheForm` :1788 (line numbers as of the base). The first revision of this audit counted four: its inventory
+  grepped for the one-line form and missed the other eight, which the round-1 panel caught. Plus `**/auth/v1/**` → `{}`
+  beside each. **These are the fail-open pattern.**
+- Env-gated skips: `night-out.spec.ts` **29** `test.skip(SUPABASE_URL === null, …)` call sites (one per signed-in test);
+  `plan-invites.spec.ts` 1; `add-story.spec.ts` 1. Acknowledged by `assertAuthenticatedE2eConfigured`, which fails loudly
+  outside CI — correct, keep; with the URL present none of them skip (the gate reports 0 skipped from this file).
 - Fixed waits: `mobile-controls.spec.ts` :256 (1000 ms), :307 (500 ms); `map-interaction.spec.ts` 1.
 - Force/soft/retry markers across 14 specs (claim-handle 2, follow-requests 4, friends-real 3, others 1 each) — reviewed, not repaired here; none guard a V9 item.
 - Timezone-free clock literal: `vibe-tweak-ranking.spec.ts:26` `new Date('2026-07-24T23:00:00')` — parsed in the host zone, the same species as the night-out pin fixed in `9a5e6fa`. Latent, not the cause of the font failure (see §6).
@@ -58,29 +65,46 @@ Implemented by the delegated Codex slice (write scope `e2e/night-out.spec.ts`, `
   any REST/RPC request no specific fixture answers is recorded (method, URL, decoded body) and answered with a JSON
   500 so the app cannot hang; `assertNoUnexpectedRest(page)` runs in `test.afterEach` and fails the test listing them.
   Route order is preserved (strict catch-all first, specific fixtures after, last-registered wins).
-- **`e2e/night-out.spec.ts`.** All four catch-alls replaced. Write RPCs now assert their request bodies:
-  `join_night_out_by_token` and `rsvp_night_out_by_token` (`p_token`, `p_key`, `p_response`), `lock_night_out`
-  (`p_night_out`), `respond_night_out` (`p_night_out`, `p_accept`, `p_expected_status`, `p_expected_revision`).
-  Calls the blanket stub had been hiding, now explicit fixtures: the catalog (`fulfillCatalog`), `profiles`,
-  `night_out_media_window`, and two **app-shell reads issued on every signed-in page** — `rpc/get_follow_requests`
-  (inbox badge) and `GET /rest/v1/ratings` (server ratings sync). First strict run: 36/106 failed, all on exactly
-  those two shell paths; explicit empty fixtures restored 104/106.
-- **Observed and kept visible, not hidden:** in *signed-in non-member declines from the preview WITHOUT joining
-  first*, once `decline_night_out_by_token` resolves the page issues five plan-board reads (`get_night_out`,
-  `_board`, `_members`, `_voting`, `_anon_rsvps`) for a plan the user is not a member of. RLS answers a non-member
-  with nothing, so the explicit fixture returns `[]`; whether the page should issue them at all after "Not tonight"
-  is recorded here for the Night Out goal (V9-03/V9-05). The test's own assertions are unchanged.
+- **`e2e/night-out.spec.ts`.** All **twelve** catch-alls replaced by `stubNightOutRest` (strict catch-all + the
+  root-layout and app-shell fixtures: catalog, `profiles`, `rpc/get_follow_requests`, `GET /rest/v1/ratings`). Tests
+  that walk through Social add `stubSocialShellRest` (the page's entry reads, each named and empty: following /
+  followers / outgoing requests, `groups`, `stories`, `group_unread_counts`, invitation notifications, friend ratings,
+  circle and own presence); the Start-form tests add the Plans sub-tab reads (`get_my_night_outs`, circle RSVPs /
+  suggestions / vibe votes). Write RPCs assert their bodies: `join_night_out_by_token` and `rsvp_night_out_by_token`
+  (`p_token`, `p_key`, `p_response`), `lock_night_out` (`p_night_out`), `respond_night_out` (`p_night_out`, `p_accept`,
+  `p_expected_status`, `p_expected_revision`). Read RPCs assert their identity too: `resolve_night_out_by_token`
+  requires `{ p_token: TOKEN }` and every `get_night_out*` read requires `p_night_out === PLAN_ID`, so a fixture can no
+  longer answer a wrong plan and keep an exact-plan regression green (round-1 Codex finding).
+  Strict-mode history: first run 36/106 failed on exactly the two shell paths; after the twelve-site repair 18/106
+  failed on the Social-page reads above; explicit fixtures → 106/106.
+- **Post-decline paint, corrected by the round-1 panel.** In *signed-in non-member declines from the preview WITHOUT
+  joining first*, the five plan reads after a successful decline are the page's own `loadMemberView(planId)`
+  (`page.tsx:812-816`) — by design, not a stray. The server's real answer is the plan with `caller_status: 'declined'`:
+  `decline_night_out_by_token` writes a declined member row (0046:196-198) and `get_night_out` returns the plan for any
+  member row (0059:228-241). The first revision fixtured these reads as `[]`, which made `loadMemberView` fail and
+  would have hidden the resulting "Couldn't send that — the link may have expired." after a decline that succeeded.
+  The fixture now returns the declined plan row and an empty board, and the test asserts the declined state renders
+  ("You're out for this one…", `page.tsx:1251`) and the error banner does not. Nothing here is a V9-03/V9-05 question.
 - **`e2e/mobile-controls.spec.ts`.** Both fixed waits (1000 ms, 500 ms) replaced by `waitForStableControls`: an
   `expect.poll` that samples every control's bounding box and every element's `scrollTop` on two consecutive
   animation frames and requires them equal. Assertions unchanged.
 - **Verification (lead, production build, both viewports, 0 retries):** `node scripts/run-e2e-release.mjs
-  e2e/night-out.spec.ts e2e/mobile-controls.spec.ts` → `106 passed (1.7m)`, bounded-run exit 0. The delegated
-  run itself could not launch browsers inside the Codex sandbox (binaries not visible: 106 failed before
-  execution) — recorded as an environment limit of delegation, not as evidence.
+  e2e/night-out.spec.ts e2e/mobile-controls.spec.ts` → `106 passed (1.7m)`, bounded-run exit 0, on the round-2 tree.
+  The three-part gate for the **frozen candidate** (typecheck, stored Vitest run, unfiltered production Playwright) is
+  recorded where it binds to the exact commit — the goal's store evidence and the run directory logs
+  (`D:/harness-handoffs/nextbar-v9-overnight/nb-v9-overnight-20260908/fb2-*.log`) — not in this file, which is part of
+  the commit being gated and so cannot carry its own result. For the record, the round-1 candidate `a3f7f291` measured
+  `738 tests: 736 passed, 0 failed, 2 skipped` (the pre-existing `/friends` overscroll pair), 10.1 m. The delegated
+  Codex run could not launch browsers inside its sandbox (binaries not visible: 106 failed before execution) — an
+  environment limit of delegation, never evidence.
 
-## 6. Font commit vs `vibe-tweak-ranking.spec.ts:160` — reproduction attempt
+## 6. Font commit vs `vibe-tweak-ranking.spec.ts:160` — reproduction attempt (mechanism NOT established)
 
-**Does not reproduce on this base.** Bounded A/B, 2026-09-09 ~01:05 EDT: the three-file diff of `ee5913e`
+**Does not reproduce on this base; the 09-03 mechanism remains unidentified.** The goal asked for a root-cause note;
+what this probe delivers is narrower and is stated as such: on this base the approved fonts do not trigger the failure.
+Establishing *why* they did on 2026-09-03 needs a bisect across `fa295e3..1eae20a` with the font diff applied at each
+step — deferred to the V9-11 goal, which owns that file. The probe applied the diff to the working tree and restored it
+byte-for-byte (SHA-256 verified) rather than using a scratch branch; the overnight boundary forbids branch switches. Bounded A/B, 2026-09-09 ~01:05 EDT: the three-file diff of `ee5913e`
 (`src/app/layout.tsx`, `tailwind.config.ts`, `src/app/globals.css` — Playfair Display 600/700 display, Nunito Sans
 400/600/700 body) was applied to the working tree at this candidate's base, `.next` removed, a production build made,
 and `e2e/vibe-tweak-ranking.spec.ts` run on both viewports: **4/4 passed** (`18 passed (1.1m)` including the 14
@@ -112,6 +136,11 @@ Rankings, Social, plan form, Settings, Nights) from `e2e/visual-capture.spec.ts`
   drift V9-11 reports.
 - `with-fonts-ee5913e/`: the same screens with the approved pair applied during the §6 probe — the V9-11 target
   rendered on real screens, for the owner's side-by-side against `docs/design-reference/approved/`.
+
+`docs/design-reference/actual-2026-09-09/README.md` maps every capture to its approved reference and names what is
+**not** captured: plan details (`/night-out/<token>`, needs the member fixtures) and the opened photos/hours lightbox —
+both still owed to V9-11. Each capture now waits for its screen's own readiness text (not just `main`) and records
+whether the network went idle instead of silently ignoring a page that never does.
 
 The capture spec is opt-in (`VISUAL_CAPTURE_DIR`), and `playwright.config.ts` ignores it otherwise, so the release
 gate carries no skipped capture cases. Screenshots are review evidence for browser rendering; they say nothing about

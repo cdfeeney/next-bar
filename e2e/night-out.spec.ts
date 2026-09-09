@@ -183,6 +183,46 @@ async function stubNightOutRest(page: Page): Promise<void> {
     if (route.request().method() !== 'GET') return route.fallback();
     await fulfillJson(200, [])(route);
   });
+  // App-shell reads that every signed-in page issues regardless of route: the
+  // follow-request inbox badge and the server ratings sync. The old blanket
+  // `[]` answered these silently; the strict fixture surfaced them (36 tests,
+  // 2026-09-09). Shell traffic, not Night Out behaviour — an empty inbox and
+  // an empty ratings set are the honest fixtures, registered ONCE here so every
+  // site that used to carry a catch-all gets them.
+  await page.route('**/rest/v1/rpc/get_follow_requests*', fulfillJson(200, []));
+  await page.route('**/rest/v1/ratings?*', async route => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    await fulfillJson(200, [])(route);
+  });
+}
+
+/**
+ * The Social page (/friends) loads its whole shell on entry: circle lists,
+ * groups, stories, unread counts, invitation notifications, friend ratings and
+ * presence. Tests that walk through Social to reach Tonight or the Start form
+ * used to get all of these answered by the blanket `[]`; under the strict
+ * fixture each is named here, empty, so a test that cares about one of them
+ * overrides it AFTER this call (last-registered wins).
+ */
+async function stubSocialShellRest(page: Page): Promise<void> {
+  for (const rpc of [
+    'get_following',
+    'get_followers',
+    'get_outgoing_requests',
+    'group_unread_counts',
+    'get_my_night_out_invitation_notifications',
+    'get_friend_ratings',
+    'get_circle_presence',
+    'get_my_presence',
+  ]) {
+    await page.route(`**/rest/v1/rpc/${rpc}*`, fulfillJson(200, []));
+  }
+  for (const table of ['groups', 'stories']) {
+    await page.route(`**/rest/v1/${table}?*`, async route => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      await fulfillJson(200, [])(route);
+    });
+  }
 }
 
 async function stubBearerRpcs(page: Page): Promise<void> {
@@ -220,13 +260,6 @@ async function stubMemberRpcs(page: Page, night?: string): Promise<void> {
   // Playwright matches routes LAST-registered-first: the catch-all must be
   // registered BEFORE the specific RPC stubs or it shadows them.
   await stubNightOutRest(page);
-  // App-shell reads that every page issues regardless of route: the
-  // follow-request inbox badge and the server ratings sync. The old blanket
-  // `[]` answered these silently; the strict fixture surfaced them (36 tests,
-  // 2026-09-09). They are shell traffic, not Night Out behaviour, so an empty
-  // inbox and an empty ratings set are the honest fixtures here.
-  await page.route('**/rest/v1/rpc/get_follow_requests*', fulfillJson(200, []));
-  await page.route('**/rest/v1/ratings?*', fulfillJson(200, []));
   await page.route('**/rest/v1/rpc/night_out_media_window', fulfillJson(200, [{
     opens_at: '2026-08-21T01:00:00.000Z',
     expires_at: '2026-08-22T01:00:00.000Z',
@@ -244,10 +277,18 @@ async function stubMemberRpcs(page: Page, night?: string): Promise<void> {
   // Viewing never mutates: existing members RESOLVE (read) to their plan.
   await page.route(
     '**/rest/v1/rpc/resolve_night_out_by_token*',
-    fulfillJson(200, PLAN_ID),
+    async route => {
+      expect(route.request().postDataJSON()).toEqual({ p_token: TOKEN });
+      await fulfillJson(200, PLAN_ID)(route);
+    },
   );
   await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
     const url = route.request().url();
+    // Every plan read names THIS plan; a fixture that answered any id would
+    // keep an exact-plan regression green (V9-03).
+    expect(route.request().postDataJSON()).toEqual(
+      expect.objectContaining({ p_night_out: PLAN_ID }),
+    );
     if (url.includes('get_night_out_members')) {
       return fulfillJson(200, [
         {
@@ -287,13 +328,6 @@ async function stubMemberRpcs(page: Page, night?: string): Promise<void> {
  */
 async function stubOwnerRpcs(page: Page): Promise<void> {
   await stubNightOutRest(page);
-  // App-shell reads that every page issues regardless of route: the
-  // follow-request inbox badge and the server ratings sync. The old blanket
-  // `[]` answered these silently; the strict fixture surfaced them (36 tests,
-  // 2026-09-09). They are shell traffic, not Night Out behaviour, so an empty
-  // inbox and an empty ratings set are the honest fixtures here.
-  await page.route('**/rest/v1/rpc/get_follow_requests*', fulfillJson(200, []));
-  await page.route('**/rest/v1/ratings?*', fulfillJson(200, []));
   await page.route('**/rest/v1/rpc/night_out_media_window', fulfillJson(200, [{
     opens_at: '2026-08-21T01:00:00.000Z',
     expires_at: '2026-08-22T01:00:00.000Z',
@@ -303,10 +337,16 @@ async function stubOwnerRpcs(page: Page): Promise<void> {
   await page.route('**/auth/v1/**', fulfillJson(200, {}));
   await page.route(
     '**/rest/v1/rpc/resolve_night_out_by_token*',
-    fulfillJson(200, PLAN_ID),
+    async route => {
+      expect(route.request().postDataJSON()).toEqual({ p_token: TOKEN });
+      await fulfillJson(200, PLAN_ID)(route);
+    },
   );
   await page.route('**/rest/v1/rpc/get_night_out*', (route) => {
     const url = route.request().url();
+    expect(route.request().postDataJSON()).toEqual(
+      expect.objectContaining({ p_night_out: PLAN_ID }),
+    );
     if (url.includes('get_night_out_members')) {
       return fulfillJson(200, [
         {
@@ -666,15 +706,29 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     // Non-member: resolve finds nothing, so the page shows the bearer preview.
     await stubNightOutRest(page);
     await page.route('**/auth/v1/**', fulfillJson(200, {}));
-    await page.route('**/rest/v1/rpc/get_follow_requests*', fulfillJson(200, []));
-    // OBSERVED 2026-09-09 under the strict fixture: once the decline resolves,
-    // the page reads the plan board — get_night_out, _board, _members, _voting,
-    // _anon_rsvps — for a plan this user is NOT a member of. RLS answers a
-    // non-member with nothing, so that is what these return; the old blanket
-    // `[]` hid that the reads happen at all. Whether the page should issue
-    // them after "Not tonight" is a Night Out question, recorded in
-    // docs/V9-COVERAGE-AUDIT-2026-09-09.md §5 for V9-03/V9-05.
-    await page.route('**/rest/v1/rpc/get_night_out*', fulfillJson(200, []));
+    // After a successful decline the page deliberately loads the member view
+    // (page.tsx loadMemberView): decline_night_out_by_token writes a member row
+    // with invite_status 'declined' (0046), and get_night_out returns the plan
+    // for ANY member row, declined included (0059). So the server's real answer
+    // here is the plan with caller_status 'declined' and an empty board — and
+    // the page must paint the declined state, not the expired-link error. The
+    // old blanket `[]` made loadMemberView fail and hid that paint entirely.
+    await page.route('**/rest/v1/rpc/night_out_media_window', fulfillJson(200, [{
+      opens_at: '2026-08-21T01:00:00.000Z',
+      expires_at: '2026-08-22T01:00:00.000Z',
+      is_open: false,
+      state: 'closed',
+    }]));
+    await page.route('**/rest/v1/rpc/get_night_out*', async (route) => {
+      const url = route.request().url();
+      expect(route.request().postDataJSON()).toEqual(
+        expect.objectContaining({ p_night_out: PLAN_ID }),
+      );
+      if (/get_night_out_(members|board|voting|anon_rsvps)/.test(url)) {
+        return fulfillJson(200, [])(route);
+      }
+      await fulfillJson(200, [{ ...PLAN_ROW, caller_status: 'declined' }])(route);
+    });
     await page.route(
       '**/rest/v1/rpc/resolve_night_out_by_token*',
       fulfillJson(200, null),
@@ -705,6 +759,10 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     // bearer link was to join first, which recorded an acceptance and emitted
     // an 'accepted' event the host could see.
     expect(joinCalled, 'declining a bearer link still joined first').toBe(false);
+    // And the paint after a successful decline is the declined member state,
+    // never the expired-link error that an empty get_night_out would produce.
+    await expect(page.getByText(/You're out for this one/i)).toBeVisible();
+    await expect(page.getByText(/Couldn't send that/i)).toHaveCount(0);
   });
 
   test('a decided plan closes voting and suggesting instead of failing on tap', async ({
@@ -787,7 +845,7 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
       await context.addCookies([
         { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
       ]);
-      await page.route('**/rest/v1/**', fulfillJson(200, []));
+      await stubNightOutRest(page);
       await page.route('**/auth/v1/**', fulfillJson(200, {}));
 
       if (settled === 'member') {
@@ -836,7 +894,7 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     await context.addCookies([
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
-    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await stubNightOutRest(page);
     await page.route('**/auth/v1/**', fulfillJson(200, {}));
     await page.route('**/rest/v1/rpc/resolve_night_out_by_token*', fulfillJson(200, null));
     await page.route('**/rest/v1/rpc/preview_night_out*', fulfillJson(200, []));
@@ -1052,7 +1110,8 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
    * could not be satisfied at all.
    */
   async function stubTonight(page: Page, mine: unknown[]): Promise<void> {
-    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await stubNightOutRest(page);
+    await stubSocialShellRest(page);
     await page.route('**/auth/v1/**', fulfillJson(200, {}));
     await page.route('**/rest/v1/rpc/get_circle_presence*', fulfillJson(200, []));
     await page.route('**/rest/v1/rpc/get_my_presence*', fulfillJson(200, mine));
@@ -1262,7 +1321,8 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await context.addCookies([
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
-    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await stubNightOutRest(page);
+    await stubSocialShellRest(page);
     await page.route('**/auth/v1/**', fulfillJson(200, {}));
     await page.route('**/rest/v1/rpc/get_circle_presence*', fulfillJson(200, []));
     await page.route(
@@ -1537,6 +1597,9 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     ]);
     await stubMemberRpcs(page, openWindowNight());
     await stubMedia(page, [MEDIA_ROW]);
+    // Archiving lands on the private destination, which reads the saved night
+    // back; under the strict fixture that read is named (and empty) here.
+    await page.route('**/rest/v1/rpc/get_saved_night*', fulfillJson(200, []));
     // The photo itself resolves through the boundary route, not off Storage.
     let urlRouteCalled = false;
     await page.route('**/api/media/*/url', async (route) => {
@@ -1653,7 +1716,7 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     await context.addCookies([
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
-    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await stubNightOutRest(page);
     await page.route('**/auth/v1/**', fulfillJson(200, {}));
     await page.route('**/api/media/*/url', fulfillJson(404, { ok: false }));
     // ORDER MATTERS, AND THE GLOBS OVERLAP. `get_saved_night*` also matches
@@ -1721,7 +1784,7 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     await context.addCookies([
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
-    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await stubNightOutRest(page);
     await page.route('**/auth/v1/**', fulfillJson(200, {}));
     // `get_saved_night` filters on auth.uid(), so somebody else's id is zero
     // rows — the same answer a genuinely missing night gets, on purpose.
@@ -1751,7 +1814,7 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
     await context.addCookies([
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
-    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await stubNightOutRest(page);
     await page.route('**/auth/v1/**', fulfillJson(200, {}));
     await page.route(
       '**/rest/v1/rpc/get_saved_night*',
@@ -1785,7 +1848,20 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
   const FRIEND_ID = '523e4567-e89b-42d3-a456-426614174000';
 
   async function openTheForm(page: Page): Promise<void> {
-    await page.route('**/rest/v1/**', fulfillJson(200, []));
+    await stubNightOutRest(page);
+    await stubSocialShellRest(page);
+    // The Plans sub-tab reads the caller's plans and the circle's tonight
+    // signals on entry. Named and empty here: these tests are about the form,
+    // and `get_my_night_outs` -> [] is the "no plans yet" state — the V9-03
+    // discoverability journey asserts this same read with a real row instead.
+    for (const rpc of [
+      'get_my_night_outs',
+      'get_circle_rsvps',
+      'get_circle_suggestions',
+      'get_circle_vibe_votes',
+    ]) {
+      await page.route(`**/rest/v1/rpc/${rpc}*`, fulfillJson(200, []));
+    }
     await page.route('**/auth/v1/**', fulfillJson(200, {}));
     // Somebody to invite: NO-005's row exists "once at least one person or
     // group is selected", and a solo plan has no vote to put a deadline on.
