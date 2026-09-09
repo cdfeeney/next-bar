@@ -1951,8 +1951,32 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       ]),
     );
     await page.goto('/friends');
-    await page.getByRole('tab', { name: 'Plans' }).click();
+    await openPlansTab(page);
     await page.getByTestId('start-night-out').click();
+    await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
+    // The recipient picker fetches the circle and groups on mount; let those
+    // settle before a test types into the form, so a late re-render under a
+    // loaded gate cannot race a fill.
+    await expect(page.getByText(/Loading your (circle|groups)/)).toHaveCount(0);
+  }
+
+  /**
+   * Open the Plans sub-tab and CONFIRM it is selected. A click that lands
+   * before the tab strip is interactive (a loaded 3-worker gate, right after
+   * a reload) is swallowed and Tonight stays selected — measured 2026-09-09.
+   * Re-clicking until `aria-selected` says so is readiness, not a retry of an
+   * assertion.
+   */
+  async function openPlansTab(page: Page): Promise<void> {
+    const plans = page.getByRole('tab', { name: 'Plans' });
+    await expect(plans).toBeVisible();
+    await expect
+      .poll(async () => {
+        if ((await plans.getAttribute('aria-selected')) === 'true') return true;
+        await plans.click();
+        return (await plans.getAttribute('aria-selected')) === 'true';
+      }, { timeout: 15_000 })
+      .toBe(true);
   }
 
   /**
@@ -2028,13 +2052,13 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await page.goto('/map');
     await expect(page.locator('main')).toBeVisible();
     await page.goto('/friends');
-    await page.getByRole('tab', { name: 'Plans' }).click();
+    await openPlansTab(page);
     // Plans has rendered before the list read is judged; under a loaded gate
     // the tab's content can trail the click.
     await expect(page.getByTestId('start-night-out')).toBeVisible();
     await expect.poll(() => listReadsAfterCreate, { timeout: 15_000 }).toBeGreaterThan(0);
     await page.reload();
-    await page.getByRole('tab', { name: 'Plans' }).click();
+    await openPlansTab(page);
     await expect(page.getByTestId('start-night-out')).toBeVisible();
     expect(createCalls, 'returning or reloading must never create a second plan').toBe(1);
   });
@@ -2137,7 +2161,7 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
     await expect(page.getByRole('heading', { name: PLAN_ROW.title })).toBeVisible();
     await page.goto('/friends');
-    await page.getByRole('tab', { name: 'Plans' }).click();
+    await openPlansTab(page);
     await expect(page.getByTestId('start-night-out')).toBeVisible();
 
     // V9-03 FIXED (Night Out goal): `get_my_night_outs` still excludes owned
@@ -2149,7 +2173,7 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await expect(card).toHaveAttribute('href', `/night-out/${TOKEN}`);
     // Reload: the record survives (localStorage, keyed by account + night).
     await page.reload();
-    await page.getByRole('tab', { name: 'Plans' }).click();
+    await openPlansTab(page);
     await expect(page.getByTestId('your-plan-tonight')).toContainText(PLAN_ROW.title);
     assertNoUnexpectedRest(page);
   });
