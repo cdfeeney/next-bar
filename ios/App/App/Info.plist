@@ -47,6 +47,8 @@
       </array>
     </dict>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Next Bar uses the camera only when you tap to take a photo for a story or a moment. Nothing is captured until you press the shutter, and the photo stays a draft until you approve it.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

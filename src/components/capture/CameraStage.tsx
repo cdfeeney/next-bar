@@ -2,6 +2,7 @@
 
 import { useModalDialog } from '@/hooks/useModalDialog';
 import { useCamera, type CameraFacing } from './useCamera';
+import { noticeFor } from './cameraCopy';
 
 /**
  * The live viewfinder and the shutter — one screen, used for the single
@@ -54,6 +55,7 @@ export default function CameraStage({
       aria-label="Camera"
       data-testid="camera-stage"
       data-camera-status={camera.status}
+      data-camera-reason={camera.reason ?? undefined}
       tabIndex={-1}
       className="fixed inset-0 z-[1100] bg-bg flex flex-col outline-none"
     >
@@ -115,7 +117,7 @@ export default function CameraStage({
         {live ? null : (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
             <p data-testid="camera-notice" className="text-sm leading-relaxed">
-              {noticeFor(camera.status)}
+              {noticeFor(camera.status, camera.reason)}
             </p>
             <div className="flex items-center gap-2">
               {camera.status === 'denied' || camera.status === 'unavailable' ? (
@@ -162,12 +164,4 @@ export default function CameraStage({
   );
 }
 
-function noticeFor(status: string): string {
-  if (status === 'denied') {
-    return 'Camera access is off for Next Bar. Turn it on in your browser settings, or use a photo you already have.';
-  }
-  if (status === 'unavailable') {
-    return 'No camera is available on this device. You can still use a photo you already have.';
-  }
-  return 'Starting the camera…';
-}
+// noticeFor lives in cameraCopy.ts so vitest pins the state → guidance mapping.

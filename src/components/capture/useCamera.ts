@@ -30,8 +30,50 @@ export type CameraStatus =
 
 export type CameraFacing = 'environment' | 'user';
 
+/**
+ * WHY the camera is not live, where the platform says (V9-06). `status` stays
+ * the two-way switch the stage renders on; `reason` picks the guidance.
+ *
+ * - `denied`     NotAllowedError / SecurityError / PermissionDeniedError — the
+ *                user or a policy said no; the fix is in Settings.
+ * - `no-api`     no `navigator.mediaDevices.getUserMedia` at all — an insecure
+ *                context or a WebView without media capture.
+ * - `no-device`  NotFoundError / DevicesNotFoundError / OverconstrainedError —
+ *                nothing satisfies the request (no camera, or no lens facing
+ *                that way).
+ * - `busy`       NotReadableError / TrackStartError / AbortError — a camera
+ *                exists but another app or tab holds it, or the OS refused to
+ *                start it.
+ * - `ended`      the live track ended under us (permission revoked mid-session,
+ *                device claimed elsewhere).
+ * - `unknown`    anything else — reported as unavailable with generic guidance.
+ */
+export type CameraFailure = 'denied' | 'no-api' | 'no-device' | 'busy' | 'ended' | 'unknown';
+
+/** Map a getUserMedia rejection to the state the stage renders. Pure. */
+export function classifyCameraError(name: string): { status: 'denied' | 'unavailable'; reason: CameraFailure } {
+  switch (name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+    case 'PermissionDeniedError':
+      return { status: 'denied', reason: 'denied' };
+    case 'NotFoundError':
+    case 'DevicesNotFoundError':
+    case 'OverconstrainedError':
+      return { status: 'unavailable', reason: 'no-device' };
+    case 'NotReadableError':
+    case 'TrackStartError':
+    case 'AbortError':
+      return { status: 'unavailable', reason: 'busy' };
+    default:
+      return { status: 'unavailable', reason: 'unknown' };
+  }
+}
+
 export type UseCamera = {
   status: CameraStatus;
+  /** Why `status` is 'denied' or 'unavailable'; null while idle/starting/live. */
+  reason: CameraFailure | null;
   videoRef: React.RefObject<HTMLVideoElement>;
   /**
    * The lens the device ACTUALLY gave, read back off the live track, or null
@@ -76,6 +118,7 @@ function boundedSize(
 export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState<CameraStatus>('idle');
+  const [reason, setReason] = useState<CameraFailure | null>(null);
   const [actualFacing, setActualFacing] = useState<CameraFacing | null>(null);
   const [attempt, setAttempt] = useState(0);
 
@@ -87,14 +130,19 @@ export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
     let cancelled = false;
     let stream: MediaStream | null = null;
     const onTrackEnded = (): void => {
-      if (!cancelled) setStatus('unavailable');
+      if (cancelled) return;
+      setReason('ended');
+      setStatus('unavailable');
     };
+    setReason(null);
     setStatus('starting');
 
     void (async () => {
       const media = navigator.mediaDevices;
       if (media === undefined || typeof media.getUserMedia !== 'function') {
-        if (!cancelled) setStatus('unavailable');
+        if (cancelled) return;
+        setReason('no-api');
+        setStatus('unavailable');
         return;
       }
       try {
@@ -104,12 +152,9 @@ export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
         });
       } catch (error) {
         if (cancelled) return;
-        const name = error instanceof Error ? error.name : '';
-        setStatus(
-          name === 'NotAllowedError' || name === 'SecurityError'
-            ? 'denied'
-            : 'unavailable',
-        );
+        const failure = classifyCameraError(error instanceof Error ? error.name : '');
+        setReason(failure.reason);
+        setStatus(failure.status);
         return;
       }
       if (cancelled) {
@@ -176,7 +221,7 @@ export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
-  return { status, videoRef, actualFacing, capture, retry };
+  return { status, reason, videoRef, actualFacing, capture, retry };
 }
 
 /**
