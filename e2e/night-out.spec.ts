@@ -1129,42 +1129,6 @@ test.describe('Social sub-tabs (V8-R-NAV-002)', () => {
     await page.getByRole('button', { name: /Groups & people/i }).click();
     await expect(page.getByTestId('follow-stats')).toBeVisible();
   });
-
-  test('the Next Bar? card names a bar, a lead line and ONE Open action (V8-R-SOC-003)', async ({
-    page,
-  }) => {
-    await page.goto('/friends');
-
-    // The card is signed-out reachable on purpose: the ranker runs on the local
-    // catalog and a saved quiz profile, neither of which needs a session. It
-    // renders nothing at all when the ranker has no suggestion — the contract's
-    // "none" state — so this asserts the shape only when a bar is present.
-    const card = page.getByTestId('next-bar-card');
-    await expect(card).toBeVisible();
-    await expect(card.getByRole('heading', { name: 'Next Bar?' })).toBeVisible();
-    // The lead line carries the state in WORDS. Either a walk/Uber time or the
-    // honest neighborhood fallback — never an invented distance.
-    const line = page.getByTestId('next-bar-line');
-    await expect(line).not.toBeEmpty();
-    // ...and V8-R-SOC-003's THREE elements are all accounted for, even when one
-    // cannot be computed (round-7 panel, Codex). With no saved neighborhood
-    // there is no walk time, and the card used to simply omit it; it now says
-    // what is missing and what would fill it, the same third state the quiet
-    // read got in round 5.
-    await expect(line).toContainText(/walk time needs your area/i);
-
-    // "ONE Open action", and it must be a 44px target.
-    const open = page.getByTestId('next-bar-open');
-    await expect(open).toHaveCount(1);
-    expect((await open.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
-
-    // Opening lands in the SHARED lightbox rather than navigating away: the
-    // card is a peek at a bar, not a route change out of Social.
-    const urlBefore = page.url();
-    await open.click();
-    await expect(page.getByRole('dialog')).toBeVisible();
-    expect(page.url()).toBe(urlBefore);
-  });
 });
 
 test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-003)', () => {
