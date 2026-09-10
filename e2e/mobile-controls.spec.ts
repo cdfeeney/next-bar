@@ -366,10 +366,12 @@ test.describe('mobile controls are reachable', () => {
   // min-content width, which overflowed at 375 px (12/13 mini, SE 2/3) and
   // 320 px (SE 1st gen) and clipped the ACCOUNT label. `/` renders the raised
   // pill (widest row); `/map` renders the plain five-tab row.
-  for (const width of [375, 320]) {
+  // Heights are the real phones': 375x667 (iPhone 8 / SE 2-3), 320x568 (SE 1st
+  // gen) — V10-04; the earlier 320x667 tested a phone that does not exist.
+  for (const [width, height] of [[375, 667], [320, 568]] as const) {
     for (const route of ['/', '/map']) {
       test(`bottom nav fits a ${width}px viewport on ${route}`, async ({ page }) => {
-        await page.setViewportSize({ width, height: 667 });
+        await page.setViewportSize({ width, height });
         await page.goto(route);
         const nav = page.getByRole('navigation', { name: /primary/i });
         await expect(nav).toBeVisible();
@@ -398,6 +400,27 @@ test.describe('mobile controls are reachable', () => {
             MIN_TAP_PX - 1,
           );
         }
+
+        // V10-04 (V9-10b panel, both lanes): the link boxes are flex-sized, so a
+        // LABEL wider than its slot overflows into a neighbour without moving
+        // `ul.scrollWidth` or any link box. Measure the rendered text itself
+        // (a Range over the label's text node) and require it inside its link.
+        const overflowing = await tabs.evaluateAll((links) =>
+          links.flatMap((link) => {
+            const walker = document.createTreeWalker(link, NodeFilter.SHOW_TEXT);
+            const node = walker.nextNode();
+            if (!node) return [`${link.textContent?.trim()}: no text node`];
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const text = range.getBoundingClientRect();
+            const box = link.getBoundingClientRect();
+            const inside = text.left >= box.left - 0.5 && text.right <= box.right + 0.5;
+            return inside
+              ? []
+              : [`${node.textContent?.trim()} spans ${text.left.toFixed(1)}–${text.right.toFixed(1)} outside its link ${box.left.toFixed(1)}–${box.right.toFixed(1)}`];
+          }),
+        );
+        expect(overflowing, overflowing.join('; ')).toEqual([]);
       });
     }
   }

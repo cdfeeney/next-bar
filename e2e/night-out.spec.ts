@@ -2273,14 +2273,21 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       await fulfillJson(200, invites.length > 1)(route);
     });
     const suggested: string[] = [];
+    // The suggest fixture is HELD, not slow (V10-04, both lanes of the cycle-2
+    // round-2 panel): the test knows exactly when the request has arrived and
+    // decides exactly when it is answered, so "no retry while the sequence is
+    // in flight" is asserted inside a window the test controls rather than
+    // inside 1.5 s that a slow machine could outrun.
+    let suggestArrived!: () => void;
+    const suggestRequested = new Promise<void>((resolve) => { suggestArrived = resolve; });
+    let releaseSuggest!: () => void;
+    const suggestReleased = new Promise<void>((resolve) => { releaseSuggest = resolve; });
     await page.route('**/rest/v1/rpc/suggest_night_out_bar*', async (route) => {
       const body = route.request().postDataJSON() as { p_night_out: string; p_bar: string };
       expect(body.p_night_out).toBe(PLAN_ID);
       suggested.push(body.p_bar);
-      // Slow on purpose: the invite has already failed by now, and the outcome
-      // panel must NOT offer a retry while the create sequence is still in
-      // flight (cycle-2 round-1 panel, Codex HIGH) — see the assertion below.
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      suggestArrived();
+      await suggestReleased;
       await fulfillJson(200, true)(route);
     });
 
@@ -2307,11 +2314,21 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await expect(page.getByRole('button', { name: /^Remove Attaboy from the shortlist/ })).toBeVisible();
 
     await action.click();
-    // While the sequence is still running (the suggest fixture is slow), the
-    // refused invite is already known but no retry may be offered yet.
+    // While the sequence is still running (the suggest request has ARRIVED and
+    // is being held), the refused invite is already known — the invite fixture
+    // answered before suggest was called — but no retry may be offered yet
+    // (cycle-2 round-1 panel, Codex HIGH: `failedInviteIds` publishes before
+    // `busy` clears). Three checks 200 ms apart inside the held window: a
+    // single check could pass on the render before the panel appears.
     await expect(action).toHaveText(/Creating/);
-    await expect.poll(() => invites.length).toBe(1);
-    await expect(page.getByTestId('unsent-outcome')).toHaveCount(0);
+    await suggestRequested;
+    expect(invites).toEqual([FRIEND_ID]);
+    for (let check = 0; check < 3; check += 1) {
+      await expect(page.getByTestId('unsent-outcome')).toHaveCount(0);
+      await expect(action).toHaveText(/Creating/);
+      await page.waitForTimeout(200);
+    }
+    releaseSuggest();
     // Created once; the shortlist reached the board; the refused invite HOLDS
     // the screen instead of navigating, and says exactly what did not send.
     // Names, not counts: the organizer is told WHO did not get the invite.
