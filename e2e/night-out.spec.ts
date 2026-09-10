@@ -2036,7 +2036,7 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     });
 
     await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
-    await page.getByRole('button', { name: /start the official/i }).click();
+    await page.getByRole('button', { name: /create the night out/i }).click();
 
     // Created once, and landed on that exact plan.
     await expect.poll(() => createCalls, { timeout: 10_000 }).toBe(1);
@@ -2106,8 +2106,18 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     expect(geometry.docWidth, `document is wider than the viewport: ${JSON.stringify(geometry)}`).toBeLessThanOrEqual(geometry.vw);
     expect(geometry.bodyWidth, `body is wider than the viewport: ${JSON.stringify(geometry)}`).toBeLessThanOrEqual(geometry.vw);
     expect(geometry.spill, `controls end past the viewport: ${JSON.stringify(geometry.spill)}`).toEqual([]);
-    // The primary action is still reachable.
-    await expect(page.getByRole('button', { name: /start the official/i })).toBeInViewport();
+    // The primary action is still reachable. V9-05 moved it to the BOTTOM of
+    // the flow (details → people → bars → action), so "reachable" means it can
+    // be scrolled to and then sits fully inside the viewport horizontally — not
+    // that it is on screen before scrolling, which is what the old assertion
+    // implied when the button lived in the header.
+    const action = page.getByRole('button', { name: /create the night out/i });
+    await action.scrollIntoViewIfNeeded();
+    await expect(action).toBeInViewport();
+    const actionBox = await action.boundingBox();
+    expect(actionBox).not.toBeNull();
+    expect(actionBox!.x).toBeGreaterThanOrEqual(0);
+    expect(actionBox!.x + actionBox!.width).toBeLessThanOrEqual(geometry.vw + 1);
   });
 
   /**
@@ -2156,7 +2166,7 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     // Preconditions are HARD expectations: a failure here is a real failure,
     // never something the known-defect marker below may absorb.
     await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
-    await page.getByRole('button', { name: /start the official/i }).click();
+    await page.getByRole('button', { name: /create the night out/i }).click();
     await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
     await expect(page.getByRole('heading', { name: PLAN_ROW.title })).toBeVisible();
     await page.goto('/friends');
@@ -2225,7 +2235,7 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await expect(page.getByText(/Selected · 0 people/)).toBeVisible();
     await expect(sam).toHaveAttribute('aria-pressed', 'false');
 
-    await page.getByRole('button', { name: /start the official/i }).click();
+    await page.getByRole('button', { name: /create the night out/i }).click();
     await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
     expect(invited, 'nobody is selected, so nobody may be invited').toEqual([]);
   });
@@ -2259,9 +2269,94 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await page.getByRole('button', { name: /^Sam\b/ }).click();
     await expect(page.getByText(/Selected · 1 (person|people)/)).toBeVisible();
 
-    await page.getByRole('button', { name: /start the official/i }).click();
+    await page.getByRole('button', { name: /create the night out/i }).click();
     await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
     expect(invited, 'exactly the visible selection is invited').toEqual([FRIEND_ID]);
+  });
+
+  /**
+   * V9-05 — "Start Night Out belongs at the bottom, not among people's names";
+   * the organizer picks the shortlist in the planning flow; a partial failure
+   * keeps the created plan, says what did not send, and retries ONLY that.
+   *
+   * The invite fixture refuses the FIRST attempt and accepts the retry, so the
+   * assertions can tell "retried the failed invite" from "re-ran everything":
+   * exactly one create, exactly one suggestion, exactly two invite calls for
+   * the same person, and the plan opens only once nothing is left unsent.
+   */
+  test('V9-05: details → people → bars → one action; the shortlist is suggested and only the failed invite is retried', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await openTheForm(page);
+    await stubOwnerRpcs(page);
+    let createCalls = 0;
+    await page.route('**/rest/v1/rpc/create_night_out*', async (route) => {
+      createCalls += 1;
+      await fulfillJson(200, PLAN_ID)(route);
+    });
+    const invites: string[] = [];
+    await page.route('**/rest/v1/rpc/invite_one_to_night_out*', async (route) => {
+      expect(route.request().postDataJSON()).toEqual({ p_night_out: PLAN_ID, p_user: FRIEND_ID, p_group: null });
+      invites.push(FRIEND_ID);
+      // First attempt refused, retry accepted.
+      await fulfillJson(200, invites.length > 1)(route);
+    });
+    const suggested: string[] = [];
+    await page.route('**/rest/v1/rpc/suggest_night_out_bar*', async (route) => {
+      const body = route.request().postDataJSON() as { p_night_out: string; p_bar: string };
+      expect(body.p_night_out).toBe(PLAN_ID);
+      suggested.push(body.p_bar);
+      await fulfillJson(200, true)(route);
+    });
+
+    // Flow order, measured: details above people above bars above the ONE action.
+    const top = async (locator: ReturnType<Page['locator']>): Promise<number> =>
+      (await locator.boundingBox())!.y;
+    const fields = page.getByTestId('night-out-plan-fields');
+    const people = page.getByLabel('Search people');
+    const barSearch = page.getByLabel('Add a bar to the shortlist');
+    const action = page.getByTestId('create-night-out');
+    await expect(action).toBeVisible();
+    expect(await top(fields)).toBeLessThan(await top(people));
+    expect(await top(people)).toBeLessThan(await top(barSearch));
+    expect(await top(barSearch)).toBeLessThan(await top(action));
+    await expect(action).toHaveText(/Create the Night Out & invite 1/);
+    await expect(page.getByRole('button', { name: /create the night out/i })).toHaveCount(1);
+    // The generic /join share is not a plan invitation and is gone from the planner.
+    await expect(page.getByRole('button', { name: /Invite friends to plan tonight/ })).toHaveCount(0);
+
+    // The organizer shortlists a bar by name.
+    await barSearch.fill('attaboy');
+    await page.getByRole('button', { name: /^Attaboy/ }).click();
+    await expect(page.getByText(/Shortlist · 1 of 3/)).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Remove Attaboy from the shortlist/ })).toBeVisible();
+
+    await action.click();
+    // Created once; the shortlist reached the board; the refused invite HOLDS
+    // the screen instead of navigating, and says exactly what did not send.
+    await expect(page.getByTestId('unsent-outcome')).toContainText(/1 invite didn't send/);
+    expect(createCalls).toBe(1);
+    expect(suggested).toEqual(['attaboy']);
+    expect(invites).toEqual([FRIEND_ID]);
+    await expect(page).not.toHaveURL(new RegExp(`/night-out/${TOKEN}`));
+    await expect(action).toBeDisabled();
+
+    // Retry re-sends ONLY the failed invite — no second create, no second
+    // suggestion — then opens the plan, whose page carries its invite link.
+    await page.getByRole('button', { name: /Retry what didn't send/ }).click();
+    await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
+    expect(createCalls).toBe(1);
+    expect(invites).toEqual([FRIEND_ID, FRIEND_ID]);
+    expect(suggested).toEqual(['attaboy']);
+    await expect(page.getByRole('button', { name: /Copy invite link/ })).toBeVisible();
+    assertNoUnexpectedRest(page);
   });
 
   test('Social → Plans reaches a form whose three rows are editable in place', async ({
@@ -2301,7 +2396,7 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await expect(when).toHaveValue(`${night}T22:30`);
     // Editing it never withdraws the CTA.
     await expect(
-      page.getByRole('button', { name: /start the official/i }),
+      page.getByRole('button', { name: /create the night out/i }),
     ).toBeEnabled();
 
     // AREA — optional, and editable in place.
@@ -2339,7 +2434,7 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await page.getByLabel('When').fill('2030-01-01T22:00');
     await expect(page.getByTestId('when-off-night')).toBeVisible();
     await expect(
-      page.getByRole('button', { name: /start the official/i }),
+      page.getByRole('button', { name: /create the night out/i }),
     ).toBeEnabled();
   });
 });

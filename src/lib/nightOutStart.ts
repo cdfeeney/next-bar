@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { inviteOneToNightOut } from '@/lib/nightOuts.server';
+import { inviteOneToNightOut, suggestNightOutBar } from '@/lib/nightOuts.server';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -32,19 +32,45 @@ export async function inviteAll(
   return { invited, failed };
 }
 
+/**
+ * V9-05: put the organizer's shortlist on the plan's board, one
+ * `suggest_night_out_bar` per bar, in order. The owner is an accepted member
+ * from `create_night_out` (0044:265-268), so the RPC accepts them; it is
+ * idempotent per (plan, bar) and capped at three live suggestions per member,
+ * so a retry of a failed bar can never double-post. Duplicates are collapsed
+ * here because a bar is on the shortlist once, whatever the picker sent.
+ */
+export async function suggestAll(
+  supabase: SupabaseClient,
+  planId: string,
+  barIds: readonly string[],
+): Promise<{ suggested: string[]; failed: string[] }> {
+  const suggested: string[] = [];
+  const failed: string[] = [];
+  for (const barId of [...new Set(barIds)]) {
+    if (await suggestNightOutBar(supabase, planId, barId)) suggested.push(barId);
+    else failed.push(barId);
+  }
+  return { suggested, failed };
+}
+
 export function startOutcome({
   refusedEdits,
   failedInvites,
+  failedSuggestions = 0,
   nightMoved,
   editsTimedOut,
 }: {
   refusedEdits: readonly string[];
   failedInvites: number;
+  /** V9-05: shortlist bars the board refused — held like a failed invite. */
+  failedSuggestions?: number;
   nightMoved: string | null;
   editsTimedOut: boolean;
 }): 'navigate' | 'hold' {
   return refusedEdits.length > 0
     || failedInvites > 0
+    || failedSuggestions > 0
     || nightMoved !== null
     || editsTimedOut === true
     ? 'hold'

@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode,
+} from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { nycNightKey } from '@/lib/nightKey';
 import { createNightOut, getNightOut } from '@/lib/nightOuts.server';
-import { inviteAll, startOutcome } from '@/lib/nightOutStart';
+import { inviteAll, startOutcome, suggestAll } from '@/lib/nightOutStart';
 import { rememberOwnedNightOut } from '@/lib/ownedNightOut';
 import { useNightOutPlanFields, type PlanEditOutcome } from './NightOutPlanFields';
 
@@ -449,6 +451,8 @@ function forgetStarted(userId: string, planId: string): void {
 export default function StartNightOutButton({
   inviteeIds = [],
   inviteeGroupByUser = {},
+  shortlistBarIds = [],
+  children,
   onBusyChange,
   disabled = false,
 }: {
@@ -459,6 +463,20 @@ export default function StartNightOutButton({
    * re-checks current membership for those (`invite_one_to_night_out`).
    */
   inviteeGroupByUser?: Readonly<Record<string, string | null>>;
+  /**
+   * V9-05: the organizer's shortlist, put on the plan's board right after the
+   * invitations (`suggest_night_out_bar`, three per member). Snapshotted at
+   * the tap like the guest list.
+   */
+  shortlistBarIds?: readonly string[];
+  /**
+   * V9-05 flow order: plan details → recipients → suggested bars → ONE primary
+   * action at the bottom. The rows render first, the caller's sections (people,
+   * bars) render here, and the CTA renders last, so the one component that
+   * owns the create/invite/suggest sequence also owns where its button sits.
+   * Signed out, only the children render (creation is an authenticated RPC).
+   */
+  children?: ReactNode;
   /** Fires with true while a create/invite/read is in flight, false after. */
   onBusyChange?: (busy: boolean) => void;
   /**
@@ -487,7 +505,17 @@ export default function StartNightOutButton({
   const [readFailed, setReadFailed] = useState(false);
   const [retryFailed, setRetryFailed] = useState(false);
   const [createdPlanId, setCreatedPlanId] = useState<string | null>(null);
-  const [inviteFailures, setInviteFailures] = useState(0);
+  /**
+   * V9-05: WHICH invitations and shortlist bars did not land, not just how
+   * many — "retry only failed operations" needs the ids. The group provenance
+   * of the tap is kept beside them so a retried invite carries the same
+   * `p_group` the server checked the first time.
+   */
+  const [failedInviteIds, setFailedInviteIds] = useState<readonly string[]>([]);
+  const [failedBarIds, setFailedBarIds] = useState<readonly string[]>([]);
+  const heldGroups = useRef<Readonly<Record<string, string | null>>>({});
+  const [retrying, setRetrying] = useState(false);
+  const inviteFailures = failedInviteIds.length;
   /**
    * The planning edits the server declined, and the token of the plan they are
    * about. Held HERE rather than in the rows hook so that the epoch guard in
@@ -698,7 +726,9 @@ export default function StartNightOutButton({
     // round 2, Codex). It was survivable before only because navigation always
     // followed it; now that a failure HOLDS the screen, an in-place account
     // switch would leave B looking at A's "one invite didn't send".
-    setInviteFailures(0);
+    setFailedInviteIds([]);
+    setFailedBarIds([]);
+    setRetrying(false);
     // `busy` is NOT blindly cleared: an in-flight create belonging to the
     // account still on screen must keep Start disabled, or a sign-out/sign-in
     // round trip re-arms it mid-create and the next tap makes a second plan for
@@ -792,7 +822,35 @@ export default function StartNightOutButton({
     router.push(`/night-out/${plan.shareToken}`);
   };
 
-  if (auth.status !== 'signed-in') return null;
+  /**
+   * V9-05: retry ONLY what did not land — the failed invitations (with the
+   * group each was picked through) and the failed shortlist bars. Both RPCs
+   * are idempotent per (plan, person) / (plan, bar), so a retry can never
+   * duplicate a guest or a suggestion; the plan itself is never re-created.
+   * When nothing is left unsent and nothing else holds the screen, it opens
+   * the plan the way a clean create would have.
+   */
+  const retryUnsent = async (): Promise<void> => {
+    const supabase = getBrowserSupabase();
+    if (!supabase || createdPlanId === null || userId === null || retrying) return;
+    const owner = userId;
+    setRetrying(true);
+    try {
+      const invites = await inviteAll(supabase, createdPlanId, failedInviteIds, heldGroups.current);
+      if (!mounted.current || owner !== liveUserId.current) return;
+      const bars = await suggestAll(supabase, createdPlanId, failedBarIds);
+      if (!mounted.current || owner !== liveUserId.current) return;
+      setFailedInviteIds(invites.failed);
+      setFailedBarIds(bars.failed);
+      const clear = invites.failed.length === 0 && bars.failed.length === 0
+        && refusedEdits.length === 0 && nightMoved === null && !editsUncertain;
+      if (clear && openToken !== null) router.push(`/night-out/${openToken}`);
+    } finally {
+      if (mounted.current) setRetrying(false);
+    }
+  };
+
+  if (auth.status !== 'signed-in') return <>{children}</>;
 
   const handleStart = async (): Promise<void> => {
     const supabase = getBrowserSupabase();
@@ -858,6 +916,7 @@ export default function StartNightOutButton({
      */
     const invitedAtTap = inviteeIds;
     const groupsAtTap = inviteeGroupByUser;
+    const shortlistAtTap = shortlistBarIds;
     try {
       // ONE reading of the clock for this whole attempt (cycle 1, Codex). The
       // night key was read again when parking, so a 6am NYC rollover landing
@@ -992,7 +1051,16 @@ export default function StartNightOutButton({
       // makes the semantic explicit rather than an accident of closure capture.
       const { failed } = await inviteAll(supabase, planId, invitedAtTap, groupsAtTap);
       if (owner !== liveUserId.current) return;
-      setInviteFailures(failed.length);
+      setFailedInviteIds(failed);
+      heldGroups.current = groupsAtTap;
+
+      // V9-05: the organizer's shortlist goes on the board AFTER the guests are
+      // on the plan, snapshotted at the tap like them. A bar the board refused
+      // (cap, closed plan, transport) holds the screen the same way a failed
+      // invite does, and is retried alone from the same button.
+      const shortlist = await suggestAll(supabase, planId, shortlistAtTap);
+      if (owner !== liveUserId.current) return;
+      setFailedBarIds(shortlist.failed);
 
       const plan = await getNightOut(supabase, planId);
       if (owner !== liveUserId.current) return;
@@ -1032,6 +1100,7 @@ export default function StartNightOutButton({
         startOutcome({
           refusedEdits,
           failedInvites: failed.length,
+          failedSuggestions: shortlist.failed.length,
           nightMoved: planEdits.nightMoved,
           editsTimedOut,
         }) === 'hold'
@@ -1058,9 +1127,26 @@ export default function StartNightOutButton({
     }
   };
 
+  const guestCount = inviteeIds.filter((id) => UUID_RE.test(id)).length;
+  const unsent = [
+    inviteFailures > 0
+      ? `${inviteFailures} ${inviteFailures === 1 ? 'invite' : 'invites'}`
+      : null,
+    failedBarIds.length > 0
+      ? `${failedBarIds.length} shortlist ${failedBarIds.length === 1 ? 'bar' : 'bars'}`
+      : null,
+  ].filter((part): part is string => part !== null);
+
   return (
     <div className="mt-4 text-center">
+      <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-1 text-left">
+        Plan details
+      </h2>
       {planFields.fields}
+      {/* V9-05: recipients and suggested bars sit BETWEEN the details and the
+          action, so the one button that creates the plan and sends its
+          invitations is the last thing on the form. */}
+      {children}
       <button
         type="button"
         onClick={() => void handleStart()}
@@ -1068,21 +1154,35 @@ export default function StartNightOutButton({
         // opening it. Leaving Start armed here is precisely how the second plan
         // gets created. `disabled` is the caller's own veto, kept alongside it.
         disabled={busy || disabled || createdPlanId !== null}
-        className="rounded-full border border-accent px-5 py-2 text-accent touch-manipulation disabled:opacity-50"
+        data-testid="create-night-out"
+        className="mt-6 w-full rounded-full bg-accent px-5 py-3 font-display text-bg min-h-[44px] touch-manipulation disabled:opacity-50"
       >
-        {busy ? 'Starting…' : 'Start the official Night Out'}
+        {busy
+          ? 'Creating…'
+          : guestCount > 0
+            ? `Create the Night Out & invite ${guestCount}`
+            : 'Create the Night Out'}
       </button>
       {error ? (
         <p className="mt-2 text-sm text-red-400">
           Couldn&apos;t start it — try again.
         </p>
       ) : null}
-      {inviteFailures > 0 ? (
-        <p className="mt-2 text-sm text-red-400">
-          {inviteFailures === 1
-            ? "One invite didn't send — you can share the link instead."
-            : `${inviteFailures} invites didn't send — you can share the link instead.`}
-        </p>
+      {unsent.length > 0 ? (
+        <div className="mt-2" data-testid="unsent-outcome">
+          <p className="text-sm text-red-400" role="status">
+            Your night out was created, but {unsent.join(' and ')} didn&apos;t
+            send. Retry, or open the plan and share its invite link.
+          </p>
+          <button
+            type="button"
+            onClick={() => void retryUnsent()}
+            disabled={retrying}
+            className="mt-2 rounded-full border border-accent px-5 py-2 text-sm text-accent min-h-[44px] touch-manipulation disabled:opacity-50"
+          >
+            {retrying ? 'Retrying…' : "Retry what didn't send"}
+          </button>
+        </div>
       ) : null}
       {/* Rendered whenever there are refusals, WITH or WITHOUT a token. The
           read-failure branch has no token — the recovery panel below owns
@@ -1120,7 +1220,7 @@ export default function StartNightOutButton({
       {/* An invite failure or a rollover with no refusal alongside it also holds
           the screen now, so each needs the same way onward. */}
       {refusedEdits.length === 0
-      && (inviteFailures > 0 || nightMoved !== null || editsUncertain)
+      && (inviteFailures > 0 || failedBarIds.length > 0 || nightMoved !== null || editsUncertain)
       && openToken !== null ? (
         <button
           type="button"

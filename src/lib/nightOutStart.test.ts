@@ -1,9 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { inviteOneToNightOut } from '@/lib/nightOuts.server';
-import { inviteAll, startOutcome } from '@/lib/nightOutStart';
+import { inviteOneToNightOut, suggestNightOutBar } from '@/lib/nightOuts.server';
+import { inviteAll, startOutcome, suggestAll } from '@/lib/nightOutStart';
 
-vi.mock('@/lib/nightOuts.server', () => ({ inviteOneToNightOut: vi.fn() }));
+vi.mock('@/lib/nightOuts.server', () => ({ inviteOneToNightOut: vi.fn(), suggestNightOutBar: vi.fn() }));
 
 const supabase = {} as SupabaseClient;
 const planId = '00000000-0000-0000-0000-000000000001';
@@ -58,6 +58,33 @@ describe('inviteAll — group provenance', () => {
   });
 });
 
+describe('suggestAll (V9-05)', () => {
+  const suggest = vi.mocked(suggestNightOutBar);
+
+  it('suggests each shortlist bar once, in order, and records which the board refused', async () => {
+    suggest.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(suggestAll(supabase, planId, ['attaboy', 'please-dont-tell', 'attaboy']))
+      .resolves.toEqual({ suggested: ['attaboy'], failed: ['please-dont-tell'] });
+    expect(suggest.mock.calls).toEqual([
+      [supabase, planId, 'attaboy'],
+      [supabase, planId, 'please-dont-tell'],
+    ]);
+  });
+
+  it('waits for each suggestion before the next, and calls nothing for an empty shortlist', async () => {
+    let resolveFirst!: (value: boolean) => void;
+    suggest.mockReturnValueOnce(new Promise<boolean>((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValueOnce(true);
+    const result = suggestAll(supabase, planId, ['a', 'b']);
+    expect(suggest.mock.calls).toEqual([[supabase, planId, 'a']]);
+    resolveFirst(true);
+    await expect(result).resolves.toEqual({ suggested: ['a', 'b'], failed: [] });
+    suggest.mockClear();
+    await expect(suggestAll(supabase, planId, [])).resolves.toEqual({ suggested: [], failed: [] });
+    expect(suggest).not.toHaveBeenCalled();
+  });
+});
+
 describe('startOutcome', () => {
   const clear = {
     refusedEdits: [],
@@ -68,11 +95,13 @@ describe('startOutcome', () => {
 
   it('navigates when no trigger is present', () => {
     expect(startOutcome(clear)).toBe('navigate');
+    expect(startOutcome({ ...clear, failedSuggestions: 0 })).toBe('navigate');
   });
 
   it.each([
     { refusedEdits: ['time'] },
     { failedInvites: 1 },
+    { failedSuggestions: 1 },
     { nightMoved: '2026-09-09' },
     { nightMoved: '' },
     { editsTimedOut: true },

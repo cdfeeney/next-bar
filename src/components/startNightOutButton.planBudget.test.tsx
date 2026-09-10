@@ -83,7 +83,7 @@ describe('a planning edit that never answers', () => {
     fireEvent.change(screen.getByLabelText(/^Area/), {
       target: { value: 'East Village' },
     });
-    screen.getByRole('button', { name: /Start the official Night Out/i }).click();
+    screen.getByRole('button', { name: /Create the Night Out/i }).click();
 
     // Past the 10s budget.
     await vi.advanceTimersByTimeAsync(11_000);
@@ -117,7 +117,7 @@ describe('a planning edit that never answers', () => {
     fireEvent.change(screen.getByLabelText(/^Area/), {
       target: { value: 'East Village' },
     });
-    screen.getByRole('button', { name: /Start the official Night Out/i }).click();
+    screen.getByRole('button', { name: /Create the Night Out/i }).click();
 
     // The edits answer immediately; the invite takes 15s all by itself.
     await vi.advanceTimersByTimeAsync(20_000);
