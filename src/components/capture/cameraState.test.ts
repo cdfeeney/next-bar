@@ -25,7 +25,11 @@ describe('noticeFor — every non-live state names its way forward', () => {
 
   it('a denial points at Settings, on the phone and in Safari', () => {
     const copy = noticeFor('denied', 'denied');
-    expect(copy).toMatch(/Settings › Privacy & Security › Camera › Next Bar/);
+    // iOS 18 path first, older path kept as the fallback (V10-03).
+    expect(copy).toMatch(/Settings › Apps › Next Bar › Camera/);
+    expect(copy.indexOf('Settings › Apps › Next Bar › Camera')).toBeLessThan(copy.indexOf('Privacy & Security'));
+    expect(copy).toMatch(/iOS 17 and earlier: Settings › Privacy & Security › Camera › Next Bar/);
+    expect(copy).toMatch(/Safari, the aA menu › Website Settings/);
     expect(copy).toMatch(/Safari/);
     expect(copy).toMatch(/photo you already have/);
   });

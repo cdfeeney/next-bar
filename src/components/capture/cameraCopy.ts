@@ -6,17 +6,18 @@ import type { CameraFailure, CameraStatus } from './useCamera';
  * device is merely busy, the library row always — so the user is never left
  * with a dead shutter and a vague "an error occurred".
  *
- * Settings guidance is platform-honest: on iPhone the switch is under
- * Settings › Privacy & Security › Camera (the per-app entry moved under
- * Settings › Apps in iOS 18, the privacy list did not); in Safari it is the
- * aA menu › Website Settings. The copy names both because the same web build
- * serves both.
+ * Settings guidance is platform-honest: on iOS 18 and later the app's own
+ * switch is under Settings › Apps › Next Bar › Camera (V10-03, the path a
+ * current iPhone shows first); iOS 17 and earlier keep it under Settings ›
+ * Privacy & Security › Camera › Next Bar — both reach the same toggle; in
+ * Safari it is the aA menu › Website Settings. The copy names all three
+ * because the same web build serves both the app and the browser.
  */
 export function noticeFor(status: CameraStatus, reason: CameraFailure | null): string {
   if (status === 'denied') {
-    // iOS 18+ lists third-party apps under Settings › Apps; Privacy & Security ›
-    // Camera lists them on every supported iOS, so name the stable path.
-    return 'Camera access is off for Next Bar. On iPhone, turn it on in Settings › Privacy & Security › Camera › Next Bar (or, in Safari, the aA menu › Website Settings). Or use a photo you already have.';
+    // iOS 18 path first (V10-03); the Privacy & Security path is the iOS 17
+    // and earlier spelling, kept as the fallback sentence.
+    return 'Camera access is off for Next Bar. On iPhone, turn it on in Settings › Apps › Next Bar › Camera (on iOS 17 and earlier: Settings › Privacy & Security › Camera › Next Bar; in Safari, the aA menu › Website Settings). Or use a photo you already have.';
   }
   if (status === 'unavailable') {
     switch (reason) {
