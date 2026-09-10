@@ -1,5 +1,8 @@
 # V9-01 — why a Next Bar? search can show three, and the copy that used to narrate it
 
+Corrected 2026-09-10 (V10-05) per the V9-01 final panel: three claims below are marked **Correction (V10-05)** with
+current file:line references; product code is unchanged.
+
 Goal g-44888d71, run nb-v9-overnight-20260908, on the Night Out candidate (`7cb8933`). The owner saw three bars under
 "Near you" with the sentence "Only 3 routes confirmed in this search." This file records (1) what copy was removed and
 kept, and (2) the reproducible mechanism that yields fewer than five, measured in code and pinned by a fixture — BEFORE
@@ -38,13 +41,20 @@ filtering on (`hideClosedNow`), coordinates origin ("Near you").
 3. **Order** (`matching.ts` `matches`): first the hard filters inside `matches` itself — the caller's exclude ids
    (on both home surfaces `visitedIds` **plus `shownIds`**: every "Run it again" removes the previous page of five
    from the pool, `WhereNextFlow.tsx` ~296-306), `CLOSED_PERMANENTLY` bars, bars whose `lastVerified` is older than
-   365 days, and the quiz's preferred neighborhoods when any are set. Then, with `distanceBands: false` (every band except Nearby), the pool is
-   one band ordered by score with exact miles **only as the tie-breaker**. Which score depends on the surface:
+   365 days, and the quiz's preferred neighborhoods when any are set (`matching.ts:250`). **Correction (V10-05):
+   the neighborhood filter is unreachable from both home surfaces** — Near you builds `autoProfile` with
+   `preferredNeighborhoods: []` (`WhereNextFlow.tsx:166`, and `:169` for the no-vibe case) and "From {bar}" builds
+   `seedProfile` with `preferredNeighborhoods: []` (`WhereNextFlow.tsx:624`); the saved quiz neighborhoods reach only
+   the profile state at `:103`, which neither ranking call receives. Then, with `distanceBands: false` (every band
+   except Nearby), the pool is one band ordered by score with exact miles **only as the tie-breaker**. Which score
+   depends on the surface:
    - **Near you** (`WhereNextFlow.tsx` `autoProfile`): the saved quiz profile is **never** passed here. With no applied
      tweak the profile has no tags, so `rankScore` reduces to learned numeric taste (`deriveLearnedTaste` from rating
      history, weight = its confidence) **plus the late-night bias**: because the home surfaces pass `hideClosedNow`,
      `biasNow` is the live clock, and from 22:00 to 03:59 New York time every club/dance bar gets +0.12 and every
-     restaurant-bar −0.12 (`lateNightAdjustment`, `constants.ts` `LATE_*`). On an account with no ratings the pool is
+     restaurant-bar −0.12 (`lateNightAdjustment`, `matching.ts:149-154`, `constants.ts` `LATE_*`). **Correction
+     (V10-05): the club/dance check runs first**, so a venue tagged both `club`/`dance` and `restaurant-bar` gets the
+     +0.12 and no penalty; the −0.12 applies only to restaurant-bars that are not also clubs. On an account with no ratings the pool is
      otherwise all-zero, so at bar o'clock that nudge alone ranks every club within 4 miles ahead of every nearer
      bar — the second fixture below. An account with ratings orders its 4-mile pool by taste; with neither, scores tie
      and the tie-breaker makes it nearest-first (the older `sends only the nearest 15` test).
@@ -54,8 +64,11 @@ filtering on (`hideClosedNow`), coordinates origin ("Near you").
      prior, so `rankScore` blends that prior with learned taste — the branch the fixture below drives.
 4. **Cut** (~line 150): the first `ROUTE_CANDIDATE_CAP` = **15** of that order are the only bars ever sent to routing.
 5. **Routing** (`routeSearch.ts` `searchRoutes`): walking matrix in batches of 5, stopping early once 5 eligible
-   are found. Walkable eligibility = walking time ≤ `WALKABLE_SECONDS` (900 s ≈ 0.7 mi) and ≤ 4 mi straight-line
-   (`matchesTravelBand`). Unknown routes (`null`) never qualify. At most 5 are returned; nothing is ever padded.
+   are found. Walkable eligibility (`matchesTravelBand`, `travelTime.ts:33-41`) = the destination inside the
+   service-area bounding box (`SERVICE_AREA_BBOX`, checked first for every band except Nearby; a bar outside it never
+   qualifies whatever its route), then ≤ 4 mi straight-line (`RADIUS_CAB`), then a confirmed walking estimate with
+   time ≤ `WALKABLE_SECONDS` (900 s ≈ 0.7 mi). Unknown routes (`null`) never qualify. At most 5 are returned; nothing
+   is ever padded.
 6. **Render**: `ranked` = the confirmed routes in the band, capped at 5.
 
 So for a taste-bearing account the fifteen slots go to its best-matching bars anywhere up to four miles out, and only
@@ -67,7 +80,11 @@ chose**, not a provider shortfall.
 Secondary contributors, each measurable in the same code and each reducing the count, not explaining it alone:
 - open-now filtering (step 1) — late in the evening the pool is smaller before ranking starts;
 - the hard filters inside `matches` (step 3): tonight-exclusion and Run-it-again history, permanently closed bars,
-  stale `lastVerified`, preferred neighborhoods;
+  stale `lastVerified` (preferred neighborhoods are NOT a contributor on the home surfaces — see the correction in
+  step 3). **Correction (V10-05) on Run-it-again:** `advanceShownIds` (`resultsRefresh.ts:38`) returns `[]` when the
+  last page ranked fewer than `RESULTS_COUNT` bars, so after a three-result page the next Run it again does not exclude
+  those three — it re-deals the same pool and can show the same three again. The history only accumulates from full
+  pages of five (`WhereNextFlow.tsx:251`);
 - an applied vibe (D-C-41 gate) — the pool is filtered to matching bars before the cut, so a narrow vibe plus Walkable
   can legitimately have fewer than five eligible bars in the whole area;
 - a provider batch failure (`incomplete`) — visible as its own sentence, kept;
@@ -98,7 +115,8 @@ part that needs the account's state to name.
 
 ## 4. Decision left for the owner (not made here)
 
-Whether the Walkable band should pre-rank by walkability (e.g. order the 4-mile pool so the 15 routed candidates are
+**Open question for the owner — recommendation: pre-rank Walkable by walkability** (order the 4-mile pool so the 15
+routed candidates are the ones that can plausibly be walked). Whether the Walkable band should pre-rank by walkability (e.g. order the 4-mile pool so the 15 routed candidates are
 the ones that can plausibly be walked, or cut the Walkable pool at a walking-scale straight-line radius before
 taste-ordering) is a ranking change — V8's cascade is "distance band → learned taste → exact miles" and today the inner
 bands skip the distance-band step. Changing it alters which bars are shown, not only how many, and the queue says to
