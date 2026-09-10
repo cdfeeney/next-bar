@@ -64,7 +64,7 @@ export function Group({
 }): JSX.Element {
   return (
     <section>
-      <h2 className="font-display text-[11px] uppercase tracking-[0.2em] text-muted mb-2 px-1">
+      <h2 className="font-label text-[11px] uppercase tracking-[0.2em] text-muted mb-2 px-1">
         {label}
       </h2>
       <div className="bg-surface border border-border rounded-2xl divide-y divide-border overflow-hidden">

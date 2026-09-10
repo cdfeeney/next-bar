@@ -432,7 +432,7 @@ export default function TonightPresence(): JSX.Element {
       {/* Your status — the compact pin row directly under the stories rail
           (V8-R-PRE-001 entry point). */}
       <section>
-        <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+        <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
           You tonight
         </h2>
         <div
@@ -644,7 +644,7 @@ export default function TonightPresence(): JSX.Element {
 
       {/* Who else is out. */}
       <section>
-        <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+        <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
           Out tonight
         </h2>
         <CircleList

@@ -196,7 +196,7 @@ export default function PlanInvites(): JSX.Element | null {
 
   return (
     <div data-testid="plan-invites">
-      <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+      <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
         Plans · {visible.length}
       </h2>
       {error !== null ? (

@@ -8,7 +8,7 @@ type RatingBadgeProps = {
 };
 
 const BASE_BADGE_CLASSES =
-  'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-display uppercase tracking-wider';
+  'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-label uppercase tracking-wider';
 
 function badgeClassesFor(rating: Rating): string {
   switch (rating) {

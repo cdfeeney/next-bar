@@ -47,7 +47,7 @@ export default function StoriesRail({
     <section aria-labelledby="stories-heading" data-testid="stories-rail">
       <h2
         id="stories-heading"
-        className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3"
+        className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3"
       >
         Stories
       </h2>

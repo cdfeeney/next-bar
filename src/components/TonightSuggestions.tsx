@@ -171,7 +171,7 @@ export default function TonightSuggestions(): JSX.Element | null {
 
   return (
     <div className="mb-10">
-      <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
+      <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-4">
         People&apos;s Choice
       </h2>
 

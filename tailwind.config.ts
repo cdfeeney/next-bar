@@ -37,6 +37,9 @@ const config: Config = {
       fontFamily: {
         display: ['var(--font-display)', 'Georgia', 'serif'],
         sans: ['var(--font-sans)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        // V10-01 label role: small uppercase labels (nav, section labels, chips,
+        // 12px-and-under buttons) use the body face; weight lives in globals.css.
+        label: ['var(--font-sans)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
     },
   },

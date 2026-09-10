@@ -220,7 +220,7 @@ function ListCard({
           {picking ? (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <p className="font-display text-xs uppercase tracking-[0.25em] text-muted">
+                <p className="font-label text-xs uppercase tracking-[0.25em] text-muted">
                   Add to {list.name}
                 </p>
                 <button

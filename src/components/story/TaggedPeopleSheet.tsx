@@ -98,7 +98,7 @@ export default function TaggedPeopleSheet({
                 <Link
                   href={profileHref(person)}
                   data-testid="tagged-person-profile"
-                  className="min-h-[44px] px-3 flex items-center rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+                  className="min-h-[44px] px-3 flex items-center rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
                 >
                   Profile
                 </Link>
@@ -108,7 +108,7 @@ export default function TaggedPeopleSheet({
                   type="button"
                   data-testid="remove-me"
                   onClick={onRemoveMe}
-                  className="min-h-[44px] px-3 rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+                  className="min-h-[44px] px-3 rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
                 >
                   Remove me
                 </button>

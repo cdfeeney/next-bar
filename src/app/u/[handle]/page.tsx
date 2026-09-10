@@ -205,7 +205,7 @@ export default function ProfilePage({
           </div>
         </div>
 
-        <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mt-12 mb-4">
+        <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mt-12 mb-4">
           {(p.displayName ?? p.handle).split(' ')[0]}&apos;s list
         </h2>
 
@@ -369,7 +369,7 @@ function DemoProfile({ handle }: { handle: string }): JSX.Element {
           </div>
         </div>
 
-        <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mt-12 mb-4">
+        <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mt-12 mb-4">
           {friend.displayName.split(' ')[0]}&apos;s list
         </h2>
         <div className="space-y-3">

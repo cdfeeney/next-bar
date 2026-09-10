@@ -67,11 +67,11 @@ export default function CaptureReview({
         </button>
         <span
           data-testid="capture-draft-chip"
-          className="ml-auto rounded-2xl border border-border px-3 py-1.5 text-[11px] font-display uppercase tracking-widest text-muted"
+          className="ml-auto rounded-2xl border border-border px-3 py-1.5 text-[11px] font-label uppercase tracking-widest text-muted"
         >
           Draft — not shared
         </span>
-        <span className="rounded-2xl border border-accent px-3 py-1.5 text-[11px] font-display uppercase tracking-widest text-accent">
+        <span className="rounded-2xl border border-accent px-3 py-1.5 text-[11px] font-label uppercase tracking-widest text-accent">
           {kind === 'dual' ? 'Front + back' : 'One photo'}
         </span>
       </div>
@@ -193,7 +193,7 @@ function CompositionButton({
         onClick();
       }}
       aria-disabled={busy}
-      className="min-h-[44px] rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors aria-disabled:opacity-40"
+      className="min-h-[44px] rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors aria-disabled:opacity-40"
     >
       {label}
     </button>

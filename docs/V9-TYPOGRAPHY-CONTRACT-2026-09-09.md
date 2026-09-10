@@ -23,11 +23,21 @@ Tailwind: `font-display` → `var(--font-display)`, `font-sans` → `var(--font-
 | Body, captions, form controls, helper copy | (inherited) | Nunito Sans | 400 | |
 | Body emphasis | `font-semibold` | Nunito Sans | 600 | |
 | Body strong | `font-bold` | Nunito Sans | 700 | |
+| **Label** (V10-01): bottom-nav tabs and pill, section labels ("Group Favorites", "Plan details", "Who's going"), form-field labels, chips/badges, and any uppercase button or link at 12 px or under | `font-label` | Nunito Sans | **600** (`@layer base .font-label { font-weight: 600 }`; family from `tailwind.config.ts` `fontFamily.label`, the same stack as `sans`) | Owner, 2026-09-09, build 10: "swap them back on the bottom part, they look gross" — the serif at 9–13 px uppercase with tracking reads wrong. **Rule: uppercase text at `text-xs` / 12 px or smaller is a label, not a heading, and takes the body face.** Uppercase at `text-sm` (14 px) and above — eyebrows, primary/secondary buttons, `h1` page titles — stays `font-display`. Tracking and colour stay per site. |
 
 The app uses no other weight utilities (`font-medium`, `font-light`, `font-extrabold`, `font-black` do not occur in
 `src/`), so every rendered weight is one the faces ship — **no synthetic bolding or faux weights**. The contract test
 fails if a rendered element in either face resolves to a weight outside the loaded set, or if any text falls
 through to a system face.
+
+### Label role — sizes (V10-01)
+
+Bottom nav in Nunito Sans: plain tabs `clamp(10px, 3vw, 12px)` → 10 px at 320, 11.25 px at 375, 11.7 px at 390, 12 px from
+400; centre pill `clamp(12px, 3.6vw, 14px)` → 12 px at 320, 13.5 px at 375, 14 px from 389. The V9-10b geometry
+(flex-1 min-w-0 tabs, 44 px targets, 84 px pill minimum) is unchanged; the 320/375 fit cases in
+`mobile-controls.spec.ts` still gate it. Measured widths are in the V10-01 commit message. Mixed-case small text on the
+display face (chip counters, "Open in Maps", "Details" links, phase chips) is NOT covered by the rule and was left
+alone — an owner call for the design pass.
 
 ## Loading
 
@@ -49,6 +59,9 @@ not a knob. Warm loads paint the webfont directly.
   full-page PNG per screen per viewport after `document.fonts.ready`, loaded faces logged per capture; inspected
   against `docs/design-reference/approved/next-bar-five-bars-typography-refinement.png` (notes in the goal record).
 - Full production e2e gate (both viewports) with the fonts applied — see the goal's store evidence for counts.
+- V10-01: the same spec asserts every bottom-nav tab carries `font-label`, resolves to Nunito Sans 600 uppercase, and
+  that no uppercase text at 12 px or under on `/`, `/rankings`, `/map` resolves to Playfair Display. Nav captures:
+  `docs/design-reference/actual-2026-09-09/nav/` (12 PNGs, re-captured with the label face).
 
 ### Screenshot inspection (iPhone 13 + Pixel 7 captures, fonts applied)
 

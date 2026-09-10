@@ -337,7 +337,7 @@ function DangerZone({ auth }: { auth: SignedInAuth }): JSX.Element {
 
   return (
     <section>
-      <h2 className="font-display text-[11px] uppercase tracking-[0.2em] text-red-400 mb-2 px-1">
+      <h2 className="font-label text-[11px] uppercase tracking-[0.2em] text-red-400 mb-2 px-1">
         Danger zone
       </h2>
       <div className="bg-surface border border-red-400/60 rounded-2xl p-4 space-y-3">

@@ -40,7 +40,7 @@ export default function PlansSection(): JSX.Element {
     <section aria-labelledby="plans-heading" className="space-y-3">
       <h2
         id="plans-heading"
-        className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3"
+        className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3"
       >
         Plans
       </h2>

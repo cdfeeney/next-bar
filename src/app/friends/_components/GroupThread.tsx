@@ -641,7 +641,7 @@ function MessageRow({
             onClick={onDelete}
             disabled={busy}
             data-testid="group-message-delete"
-            className="min-h-[44px] px-3 rounded-full border border-border text-xs font-display uppercase tracking-widest touch-manipulation disabled:opacity-50"
+            className="min-h-[44px] px-3 rounded-full border border-border text-xs font-label uppercase tracking-widest touch-manipulation disabled:opacity-50"
           >
             Delete
           </button>
@@ -651,7 +651,7 @@ function MessageRow({
           onClick={onReport}
           disabled={busy}
           data-testid="group-message-report"
-          className="min-h-[44px] px-3 rounded-full border border-border text-xs font-display uppercase tracking-widest touch-manipulation disabled:opacity-50"
+          className="min-h-[44px] px-3 rounded-full border border-border text-xs font-label uppercase tracking-widest touch-manipulation disabled:opacity-50"
         >
           Report
         </button>
@@ -759,7 +759,7 @@ function Administration({
       data-testid="group-admin"
       className="rounded-2xl border border-border bg-surface p-4 space-y-4"
     >
-      <h4 className="font-display text-xs uppercase tracking-[0.25em] text-muted">
+      <h4 className="font-label text-xs uppercase tracking-[0.25em] text-muted">
         Administration
       </h4>
 
@@ -808,7 +808,7 @@ function Administration({
                 onClick={() => onRemove(member.profileId)}
                 disabled={busy}
                 data-testid="group-remove-member"
-                className="shrink-0 min-h-[44px] px-3 rounded-full border border-border text-xs font-display uppercase tracking-widest touch-manipulation disabled:opacity-50"
+                className="shrink-0 min-h-[44px] px-3 rounded-full border border-border text-xs font-label uppercase tracking-widest touch-manipulation disabled:opacity-50"
               >
                 Remove
               </button>
@@ -841,7 +841,7 @@ function Administration({
                 onClick={() => onAdd(friend.id)}
                 disabled={busy}
                 data-testid="group-add-member"
-                className="shrink-0 min-h-[44px] px-3 rounded-full bg-accent text-bg text-xs font-display uppercase tracking-widest touch-manipulation disabled:opacity-50"
+                className="shrink-0 min-h-[44px] px-3 rounded-full bg-accent text-bg text-xs font-label uppercase tracking-widest touch-manipulation disabled:opacity-50"
               >
                 Add
               </button>
@@ -920,7 +920,7 @@ function NightOutInvite({
     >
       <label
         htmlFor="group-invite-plan"
-        className="block font-display text-xs uppercase tracking-[0.25em] text-muted"
+        className="block font-label text-xs uppercase tracking-[0.25em] text-muted"
       >
         Invite this group to a night out
       </label>

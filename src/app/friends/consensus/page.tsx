@@ -463,7 +463,7 @@ function ConsensusContent(): JSX.Element {
           </p>
         ) : null}
 
-        <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mt-8 mb-3 text-left">
+        <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mt-8 mb-3 text-left">
           Who&apos;s going
         </h2>
         {/* Participant selector */}
@@ -510,7 +510,7 @@ function ConsensusContent(): JSX.Element {
           </p>
         ) : null}
 
-        <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mt-8 mb-3 text-left">
+        <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mt-8 mb-3 text-left">
           Suggested bars
         </h2>
 
@@ -600,7 +600,7 @@ function ConsensusContent(): JSX.Element {
           />
         ) : (
           <div className="mb-10">
-            <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-4">
+            <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-4">
               Group Favorites
               {vibeVotes.winner ? (
                 <span

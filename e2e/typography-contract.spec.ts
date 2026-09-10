@@ -2,7 +2,9 @@
  * typography-contract.spec.ts — V9-11
  *
  * The approved pair (owner, 2026-09-08): Playfair Display for display /
- * headings, Nunito Sans for body. This pins what a screenshot cannot: which
+ * headings, Nunito Sans for body. V10-01 (owner, 2026-09-09): small uppercase
+ * labels — the bottom nav, section labels, chips — are a LABEL role on the
+ * body face (`font-label`, Nunito Sans 600), never the serif. This pins what a screenshot cannot: which
  * faces are actually LOADED, which family each role resolves to, and that no
  * rendered weight is synthesised (every computed weight is one the face ships).
  * See docs/V9-TYPOGRAPHY-CONTRACT-2026-09-09.md for the tokens and mapping.
@@ -81,6 +83,37 @@ for (const route of ['/', '/rankings', '/map']) {
     const display = page.locator('.font-display').first();
     await expect(display).toBeVisible();
     expect(await display.evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(DISPLAY);
+    // V10-01 label role: small uppercase labels (the bottom nav first of all)
+    // are Nunito Sans 600, never the serif. Every nav tab carries font-label.
+    const tabs = page.getByRole('navigation', { name: /primary/i }).getByRole('link');
+    expect(await tabs.count()).toBe(5);
+    for (let i = 0; i < 5; i++) {
+      const tab = tabs.nth(i);
+      expect(await tab.evaluate((el) => el.classList.contains('font-label')), `nav tab ${i} carries font-label`).toBe(true);
+      const cs = await tab.evaluate((el) => {
+        const c = getComputedStyle(el);
+        return { family: c.fontFamily, weight: c.fontWeight, transform: c.textTransform };
+      });
+      expect(cs.family, `nav tab ${i} family`).toMatch(BODY);
+      expect(cs.weight, `nav tab ${i} weight`).toBe('600');
+      expect(cs.transform, `nav tab ${i} transform`).toBe('uppercase');
+    }
+    // No small uppercase text is left on the display face: any element that is
+    // uppercase and 12px or under must resolve to Nunito Sans.
+    const smallSerif = await page.evaluate(() => {
+      const out: string[] = [];
+      for (const el of Array.from(document.body.querySelectorAll<HTMLElement>('*'))) {
+        const hasText = Array.from(el.childNodes).some((n) => n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').trim().length > 0);
+        if (!hasText || el.closest('.leaflet-container')) continue;
+        const c = getComputedStyle(el);
+        if (c.display === 'none' || c.visibility === 'hidden') continue;
+        if (c.textTransform === 'uppercase' && parseFloat(c.fontSize) <= 12 && /^"?__Playfair/.test(c.fontFamily)) {
+          out.push(`${el.tagName.toLowerCase()} ${c.fontSize} "${(el.textContent ?? '').trim().slice(0, 30)}"`);
+        }
+      }
+      return out;
+    });
+    expect(smallSerif, JSON.stringify(smallSerif)).toEqual([]);
 
     // No synthetic weights: every rendered (family, weight) is a face that is
     // declared at that weight AND loaded.

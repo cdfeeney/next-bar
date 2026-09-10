@@ -22,7 +22,7 @@ export default function StoriesEmptyState({
   if (status === 'loading') {
     return (
       <section data-testid="stories-loading" aria-busy="true" className="min-h-[92px]">
-        <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+        <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
           Stories
         </h2>
         <p className="text-muted text-sm">Loading…</p>
@@ -40,7 +40,7 @@ export default function StoriesEmptyState({
         <Link
           href="/auth"
           data-testid="stories-sign-in"
-          className="mt-3 inline-flex items-center justify-center min-h-[44px] px-4 rounded-2xl border border-accent text-xs font-display uppercase tracking-widest touch-manipulation hover:bg-accent hover:text-bg transition-colors"
+          className="mt-3 inline-flex items-center justify-center min-h-[44px] px-4 rounded-2xl border border-accent text-xs font-label uppercase tracking-widest touch-manipulation hover:bg-accent hover:text-bg transition-colors"
         >
           Sign in
         </Link>
@@ -61,7 +61,7 @@ export default function StoriesEmptyState({
           type="button"
           data-testid="stories-retry"
           onClick={onRetry}
-          className="mt-3 inline-flex items-center justify-center min-h-[44px] px-4 rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+          className="mt-3 inline-flex items-center justify-center min-h-[44px] px-4 rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
         >
           Try again
         </button>
@@ -83,7 +83,7 @@ function Shell({
     <section data-testid={testId} aria-labelledby="stories-heading">
       <h2
         id="stories-heading"
-        className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3"
+        className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3"
       >
         Stories
       </h2>

@@ -152,7 +152,7 @@ export default function SocialPage(): JSX.Element {
               document.getElementById(GROUPS_AND_PEOPLE_ID)?.scrollIntoView();
             });
           }}
-          className="shrink-0 flex items-center gap-2 rounded-2xl border border-border bg-surface px-3 min-h-[44px] touch-manipulation text-[11px] font-display uppercase tracking-widest text-text hover:border-accent transition-colors"
+          className="shrink-0 flex items-center gap-2 rounded-2xl border border-border bg-surface px-3 min-h-[44px] touch-manipulation text-[11px] font-label uppercase tracking-widest text-text hover:border-accent transition-colors"
         >
           Groups &amp; people
           {requests.length > 0 ? (
@@ -182,7 +182,7 @@ export default function SocialPage(): JSX.Element {
               disabled={!mounted}
               onClick={() => setTab(entry.id)}
               className={[
-                'flex-1 min-h-[44px] rounded-xl font-display text-xs uppercase tracking-widest touch-manipulation transition-colors',
+                'flex-1 min-h-[44px] rounded-xl font-label text-xs uppercase tracking-widest touch-manipulation transition-colors',
                 tab === entry.id
                   ? 'bg-accent text-bg'
                   : 'text-muted hover:text-text',
@@ -246,7 +246,7 @@ export default function SocialPage(): JSX.Element {
                 <section data-testid="feed-empty" aria-labelledby="feed-empty-heading">
                   <h2
                     id="feed-empty-heading"
-                    className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3"
+                    className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3"
                   >
                     Feed
                   </h2>
@@ -400,7 +400,7 @@ function NextBarCard(): JSX.Element | null {
 
   return (
     <section data-testid="next-bar-card">
-      <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+      <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
         Next Bar?
       </h2>
       <div className="flex items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-3">

@@ -230,7 +230,7 @@ export default function FeedComments({
             type="submit"
             data-testid="feed-comment-submit"
             aria-disabled={busy || draft.trim().length === 0}
-            className="min-h-[44px] min-w-[44px] shrink-0 rounded-2xl border border-border px-4 text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+            className="min-h-[44px] min-w-[44px] shrink-0 rounded-2xl border border-border px-4 text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
           >
             Send
           </button>

@@ -80,7 +80,7 @@ export default function CameraStage({
                 ? 'Switch to the front camera'
                 : 'Switch to the rear camera'
             }
-            className="min-h-[44px] px-4 rounded-2xl border border-border text-xs font-display uppercase tracking-widest text-muted touch-manipulation hover:border-accent hover:text-text transition-colors"
+            className="min-h-[44px] px-4 rounded-2xl border border-border text-xs font-label uppercase tracking-widest text-muted touch-manipulation hover:border-accent hover:text-text transition-colors"
           >
             {facing === 'environment' ? 'Front' : 'Rear'}
           </button>
@@ -88,7 +88,7 @@ export default function CameraStage({
         {stepLabel !== null ? (
           <span
             data-testid="camera-step"
-            className="rounded-2xl border border-accent px-3 py-1.5 text-[11px] font-display uppercase tracking-widest text-accent"
+            className="rounded-2xl border border-accent px-3 py-1.5 text-[11px] font-label uppercase tracking-widest text-accent"
           >
             {stepLabel}
           </span>
@@ -125,7 +125,7 @@ export default function CameraStage({
                   type="button"
                   data-testid="camera-retry"
                   onClick={camera.retry}
-                  className="min-h-[44px] px-4 rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+                  className="min-h-[44px] px-4 rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
                 >
                   Try again
                 </button>
@@ -134,7 +134,7 @@ export default function CameraStage({
                 type="button"
                 data-testid="camera-use-library"
                 onClick={onUseLibrary}
-                className="min-h-[44px] px-4 rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+                className="min-h-[44px] px-4 rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
               >
                 Choose from library
               </button>

@@ -101,9 +101,12 @@ export default function BottomNav(): JSX.Element | null {
                     // V9-10b: the nowrap pill made the five-tab row 394px wide at any viewport
                     // (measured: pill 123px = 75px text + 24px padding each side), so it
                     // overflowed 390px, 375px and 320px iPhones. The label now scales with the
-                    // viewport (13px from 383px up, 11px at 320px) and the padding is 16px.
+                    // viewport and the padding is 16px.
+                    // V10-01: the label role is Nunito Sans (font-label); the owner rejected the
+                    // serif on small uppercase text. The narrower face lets the floors rise
+                    // (12px at 320px, 14px from 389px) and still fit a 320px row.
                     'min-h-[60px] min-w-[84px] -mt-7 px-4 py-3 rounded-full whitespace-nowrap',
-                    'bg-accent text-bg font-display text-[clamp(11px,3.4vw,13px)] uppercase tracking-wide',
+                    'bg-accent text-bg font-label text-[clamp(12px,3.6vw,14px)] uppercase tracking-wide',
                     'shadow-lg shadow-accent/40 transition-transform active:scale-95',
                   ].join(' ')}
                 >
@@ -122,7 +125,7 @@ export default function BottomNav(): JSX.Element | null {
                 href={tab.href}
                 aria-current={active ? 'page' : undefined}
                 className={[
-                  'flex w-full flex-col items-center justify-center gap-1 min-h-[44px] px-1 py-1 touch-manipulation rounded-lg font-display text-[clamp(9px,2.9vw,11px)] uppercase tracking-wide transition-colors text-center whitespace-nowrap',
+                  'flex w-full flex-col items-center justify-center gap-1 min-h-[44px] px-1 py-1 touch-manipulation rounded-lg font-label text-[clamp(10px,3vw,12px)] uppercase tracking-wide transition-colors text-center whitespace-nowrap',
                   active
                     ? 'border border-accent/60 bg-accent/10 text-accent'
                     : 'border border-transparent text-muted',
@@ -133,7 +136,7 @@ export default function BottomNav(): JSX.Element | null {
                   {tab.href === '/friends' && requests.length > 0 ? (
                     <span
                       aria-label={`${requests.length} pending follow request${requests.length === 1 ? '' : 's'}`}
-                      className="absolute -top-2 -right-4 min-w-[16px] h-4 px-1 rounded-full bg-accent text-bg text-[10px] leading-4 font-display text-center"
+                      className="absolute -top-2 -right-4 min-w-[16px] h-4 px-1 rounded-full bg-accent text-bg text-[10px] leading-4 font-label text-center"
                     >
                       {requests.length > 9 ? '9+' : requests.length}
                     </span>

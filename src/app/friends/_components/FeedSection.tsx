@@ -332,7 +332,7 @@ export default function FeedSection({
     <section data-testid="friends-feed" aria-labelledby="feed-heading">
       <h2
         id="feed-heading"
-        className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3"
+        className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3"
       >
         Tonight
       </h2>
@@ -581,7 +581,7 @@ function FeedPostCard({
             <Link
               href={`/night-out/${post.nightShareToken}`}
               data-testid="feed-view-night"
-              className="flex-1 min-h-[44px] flex items-center justify-center rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+              className="flex-1 min-h-[44px] flex items-center justify-center rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
             >
               View night
             </Link>
@@ -591,7 +591,7 @@ function FeedPostCard({
             data-testid="feed-reply"
             aria-expanded={threadOpen}
             onClick={onToggleThread}
-            className="flex-1 min-h-[44px] rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+            className="flex-1 min-h-[44px] rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
           >
             Reply
           </button>
@@ -694,7 +694,7 @@ function MemoryCard({
             type="button"
             data-testid="feed-open-story"
             onClick={() => onOpenStory(author.id)}
-            className="flex-1 min-h-[44px] rounded-2xl border border-border text-xs font-display uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+            className="flex-1 min-h-[44px] rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
           >
             Open story
           </button>

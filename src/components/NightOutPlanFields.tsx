@@ -187,7 +187,7 @@ function isoOf(value: string): string | null {
 }
 
 const ROW = 'block w-full min-h-[44px] rounded-2xl border border-border bg-surface px-4 py-2 text-text touch-manipulation';
-const LABEL = 'block font-display text-xs uppercase tracking-[0.2em] text-muted mb-1';
+const LABEL = 'block font-label text-xs uppercase tracking-[0.2em] text-muted mb-1';
 
 export function useNightOutPlanFields({
   disabled = false,

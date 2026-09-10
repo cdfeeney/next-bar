@@ -27,7 +27,7 @@ export default function VibeVotePoll({
 
   return (
     <div className="mb-10" data-testid="vibe-vote-poll">
-      <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-1">
+      <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-1">
         Tonight&apos;s vibe
       </h2>
       {/* Copy deliberately avoids the literal phrase "Group Favorites" —

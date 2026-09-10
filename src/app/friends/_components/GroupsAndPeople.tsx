@@ -68,7 +68,7 @@ export default function GroupsAndPeople(): JSX.Element {
     >
       <h2
         id="groups-and-people-heading"
-        className="font-display text-xs uppercase tracking-[0.25em] text-muted"
+        className="font-label text-xs uppercase tracking-[0.25em] text-muted"
       >
         Groups &amp; people
       </h2>
@@ -76,7 +76,7 @@ export default function GroupsAndPeople(): JSX.Element {
       {/* Consent inbox (B3b) — only when non-empty, and never behind a tap. */}
       {isServer && requests.length > 0 ? (
         <div>
-          <h3 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+          <h3 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
             Requests · {requests.length}
           </h3>
           <div className="space-y-3">
@@ -139,7 +139,7 @@ export default function GroupsAndPeople(): JSX.Element {
       </Link>
 
       <div>
-        <h3 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+        <h3 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
           Find friends
         </h3>
         {isServer ? (
@@ -289,7 +289,7 @@ function GroupsSection({
       <section aria-labelledby="groups-heading" className="space-y-3">
         <h3
           id="groups-heading"
-          className="font-display text-xs uppercase tracking-[0.25em] text-muted"
+          className="font-label text-xs uppercase tracking-[0.25em] text-muted"
         >
           Groups
         </h3>
@@ -332,7 +332,7 @@ function GroupsSection({
     <section aria-labelledby="groups-heading" className="space-y-3">
       <h3
         id="groups-heading"
-        className="font-display text-xs uppercase tracking-[0.25em] text-muted"
+        className="font-label text-xs uppercase tracking-[0.25em] text-muted"
       >
         Groups
       </h3>

@@ -55,6 +55,10 @@ body::-webkit-scrollbar { display: none; }
    explicit font-* utilities still override). */
 @layer base {
   .font-display { font-weight: 600; }
+  /* V10-01: the label role (font-label = small uppercase labels, nav, chips) is
+     Nunito Sans at 600; the owner rejected the serif on small uppercase text.
+     600 is a loaded face, so nothing is synthesised. */
+  .font-label { font-weight: 600; }
 }
 html { scroll-behavior: smooth; }
 

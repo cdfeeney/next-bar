@@ -401,7 +401,7 @@ export default function BarLightbox({
 
         {rows ? (
           <div className="bg-surface border border-border rounded-2xl p-4">
-            <h3 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-3">
+            <h3 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
               Hours
             </h3>
             <table className="w-full text-sm">
@@ -426,7 +426,7 @@ export default function BarLightbox({
                     <td className="py-0.5">{r.hours}</td>
                     <td className="py-0.5 pr-2 text-right">
                       {r.isToday ? (
-                        <span className="inline-block rounded-full border border-accent px-2 py-0.5 text-[10px] font-display uppercase tracking-wider text-accent">
+                        <span className="inline-block rounded-full border border-accent px-2 py-0.5 text-[10px] font-label uppercase tracking-wider text-accent">
                           Today
                         </span>
                       ) : null}

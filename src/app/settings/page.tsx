@@ -93,7 +93,7 @@ export default function AccountPage(): JSX.Element {
         <section aria-labelledby="account-nights-heading" className="space-y-3">
           <h2
             id="account-nights-heading"
-            className="font-display text-[11px] uppercase tracking-[0.2em] text-muted px-1"
+            className="font-label text-[11px] uppercase tracking-[0.2em] text-muted px-1"
           >
             Nights Out
           </h2>

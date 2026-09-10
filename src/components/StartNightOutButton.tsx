@@ -1163,7 +1163,7 @@ export default function StartNightOutButton({
 
   return (
     <div className="mt-4 text-center">
-      <h2 className="font-display text-xs uppercase tracking-[0.25em] text-muted mb-1 text-left">
+      <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-1 text-left">
         Plan details
       </h2>
       {planFields.fields}
