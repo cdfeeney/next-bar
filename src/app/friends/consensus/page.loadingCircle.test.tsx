@@ -93,7 +93,7 @@ vi.mock('@/lib/nightOuts.server', () => ({
 import ConsensusPage from '@/app/friends/consensus/page';
 
 const startButton = (): HTMLButtonElement =>
-  screen.getByRole('button', { name: /start the official night out/i });
+  screen.getByRole('button', { name: /create the night out/i });
 
 describe('ConsensusPage — starting a night out while follows load', () => {
   beforeEach(() => {
