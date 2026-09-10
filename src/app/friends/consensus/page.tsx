@@ -444,6 +444,7 @@ function ConsensusContent(): JSX.Element {
           inviteeIds={inviteeIds}
           inviteeGroupByUser={inviteeGroupByUser}
           shortlistBarIds={isServer ? shortlist : []}
+          labelFor={(id) => recipientPeople.find((p) => p.id === id)?.label ?? barById(id)?.name}
           onBusyChange={setCreating}
           disabled={followsLoading || !circleReady || membersLoading}
         >

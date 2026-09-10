@@ -452,6 +452,7 @@ export default function StartNightOutButton({
   inviteeIds = [],
   inviteeGroupByUser = {},
   shortlistBarIds = [],
+  labelFor,
   children,
   onBusyChange,
   disabled = false,
@@ -469,6 +470,13 @@ export default function StartNightOutButton({
    * the tap like the guest list.
    */
   shortlistBarIds?: readonly string[];
+  /**
+   * V9-05: a display name for an invitee id or a bar id, so the partial-failure
+   * outcome can say WHO and WHICH bar did not send rather than how many
+   * (cycle-2 round-1 panel, Codex MEDIUM). Falls back to counts for an id it
+   * cannot name.
+   */
+  labelFor?: (id: string) => string | undefined;
   /**
    * V9-05 flow order: plan details → recipients → suggested bars → ONE primary
    * action at the bottom. The rows render first, the caller's sections (people,
@@ -832,7 +840,9 @@ export default function StartNightOutButton({
    */
   const retryUnsent = async (): Promise<void> => {
     const supabase = getBrowserSupabase();
-    if (!supabase || createdPlanId === null || userId === null || retrying) return;
+    // `busy` too, not only the disabled attribute: a programmatic click during
+    // the create sequence must not overlap it (see the render-time guard).
+    if (!supabase || createdPlanId === null || userId === null || retrying || busy) return;
     const owner = userId;
     setRetrying(true);
     try {
@@ -1128,12 +1138,26 @@ export default function StartNightOutButton({
   };
 
   const guestCount = inviteeIds.filter((id) => UUID_RE.test(id)).length;
+  /**
+   * WHO and WHICH, when the caller can name them; counts otherwise. The ids
+   * are what the retry re-sends, so the sentence and the retry always agree.
+   */
+  const named = (ids: readonly string[]): string | null => {
+    const names = ids.map((id) => labelFor?.(id)).filter((n): n is string => !!n);
+    return names.length === ids.length && names.length > 0 ? names.join(', ') : null;
+  };
+  const inviteNames = named(failedInviteIds);
+  const barNames = named(failedBarIds);
   const unsent = [
     inviteFailures > 0
-      ? `${inviteFailures} ${inviteFailures === 1 ? 'invite' : 'invites'}`
+      ? inviteNames !== null
+        ? `${inviteFailures === 1 ? 'the invite to' : 'invites to'} ${inviteNames}`
+        : `${inviteFailures} ${inviteFailures === 1 ? 'invite' : 'invites'}`
       : null,
     failedBarIds.length > 0
-      ? `${failedBarIds.length} shortlist ${failedBarIds.length === 1 ? 'bar' : 'bars'}`
+      ? barNames !== null
+        ? `the shortlist ${failedBarIds.length === 1 ? 'bar' : 'bars'} ${barNames}`
+        : `${failedBarIds.length} shortlist ${failedBarIds.length === 1 ? 'bar' : 'bars'}`
       : null,
   ].filter((part): part is string => part !== null);
 
@@ -1168,7 +1192,14 @@ export default function StartNightOutButton({
           Couldn&apos;t start it — try again.
         </p>
       ) : null}
-      {unsent.length > 0 ? (
+      {/* NOT while `busy` (cycle-2 round-1 panel, Codex HIGH / Fable MEDIUM):
+          `failedInviteIds` is published the moment the invitations settle,
+          while the shortlist and the follow-up read are still in flight. A
+          retry tapped in that window succeeded with `openToken` still null,
+          and the create sequence then held the screen on its own stale
+          `failed.length` — leaving no message, no Retry and no Open it, with
+          Create disabled. The outcome is a report on a FINISHED sequence. */}
+      {unsent.length > 0 && !busy ? (
         <div className="mt-2" data-testid="unsent-outcome">
           <p className="text-sm text-red-400" role="status">
             Your night out was created, but {unsent.join(' and ')} didn&apos;t
@@ -1177,7 +1208,7 @@ export default function StartNightOutButton({
           <button
             type="button"
             onClick={() => void retryUnsent()}
-            disabled={retrying}
+            disabled={retrying || busy}
             className="mt-2 rounded-full border border-accent px-5 py-2 text-sm text-accent min-h-[44px] touch-manipulation disabled:opacity-50"
           >
             {retrying ? 'Retrying…' : "Retry what didn't send"}

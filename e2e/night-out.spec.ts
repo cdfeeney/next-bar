@@ -2313,6 +2313,10 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       const body = route.request().postDataJSON() as { p_night_out: string; p_bar: string };
       expect(body.p_night_out).toBe(PLAN_ID);
       suggested.push(body.p_bar);
+      // Slow on purpose: the invite has already failed by now, and the outcome
+      // panel must NOT offer a retry while the create sequence is still in
+      // flight (cycle-2 round-1 panel, Codex HIGH) — see the assertion below.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
       await fulfillJson(200, true)(route);
     });
 
@@ -2339,9 +2343,15 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await expect(page.getByRole('button', { name: /^Remove Attaboy from the shortlist/ })).toBeVisible();
 
     await action.click();
+    // While the sequence is still running (the suggest fixture is slow), the
+    // refused invite is already known but no retry may be offered yet.
+    await expect(action).toHaveText(/Creating/);
+    await expect.poll(() => invites.length).toBe(1);
+    await expect(page.getByTestId('unsent-outcome')).toHaveCount(0);
     // Created once; the shortlist reached the board; the refused invite HOLDS
     // the screen instead of navigating, and says exactly what did not send.
-    await expect(page.getByTestId('unsent-outcome')).toContainText(/1 invite didn't send/);
+    // Names, not counts: the organizer is told WHO did not get the invite.
+    await expect(page.getByTestId('unsent-outcome')).toContainText(/the invite to Sam Ruiz didn't send/);
     expect(createCalls).toBe(1);
     expect(suggested).toEqual(['attaboy']);
     expect(invites).toEqual([FRIEND_ID]);
