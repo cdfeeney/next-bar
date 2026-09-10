@@ -90,7 +90,7 @@ export default function BottomNav(): JSX.Element | null {
           // row and read as always-selected).
           if (tab.primary && active) {
             return (
-              <li key={tab.href} className="flex">
+              <li key={tab.href} className="flex flex-none">
                 <Link
                   href={tab.href}
                   aria-current="page"
@@ -98,8 +98,12 @@ export default function BottomNav(): JSX.Element | null {
                     'flex flex-col items-center justify-center text-center touch-manipulation',
                     // whitespace-nowrap: in Playfair Display (wider than Poppins, uppercase +
                     // tracking) the label wrapped to two lines on iPhone 13 (V9-11 capture).
-                    'min-h-[60px] min-w-[84px] -mt-7 px-6 py-3 rounded-full whitespace-nowrap',
-                    'bg-accent text-bg font-display text-[13px] uppercase tracking-wider',
+                    // V9-10b: the nowrap pill made the five-tab row 394px wide at any viewport
+                    // (measured: pill 123px = 75px text + 24px padding each side), so it
+                    // overflowed 390px, 375px and 320px iPhones. The label now scales with the
+                    // viewport (13px from 383px up, 11px at 320px) and the padding is 16px.
+                    'min-h-[60px] min-w-[84px] -mt-7 px-4 py-3 rounded-full whitespace-nowrap',
+                    'bg-accent text-bg font-display text-[clamp(11px,3.4vw,13px)] uppercase tracking-wide',
                     'shadow-lg shadow-accent/40 transition-transform active:scale-95',
                   ].join(' ')}
                 >
@@ -109,13 +113,16 @@ export default function BottomNav(): JSX.Element | null {
             );
           }
 
+          // V9-10b: plain tabs share the remaining width equally (flex-1, min-w-0)
+          // instead of sizing to their label; the label scales 9px–11px with the
+          // viewport so RANKINGS / ACCOUNT fit a 320px row next to the pill.
           return (
-            <li key={tab.href} className="flex">
+            <li key={tab.href} className="flex flex-1 min-w-0">
               <Link
                 href={tab.href}
                 aria-current={active ? 'page' : undefined}
                 className={[
-                  'flex flex-col items-center justify-center gap-1 min-h-[44px] min-w-[56px] px-2 py-1 touch-manipulation rounded-lg font-display text-[11px] uppercase tracking-wider transition-colors text-center',
+                  'flex w-full flex-col items-center justify-center gap-1 min-h-[44px] px-1 py-1 touch-manipulation rounded-lg font-display text-[clamp(9px,2.9vw,11px)] uppercase tracking-wide transition-colors text-center whitespace-nowrap',
                   active
                     ? 'border border-accent/60 bg-accent/10 text-accent'
                     : 'border border-transparent text-muted',

@@ -359,4 +359,46 @@ test.describe('mobile controls are reachable', () => {
       );
     }
   });
+
+  // V9-10b: the five-tab row has to fit COMPACT iPhones, not just the two
+  // device projects (390 / 412 px). With Playfair Display (wider than Poppins,
+  // uppercase + tracking) the centre pill's whitespace-nowrap left the row at
+  // min-content width, which overflowed at 375 px (12/13 mini, SE 2/3) and
+  // 320 px (SE 1st gen) and clipped the ACCOUNT label. `/` renders the raised
+  // pill (widest row); `/map` renders the plain five-tab row.
+  for (const width of [375, 320]) {
+    for (const route of ['/', '/map']) {
+      test(`bottom nav fits a ${width}px viewport on ${route}`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 667 });
+        await page.goto(route);
+        const nav = page.getByRole('navigation', { name: /primary/i });
+        await expect(nav).toBeVisible();
+
+        const row = await nav.locator('ul').evaluate((ul) => ({
+          scrollWidth: ul.scrollWidth,
+          clientWidth: ul.clientWidth,
+          innerWidth: window.innerWidth,
+        }));
+        expect(
+          row.scrollWidth,
+          `nav row overflows: scrollWidth ${row.scrollWidth} > viewport ${row.innerWidth}`,
+        ).toBeLessThanOrEqual(row.innerWidth);
+
+        const tabs = nav.getByRole('link');
+        expect(await tabs.count()).toBe(5);
+        for (let i = 0; i < 5; i++) {
+          const box = await tabs.nth(i).boundingBox();
+          expect(box, `nav tab ${i} has no box`).not.toBeNull();
+          expect(box!.x, `nav tab ${i} starts left of the viewport`).toBeGreaterThanOrEqual(-1);
+          expect(
+            box!.x + box!.width,
+            `nav tab ${i} ends past the ${width}px viewport`,
+          ).toBeLessThanOrEqual(width + 1);
+          expect(box!.height, `nav tab ${i} is under ${MIN_TAP_PX}px`).toBeGreaterThanOrEqual(
+            MIN_TAP_PX - 1,
+          );
+        }
+      });
+    }
+  }
 });

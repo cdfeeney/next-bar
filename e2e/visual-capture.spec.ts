@@ -55,4 +55,25 @@ test.describe('V9-11 visual evidence capture', () => {
       console.log(`[visual-capture] ${file} fonts=${JSON.stringify(fonts)}`);
     });
   }
+
+  // V9-10b: the bottom nav at the compact widths the device projects never
+  // exercise (320 = SE 1st gen, 375 = 12/13 mini and SE 2/3, 390 = iPhone 13),
+  // with the raised pill (`/`) and without it (`/map`). Nav-only crops, so a
+  // reviewer compares five labels, not seven full pages.
+  for (const width of [320, 375, 390]) {
+    for (const [name, route] of [['home', '/'], ['map', '/map']] as const) {
+      test(`capture nav ${width}px ${name}`, async ({ page }, testInfo) => {
+        await page.setViewportSize({ width, height: 667 });
+        await page.goto(route);
+        const nav = page.getByRole('navigation', { name: /primary/i });
+        await expect(nav).toBeVisible({ timeout: 20_000 });
+        await page.evaluate(async () => {
+          await (document as Document & { fonts: FontFaceSet }).fonts.ready;
+        });
+        const file = path.join(OUT as string, 'nav', `nav-${width}--${name}--${testInfo.project.name.replace(/\s+/g, '-')}.png`);
+        await nav.screenshot({ path: file });
+        console.log(`[visual-capture] ${file}`);
+      });
+    }
+  }
 });
