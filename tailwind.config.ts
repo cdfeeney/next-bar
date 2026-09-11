@@ -35,13 +35,12 @@ const config: Config = {
       // Brand kit 2026-07-23: Poppins everywhere (Bold headlines via
       // .font-display weight rule in globals.css; Regular body).
       fontFamily: {
-        display: ['var(--font-display)', 'Georgia', 'serif'],
-        sans: ['var(--font-sans)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-        // V10-01 label role: small uppercase labels (nav, section labels, chips,
-        // 12px-and-under buttons) use the body face; weight lives in globals.css.
-        label: ['var(--font-sans)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-        // V10-06: bottom-nav face only - the V8 Poppins look the owner asked back.
-        nav: ['var(--font-nav)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        // V10-07: the V8 Poppins kit for every role (owner, 2026-09-11). The four
+        // token names stay so no component changes; weights are in globals.css.
+        display: ['var(--font-poppins)', 'ui-sans-serif', 'sans-serif'],
+        sans: ['var(--font-poppins)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        label: ['var(--font-poppins)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        nav: ['var(--font-poppins)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
     },
   },

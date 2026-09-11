@@ -1,5 +1,10 @@
 # V9-11 — typography contract (Playfair Display + Nunito Sans)
 
+> **SUPERSEDED 2026-09-11 (V10-07).** The owner rejected the Playfair + Nunito Sans pair on the phone (TestFlight
+> builds 10–12) and asked for the V8 look back. The app now loads ONE face, **Poppins 400/500/600/700**, and the
+> four tokens (`font-display`, `font-sans`, `font-label`, `font-nav`) all resolve to it — display/label/nav at 700,
+> body at 400. `e2e/typography-contract.spec.ts` asserts that. The role table below is kept for history only.
+
 Owner decision 2026-09-08: the approved pair is **Playfair Display** for display/headings and **Nunito Sans** for
 body. Artifact `ee5913e` (release/v8, 2026-09-03), cherry-picked onto this candidate. This file is the contract the
 e2e `typography-contract.spec.ts` enforces; change both together.

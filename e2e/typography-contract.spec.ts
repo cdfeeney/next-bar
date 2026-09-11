@@ -17,13 +17,14 @@ import { denyGeolocation } from './helpers/geo';
 
 type LoadedFace = { family: string; weight: string; status: string };
 
-const DISPLAY = /^__Playfair_Display/;
-const BODY = /^__Nunito_Sans/;
-// V10-06: the bottom nav alone renders the V8 face, Poppins Bold.
+// V10-07 (owner, 2026-09-11): the V8 Poppins kit for every role. One family;
+// the role tokens differ only in weight.
+const DISPLAY = /^__Poppins/;
+const BODY = /^__Poppins/;
 const NAV = /^__Poppins/;
 const NAV_WEIGHTS = ['700'];
-const DISPLAY_WEIGHTS = ['600', '700'];
-const BODY_WEIGHTS = ['400', '600', '700'];
+const DISPLAY_WEIGHTS = ['700'];
+const BODY_WEIGHTS = ['400', '500', '600', '700'];
 
 async function loadedFaces(page: import('@playwright/test').Page): Promise<LoadedFace[]> {
   return page.evaluate(async () => {
@@ -73,20 +74,20 @@ for (const route of ['/', '/rankings', '/map']) {
     // asserted per rendered (family, weight) below, which is also the synthetic
     // weight check: a rendered weight with no loaded face of that weight is
     // being faked by the engine.
-    for (const w of DISPLAY_WEIGHTS) expect(faces.some((f) => DISPLAY.test(f.family) && f.weight === w), `Playfair Display ${w} declared`).toBe(true);
-    for (const w of BODY_WEIGHTS) expect(faces.some((f) => BODY.test(f.family) && f.weight === w), `Nunito Sans ${w} declared`).toBe(true);
+    for (const w of BODY_WEIGHTS) expect(faces.some((f) => BODY.test(f.family) && f.weight === w), `Poppins ${w} declared`).toBe(true);
+    expect(faces.filter((f) => /Playfair|Nunito/i.test(f.family))).toHaveLength(0);
     for (const w of NAV_WEIGHTS) expect(faces.some((f) => NAV.test(f.family) && f.weight === w), `Poppins ${w} declared`).toBe(true);
     // (V9-11 asserted Poppins gone; V10-06 brings it back for the nav only.)
     const loaded = faces.filter((f) => f.status === 'loaded');
-    expect(loaded.some((f) => DISPLAY.test(f.family)), 'a Playfair Display face is loaded').toBe(true);
-    expect(loaded.some((f) => BODY.test(f.family)), 'a Nunito Sans face is loaded').toBe(true);
+    expect(loaded.some((f) => BODY.test(f.family)), 'a Poppins face is loaded').toBe(true);
 
-    // Roles: body text is Nunito Sans; display text is Playfair Display.
+    // Roles: body and display are both Poppins; display resolves to 700.
     const body = await page.locator('body').evaluate((el) => getComputedStyle(el).fontFamily);
     expect(body).toMatch(BODY);
     const display = page.locator('.font-display').first();
     await expect(display).toBeVisible();
     expect(await display.evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(DISPLAY);
+    expect(await display.evaluate((el) => getComputedStyle(el).fontWeight)).toBe('700');
     // V10-06: the bottom nav is the V8 face, Poppins Bold uppercase (owner,
     // build 11); every nav tab carries font-nav.
     const tabs = page.getByRole('navigation', { name: /primary/i }).getByRole('link');
@@ -102,8 +103,7 @@ for (const route of ['/', '/rankings', '/map']) {
       expect(cs.weight, `nav tab ${i} weight`).toBe('700');
       expect(cs.transform, `nav tab ${i} transform`).toBe('uppercase');
     }
-    // No small uppercase text is left on the display face: any element that is
-    // uppercase and 12px or under must resolve to Nunito Sans.
+    // Every small uppercase label resolves to Poppins (no fallback face).
     const smallSerif = await page.evaluate(() => {
       const out: string[] = [];
       for (const el of Array.from(document.body.querySelectorAll<HTMLElement>('*'))) {
@@ -111,7 +111,7 @@ for (const route of ['/', '/rankings', '/map']) {
         if (!hasText || el.closest('.leaflet-container')) continue;
         const c = getComputedStyle(el);
         if (c.display === 'none' || c.visibility === 'hidden') continue;
-        if (c.textTransform === 'uppercase' && parseFloat(c.fontSize) <= 12 && /^"?__Playfair/.test(c.fontFamily)) {
+        if (c.textTransform === 'uppercase' && parseFloat(c.fontSize) <= 12 && !/^"?__Poppins/.test(c.fontFamily)) {
           out.push(`${el.tagName.toLowerCase()} ${c.fontSize} "${(el.textContent ?? '').trim().slice(0, 30)}"`);
         }
       }

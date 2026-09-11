@@ -54,12 +54,11 @@ body::-webkit-scrollbar { display: none; }
    font-display sets the family only, so the weight belongs here (base layer —
    explicit font-* utilities still override). */
 @layer base {
-  .font-display { font-weight: 600; }
-  /* V10-01: the label role (font-label = small uppercase labels, nav, chips) is
-     Nunito Sans at 600; the owner rejected the serif on small uppercase text.
-     600 is a loaded face, so nothing is synthesised. */
-  .font-label { font-weight: 600; }
-  /* V10-06: bottom nav = Poppins Bold, the V8 nav weight. */
+  /* V10-07: Poppins kit weights (brand kit 2026-07-23): headings and the
+     small uppercase labels/nav are Bold, body is Regular via the body
+     class. Explicit font-* utilities still override. */
+  .font-display { font-weight: 700; }
+  .font-label { font-weight: 700; }
   .font-nav { font-weight: 700; }
 }
 html { scroll-behavior: smooth; }
