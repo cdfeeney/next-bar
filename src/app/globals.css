@@ -59,6 +59,8 @@ body::-webkit-scrollbar { display: none; }
      Nunito Sans at 600; the owner rejected the serif on small uppercase text.
      600 is a loaded face, so nothing is synthesised. */
   .font-label { font-weight: 600; }
+  /* V10-06: bottom nav = Poppins Bold, the V8 nav weight. */
+  .font-nav { font-weight: 700; }
 }
 html { scroll-behavior: smooth; }
 

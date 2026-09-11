@@ -102,11 +102,11 @@ export default function BottomNav(): JSX.Element | null {
                     // (measured: pill 123px = 75px text + 24px padding each side), so it
                     // overflowed 390px, 375px and 320px iPhones. The label now scales with the
                     // viewport and the padding is 16px.
-                    // V10-01: the label role is Nunito Sans (font-label); the owner rejected the
-                    // serif on small uppercase text. The narrower face lets the floors rise
-                    // (12px at 320px, 14px from 389px) and still fit a 320px row.
-                    'min-h-[60px] min-w-[84px] -mt-7 px-4 py-3 rounded-full whitespace-nowrap',
-                    'bg-accent text-bg font-label text-[clamp(12px,3.6vw,14px)] uppercase tracking-wide',
+                    // V10-06 (owner, build 11): back to the V8 nav face - Poppins Bold
+                    // uppercase, 13px at phone width (11px floor at 320px). Measured: Poppins
+                    // Bold is wide, so tracking-wide (not wider) and 12px side padding.
+                    'min-h-[60px] min-w-[84px] -mt-7 px-3 py-3 rounded-full whitespace-nowrap',
+                    'bg-accent text-bg font-nav text-[clamp(11px,3.4vw,13px)] uppercase tracking-wide',
                     'shadow-lg shadow-accent/40 transition-transform active:scale-95',
                   ].join(' ')}
                 >
@@ -117,26 +117,33 @@ export default function BottomNav(): JSX.Element | null {
           }
 
           // V9-10b: plain tabs share the remaining width equally (flex-1, min-w-0)
-          // instead of sizing to their label; the label scales 9px–11px with the
-          // viewport so RANKINGS / ACCOUNT fit a 320px row next to the pill.
+          // instead of sizing to their label; the label scales with the viewport so
+          // RANKINGS / ACCOUNT fit a 320px row next to the pill. V10-06: the V8 face
+          // (Poppins Bold, 11px at phone width, 9px floor at 320px), and the active
+          // highlight sits on the LABEL, not the slot - on build 11 the slot-sized box
+          // ran flush into the screen edge on ACCOUNT and read as broken. (No row
+          // padding: Poppins Bold + 8px each side overflowed 320px by 3px.)
           return (
             <li key={tab.href} className="flex flex-1 min-w-0">
               <Link
                 href={tab.href}
                 aria-current={active ? 'page' : undefined}
                 className={[
-                  'flex w-full flex-col items-center justify-center gap-1 min-h-[44px] px-1 py-1 touch-manipulation rounded-lg font-label text-[clamp(10px,3vw,12px)] uppercase tracking-wide transition-colors text-center whitespace-nowrap',
-                  active
-                    ? 'border border-accent/60 bg-accent/10 text-accent'
-                    : 'border border-transparent text-muted',
+                  'flex w-full flex-col items-center justify-center gap-1 min-h-[44px] px-1 py-1 touch-manipulation font-nav text-[clamp(9px,2.9vw,11px)] uppercase tracking-wide transition-colors text-center whitespace-nowrap',
+                  active ? 'text-accent' : 'text-muted',
                 ].join(' ')}
               >
-                <span className="relative">
+                <span
+                  className={[
+                    'relative rounded-lg border px-0.5 py-1',
+                    active ? 'border-accent/60 bg-accent/10' : 'border-transparent',
+                  ].join(' ')}
+                >
                   {tab.label}
                   {tab.href === '/friends' && requests.length > 0 ? (
                     <span
                       aria-label={`${requests.length} pending follow request${requests.length === 1 ? '' : 's'}`}
-                      className="absolute -top-2 -right-4 min-w-[16px] h-4 px-1 rounded-full bg-accent text-bg text-[10px] leading-4 font-label text-center"
+                      className="absolute -top-2 -right-4 min-w-[16px] h-4 px-1 rounded-full bg-accent text-bg text-[10px] leading-4 font-nav text-center"
                     >
                       {requests.length > 9 ? '9+' : requests.length}
                     </span>

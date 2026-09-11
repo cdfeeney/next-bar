@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-import { Playfair_Display, Nunito_Sans } from 'next/font/google';
+import { Playfair_Display, Nunito_Sans, Poppins } from 'next/font/google';
 import './globals.css';
 import 'leaflet/dist/leaflet.css';
 import AgeGate from '@/components/AgeGate';
@@ -44,6 +44,16 @@ const nunitoSans = Nunito_Sans({
   variable: '--font-sans',
   adjustFontFallback: false,
   fallback: ['system-ui', 'Segoe UI', 'Helvetica Neue', 'Arial', 'sans-serif'],
+});
+
+// V10-06 (owner, build 11, 2026-09-10): the bottom nav goes back to the V8
+// face - Poppins Bold uppercase - which is what the owner liked. Loaded at the
+// one weight the nav uses; nothing else in the app renders Poppins.
+const poppinsNav = Poppins({
+  subsets: ['latin'],
+  weight: ['700'],
+  display: 'swap',
+  variable: '--font-nav',
 });
 
 const siteUrl =
@@ -95,7 +105,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={`${playfair.variable} ${nunitoSans.variable}`}>
+    <html lang="en" className={`${playfair.variable} ${nunitoSans.variable} ${poppinsNav.variable}`}>
       <body className="bg-bg text-text font-sans antialiased pb-[calc(64px+env(safe-area-inset-bottom))]">
         {children}
         <BottomNav />

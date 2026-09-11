@@ -19,6 +19,9 @@ type LoadedFace = { family: string; weight: string; status: string };
 
 const DISPLAY = /^__Playfair_Display/;
 const BODY = /^__Nunito_Sans/;
+// V10-06: the bottom nav alone renders the V8 face, Poppins Bold.
+const NAV = /^__Poppins/;
+const NAV_WEIGHTS = ['700'];
 const DISPLAY_WEIGHTS = ['600', '700'];
 const BODY_WEIGHTS = ['400', '600', '700'];
 
@@ -72,7 +75,8 @@ for (const route of ['/', '/rankings', '/map']) {
     // being faked by the engine.
     for (const w of DISPLAY_WEIGHTS) expect(faces.some((f) => DISPLAY.test(f.family) && f.weight === w), `Playfair Display ${w} declared`).toBe(true);
     for (const w of BODY_WEIGHTS) expect(faces.some((f) => BODY.test(f.family) && f.weight === w), `Nunito Sans ${w} declared`).toBe(true);
-    expect(faces.filter((f) => /Poppins/i.test(f.family))).toHaveLength(0);
+    for (const w of NAV_WEIGHTS) expect(faces.some((f) => NAV.test(f.family) && f.weight === w), `Poppins ${w} declared`).toBe(true);
+    // (V9-11 asserted Poppins gone; V10-06 brings it back for the nav only.)
     const loaded = faces.filter((f) => f.status === 'loaded');
     expect(loaded.some((f) => DISPLAY.test(f.family)), 'a Playfair Display face is loaded').toBe(true);
     expect(loaded.some((f) => BODY.test(f.family)), 'a Nunito Sans face is loaded').toBe(true);
@@ -83,19 +87,19 @@ for (const route of ['/', '/rankings', '/map']) {
     const display = page.locator('.font-display').first();
     await expect(display).toBeVisible();
     expect(await display.evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(DISPLAY);
-    // V10-01 label role: small uppercase labels (the bottom nav first of all)
-    // are Nunito Sans 600, never the serif. Every nav tab carries font-label.
+    // V10-06: the bottom nav is the V8 face, Poppins Bold uppercase (owner,
+    // build 11); every nav tab carries font-nav.
     const tabs = page.getByRole('navigation', { name: /primary/i }).getByRole('link');
     expect(await tabs.count()).toBe(5);
     for (let i = 0; i < 5; i++) {
       const tab = tabs.nth(i);
-      expect(await tab.evaluate((el) => el.classList.contains('font-label')), `nav tab ${i} carries font-label`).toBe(true);
+      expect(await tab.evaluate((el) => el.classList.contains('font-nav')), `nav tab ${i} carries font-nav`).toBe(true);
       const cs = await tab.evaluate((el) => {
         const c = getComputedStyle(el);
         return { family: c.fontFamily, weight: c.fontWeight, transform: c.textTransform };
       });
-      expect(cs.family, `nav tab ${i} family`).toMatch(BODY);
-      expect(cs.weight, `nav tab ${i} weight`).toBe('600');
+      expect(cs.family, `nav tab ${i} family`).toMatch(NAV);
+      expect(cs.weight, `nav tab ${i} weight`).toBe('700');
       expect(cs.transform, `nav tab ${i} transform`).toBe('uppercase');
     }
     // No small uppercase text is left on the display face: any element that is
@@ -119,11 +123,11 @@ for (const route of ['/', '/rankings', '/map']) {
     // declared at that weight AND loaded.
     const rendered = await renderedTypography(page);
     const offenders = rendered.filter((r) =>
-      (DISPLAY.test(r.family) || BODY.test(r.family)) &&
+      (DISPLAY.test(r.family) || BODY.test(r.family) || NAV.test(r.family)) &&
       !loaded.some((f) => f.family === r.family && f.weight === r.weight));
     expect(offenders, JSON.stringify(offenders)).toEqual([]);
     // And nothing on the page fell through to a system face.
-    const foreign = rendered.filter((r) => !DISPLAY.test(r.family) && !BODY.test(r.family));
+    const foreign = rendered.filter((r) => !DISPLAY.test(r.family) && !BODY.test(r.family) && !NAV.test(r.family));
     expect(foreign, JSON.stringify(foreign)).toEqual([]);
   });
 }

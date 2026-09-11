@@ -40,6 +40,8 @@ const config: Config = {
         // V10-01 label role: small uppercase labels (nav, section labels, chips,
         // 12px-and-under buttons) use the body face; weight lives in globals.css.
         label: ['var(--font-sans)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        // V10-06: bottom-nav face only - the V8 Poppins look the owner asked back.
+        nav: ['var(--font-nav)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
     },
   },
