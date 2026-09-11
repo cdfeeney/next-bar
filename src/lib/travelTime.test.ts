@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { directionsHref, matchesTravelBand, isWalkable, leadCopy, routeCopy } from '@/lib/travelTime';
+import { directionsHref, matchesTravelBand, isWalkable, routeCopy } from '@/lib/travelTime';
 
 describe('street route display', () => {
   it('uses raw seconds for Walkable and never rounds a longer walk down to 15', () => {
@@ -14,8 +14,6 @@ describe('street route display', () => {
     expect(isWalkable({ seconds: NaN, meters: 20 })).toBe(false);
     expect(routeCopy(null, 'walking')).toBe('Walk time unavailable');
     expect(routeCopy(undefined, 'driving')).toBe('Drive time unavailable');
-    expect(leadCopy(0.7).text).toBe('0.7 mi straight-line');
-    expect(leadCopy(null, 'Chelsea').text).toBe('In Chelsea');
   });
   it('pins Maps to the same coordinates and explicit mode, without name ambiguity', () => {
     const origin = { lat: 40.75, lng: -74 };

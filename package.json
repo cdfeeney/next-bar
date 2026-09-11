@@ -13,6 +13,7 @@
     "test:e2e:dev": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:release": "node scripts/run-e2e-release.mjs",
+    "test:e2e:preship": "node scripts/run-e2e-release.mjs e2e/app-shell-smoke.spec.ts e2e/mobile-controls.spec.ts e2e/typography-contract.spec.ts e2e/a11y-mobile.spec.ts e2e/native-shell-contract.spec.ts e2e/rating-and-nav.spec.ts e2e/visual-capture.spec.ts",
     "db:migrate": "tsx scripts/apply-migrations.ts",
     "db:bootstrap": "tsx scripts/apply-migrations.ts --bootstrap",
     "check:migrations": "tsx scripts/check-migration-ledger.ts",

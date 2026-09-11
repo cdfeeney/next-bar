@@ -40,7 +40,7 @@ test.describe('Home — location-first', () => {
     ).toBeVisible({ timeout: 15_000 });
   });
 
-  test('bottom nav shows an enlarged Next Bar? action in the center', async ({
+  test('bottom nav keeps Next Bar? in the center and marks it current on /', async ({
     page,
   }) => {
     await denyGeolocation(page.context());
@@ -58,11 +58,10 @@ test.describe('Home — location-first', () => {
     await expect(links.nth(3)).toHaveText(/Social/i);
     await expect(links.nth(4)).toHaveText(/Account/i);
 
-    // The center action is visibly enlarged vs a sibling tab.
-    const primaryBox = await links.nth(2).boundingBox();
-    const siblingBox = await links.nth(0).boundingBox();
-    expect(primaryBox && siblingBox).toBeTruthy();
-    expect(primaryBox!.height).toBeGreaterThan(siblingBox!.height);
+    // V10-08: HIG tab bar - five equal slots, no raised pill. The current tab
+    // is marked by aria-current + tint, not by size.
+    await expect(links.nth(2)).toHaveAttribute('aria-current', 'page');
+    await expect(links.nth(0)).not.toHaveAttribute('aria-current', 'page');
 
     // And it routes home.
     await links.nth(2).click();

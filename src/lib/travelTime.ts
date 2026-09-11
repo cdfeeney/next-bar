@@ -45,15 +45,6 @@ export function routeCopy(route: RouteEstimate | null | undefined, mode: TravelM
   // Round up so a 901-second walk never displays as a 15-minute walk.
   return `${label} ~${Math.max(1, Math.ceil(route.seconds / 60))} min · ${(route.meters / 1609.344).toFixed(1)} mi`;
 }
-/** Non-routed surfaces must not turn straight-line distance into an ETA. */
-export function leadCopy(miles: number | null, neighborhood?: string): {
-  kind: 'distance' | 'neighborhood'; text: string;
-} {
-  if (miles !== null && Number.isFinite(miles) && miles >= 0) {
-    return { kind: 'distance', text: `${miles.toFixed(1)} mi straight-line` };
-  }
-  return { kind: 'neighborhood', text: neighborhood ? `In ${neighborhood}` : 'Pick a neighborhood' };
-}
 /** Private directions only. Public share links deliberately do not call this. */
 export function directionsHref(origin: Coords | undefined, destination: Coords, mode: TravelMode): string {
   const params = new URLSearchParams({ api: '1', destination: `${destination.lat},${destination.lng}`, travelmode: mode });

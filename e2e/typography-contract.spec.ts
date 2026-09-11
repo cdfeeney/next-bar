@@ -88,8 +88,8 @@ for (const route of ['/', '/rankings', '/map']) {
     await expect(display).toBeVisible();
     expect(await display.evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(DISPLAY);
     expect(await display.evaluate((el) => getComputedStyle(el).fontWeight)).toBe('700');
-    // V10-06: the bottom nav is the V8 face, Poppins Bold uppercase (owner,
-    // build 11); every nav tab carries font-nav.
+    // V10-08: the bottom nav is the HIG tab bar - Poppins 600 sentence-case 10px
+    // labels under glyphs; every nav tab carries font-nav.
     const tabs = page.getByRole('navigation', { name: /primary/i }).getByRole('link');
     expect(await tabs.count()).toBe(5);
     for (let i = 0; i < 5; i++) {
@@ -100,8 +100,8 @@ for (const route of ['/', '/rankings', '/map']) {
         return { family: c.fontFamily, weight: c.fontWeight, transform: c.textTransform };
       });
       expect(cs.family, `nav tab ${i} family`).toMatch(NAV);
-      expect(cs.weight, `nav tab ${i} weight`).toBe('700');
-      expect(cs.transform, `nav tab ${i} transform`).toBe('uppercase');
+      expect(cs.weight, `nav tab ${i} weight`).toBe('600');
+      expect(cs.transform, `nav tab ${i} transform`).toBe('none');
     }
     // Every small uppercase label resolves to Poppins (no fallback face).
     const smallSerif = await page.evaluate(() => {

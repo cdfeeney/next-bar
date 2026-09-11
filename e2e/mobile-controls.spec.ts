@@ -399,6 +399,22 @@ test.describe('mobile controls are reachable', () => {
           expect(box!.height, `nav tab ${i} is under ${MIN_TAP_PX}px`).toBeGreaterThanOrEqual(
             MIN_TAP_PX - 1,
           );
+          // V10-08: the ACCOUNT highlight (a span inside the link) ran off the
+          // right edge on build 11 while the LINK box passed the checks above.
+          // Every rendered descendant has to sit inside its tab's box.
+          const inner = await tabs.nth(i).evaluate((el) => {
+            const outer = el.getBoundingClientRect();
+            return Array.from(el.querySelectorAll('*')).map((c) => {
+              const r = c.getBoundingClientRect();
+              return {
+                tag: c.tagName,
+                over: Math.max(outer.left - r.left, r.right - outer.right, 0),
+              };
+            });
+          });
+          for (const c of inner) {
+            expect(c.over, `nav tab ${i} <${c.tag}> spills ${c.over}px outside its tab`).toBeLessThanOrEqual(1);
+          }
         }
 
         // V10-04 (V9-10b panel, both lanes): the link boxes are flex-sized, so a

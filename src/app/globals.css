@@ -59,7 +59,7 @@ body::-webkit-scrollbar { display: none; }
      class. Explicit font-* utilities still override. */
   .font-display { font-weight: 700; }
   .font-label { font-weight: 700; }
-  .font-nav { font-weight: 700; }
+  .font-nav { font-weight: 600; }
 }
 html { scroll-behavior: smooth; }
 
