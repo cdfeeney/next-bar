@@ -311,11 +311,15 @@ test.describe('Friends + consensus', () => {
 
     const going = page.getByTestId('presence-status-going');
     await expect(going).toHaveAttribute('aria-pressed', 'false');
-    await going.click();
+    // S-05: a visitor has no session to write with, so the rows are DISABLED
+    // and the screen says to sign in. Force the event past the attribute: the
+    // handler's own guard must hold too.
+    await expect(going).toBeDisabled();
+    await expect(page.getByTestId('presence-signed-out')).toBeVisible();
+    await going.dispatchEvent('click');
 
     // Not lit — not now, and not after a reload, because nothing was stored.
     await expect(going).toHaveAttribute('aria-pressed', 'false');
-    await expect(page.getByText(/didn't save/i)).toBeVisible();
     await page.reload();
     await expect(
       page.getByTestId('presence-status-going'),

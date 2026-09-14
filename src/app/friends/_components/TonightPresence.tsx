@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { displayHood } from '@/lib/hoodDisplay';
 import { getBarById } from '@/lib/catalog';
@@ -21,7 +22,7 @@ import {
   fetchMyPresence,
   setPresence,
 } from '@/lib/presence/server';
-import { PinAudienceDialog, PinBarDialog } from '@/lib/presence/PinDialogs';
+import { PinAudienceDialog, PinBarDialog, isAudienceHeld } from '@/lib/presence/PinDialogs';
 import { usePinnedHandles, announcePresenceChanged } from './usePinnedHandles';
 import OutTonightList from './OutTonight';
 
@@ -105,6 +106,7 @@ export default function TonightPresence({
   // subscribes to a live server-catalog swap.
   useBars();
   const auth = useAuth();
+  const router = useRouter();
   const { loading, rows, night, refresh } = usePinnedHandles();
   // The mutual-follow list the 'people' audience picks from. Read here rather
   // than inside the dialog so the dialog stays a presentation of a list it is
@@ -348,6 +350,9 @@ export default function TonightPresence({
       await reloadMine();
       refresh();
       announcePresenceChanged();
+      // README §5: Pin it is the end of the sequence — back to Social, where
+      // the header pin icon and Out tonight now reflect the write.
+      if (surface === 'screen') router.push('/friends');
     } else {
       // The sequence STAYS OPEN on a failure: the user's chosen bar and
       // audience are still on screen to retry from, rather than being thrown
@@ -355,7 +360,7 @@ export default function TonightPresence({
       setFailed(true);
     }
     setBusy(false);
-  }, [busy, pendingAudience, pendingBarId, pendingRecipients, reloadMine, refresh]);
+  }, [busy, pendingAudience, pendingBarId, pendingRecipients, reloadMine, refresh, router, surface]);
 
   const writeAudience = useCallback(
     async (
@@ -415,6 +420,11 @@ export default function TonightPresence({
   const choosePendingAudience = useCallback(
     (audience: PresenceAudience): void => {
       if (audience === 'people') {
+        // README §5: choosing "Only some people" IS the choice — the row lights,
+        // the count reads in words, and Pin it is HELD until someone is picked.
+        // Dismissing the picker with nobody leaves it held (and re-tapping the
+        // row reopens the picker) rather than silently falling back to Friends.
+        setPendingAudience('people');
         setPickingPeople('pending');
         return;
       }
@@ -455,7 +465,7 @@ export default function TonightPresence({
       'flex w-full items-center justify-between gap-3 min-h-[60px] px-[18px] rounded-[20px] border text-left touch-manipulation transition-colors',
       on ? 'border-accent bg-accent/[0.10] text-text' : 'border-border bg-surface text-text',
     ].join(' ');
-  const pinBlocked = pendingAudience === 'people' && pendingRecipients.length === 0;
+  const pinBlocked = isAudienceHeld(pendingAudience, pendingRecipients.length);
 
   // THE PRESENCE SCREEN — "You tonight" (README §4, §5). Status writes at once;
   // a bar is pinned through bar → audience → Pin it, one write at the end.
@@ -498,7 +508,9 @@ export default function TonightPresence({
                 // still-loading alike. Every one of these taps is a WRITE that
                 // would otherwise have to invent the audience, and inventing it
                 // over a live 'close' or 'people' pin widens it to everyone.
-                disabled={busy || !mineKnown}
+                // A visitor has no session to write with: the rows show what the
+                // screen does, the sign-in box above is the action.
+                disabled={busy || !mineKnown || signedOut}
                 onClick={() => void choose(status)}
                 data-testid={`presence-status-${status}`}
                 className={rowClass(active)}

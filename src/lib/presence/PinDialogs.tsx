@@ -90,6 +90,29 @@ export function PinBarDialog({
 }
 
 /**
+ * README §5 / Interactions › Search fields: filter on display name or @handle,
+ * case-insensitive; a leading @ is ignored; an empty query is the whole list.
+ * Pure, so the rule is unit-tested once and shared by every people picker.
+ */
+export function filterFriends<T extends { handle: string; displayName: string | null }>(
+  friends: readonly T[],
+  query: string,
+): readonly T[] {
+  const needle = query.trim().toLowerCase().replace(/^@/, '');
+  if (needle.length === 0) return friends;
+  return friends.filter(
+    (friend) =>
+      friend.handle.toLowerCase().includes(needle)
+      || (friend.displayName ?? '').toLowerCase().includes(needle),
+  );
+}
+
+/** README §5: "Only some people" with nobody picked holds the confirm. */
+export function isAudienceHeld(audience: 'friends' | 'close' | 'people', recipientCount: number): boolean {
+  return audience === 'people' && recipientCount === 0;
+}
+
+/**
  * V8-R-PRE-002 — "Choose who sees this pin", the "Other people" branch.
  *
  * SINGLE-SELECT IS A LABELLED RADIO GROUP, NOT COLOUR ALONE — that is the
@@ -142,14 +165,7 @@ export function PinAudienceDialog({
   // README §5: a name / @handle filter, case-insensitive, over a bounded
   // scroller — the whole-list picker broke at 70+ friends.
   const [query, setQuery] = useState('');
-  const needle = query.trim().toLowerCase().replace(/^@/, '');
-  const matching = needle.length === 0
-    ? friends
-    : friends.filter(
-        (friend) =>
-          friend.handle.toLowerCase().includes(needle)
-          || (friend.displayName ?? '').toLowerCase().includes(needle),
-      );
+  const matching = filterFriends(friends, query);
 
   const toggle = (id: string): void => {
     // A NEW SET EVERY TIME. Mutating the held one would leave React with the

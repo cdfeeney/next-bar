@@ -50,6 +50,8 @@ const clearPresence = vi.fn();
 const refresh = vi.fn();
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => auth }));
+// S-05: the screen surface returns to /friends after Pin it; no app router in jsdom.
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: () => undefined, back: () => undefined }) }));
 vi.mock('@/hooks/useFollows', () => ({
   useFollows: () => ({ mutuals: [], loading: false }),
 }));
@@ -76,6 +78,8 @@ vi.mock('../../app/friends/_components/usePinnedHandles', () => ({
 // The bar dialog is another packet's surface; what matters here is what the
 // component does with the bar it hands back.
 vi.mock('@/lib/presence/PinDialogs', () => ({
+  // The pure rule the component reads; the real one is unit-tested in pinAudienceRules.test.ts.
+  isAudienceHeld: (audience: string, count: number) => audience === 'people' && count === 0,
   PinBarDialog: ({ onPick }: { onPick: (bar: { id: string }) => void }) => (
     <button type="button" data-testid="fake-pick" onClick={() => onPick({ id: 'attaboy' })}>
       pick attaboy
