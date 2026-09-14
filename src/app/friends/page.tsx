@@ -162,22 +162,13 @@ export default function SocialPage(): JSX.Element {
           <p className="text-muted text-sm mt-1">{weekdayOf(night)}</p>
         </div>
         <div className="shrink-0 flex items-center gap-2">
-          {/* PIN — your whole presence. Until S-05 lands `/friends/tonight`
-              this selects Tonight and scrolls to the presence controls, so the
-              icon is never a dead end. */}
-          <button
-            type="button"
+          {/* PIN — your whole presence. Pushes /friends/tonight (S-05), the
+              only entry to "You tonight". */}
+          <Link
+            href="/friends/tonight"
             data-testid="social-pin-icon"
             data-pin-state={pinState}
             aria-label={pinLabel}
-            onClick={() => {
-              setTab('tonight');
-              requestAnimationFrame(() => {
-                document
-                  .querySelector('[data-testid="social-tonight"]')
-                  ?.scrollIntoView({ block: 'start' });
-              });
-            }}
             className={[
               'flex items-center justify-center min-w-[44px] min-h-[44px] rounded-2xl border touch-manipulation transition-colors',
               pinState === 'pinned'
@@ -188,7 +179,7 @@ export default function SocialPage(): JSX.Element {
             ].join(' ')}
           >
             <PinGlyph />
-          </button>
+          </Link>
 
           {/* PEOPLE — pushes the people graph. The badge is the pending
               follow-request count, so consent is one tap away and never hidden. */}

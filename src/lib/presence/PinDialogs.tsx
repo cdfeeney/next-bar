@@ -58,8 +58,8 @@ export function PinBarDialog({
     >
       <div className="relative flex flex-1 flex-col max-w-2xl w-full mx-auto px-6 pt-8 pb-8 min-h-0">
         <header className="flex items-center justify-between gap-3 mb-2">
-          <h2 className="font-display text-2xl leading-tight">
-            Where are you tonight?
+          <h2 className="font-display text-2xl font-bold leading-tight">
+            Where are you?
           </h2>
           <button
             type="button"
@@ -71,9 +71,11 @@ export function PinBarDialog({
         </header>
         {/* THE TRUST LINE STAYS IN PLACE THROUGHOUT (V8-R-PRE-001's
             accessibility clause). It is the answer to the question this screen
-            raises by existing: why is the app asking where I am? */}
-        <p className="text-muted text-xs mb-4">
-          You choose the bar. Next Bar never tracks you automatically.
+            raises by existing: why is the app asking where I am? README §5
+            adds the consequence in words: audience next, clears at 4 AM. */}
+        <p className="text-muted text-[13px] leading-relaxed mb-4">
+          Pick where you are. Only the audience you choose next can see it, and it clears at 4 AM.
+          You choose the bar — Next Bar never tracks you automatically.
         </p>
         <div
           className={`flex-1 overflow-y-auto min-h-0 scrollbar-none ${
@@ -137,6 +139,17 @@ export function PinAudienceDialog({
   const [selected, setSelected] = useState<ReadonlySet<string>>(
     () => new Set(initialSelection),
   );
+  // README §5: a name / @handle filter, case-insensitive, over a bounded
+  // scroller — the whole-list picker broke at 70+ friends.
+  const [query, setQuery] = useState('');
+  const needle = query.trim().toLowerCase().replace(/^@/, '');
+  const matching = needle.length === 0
+    ? friends
+    : friends.filter(
+        (friend) =>
+          friend.handle.toLowerCase().includes(needle)
+          || (friend.displayName ?? '').toLowerCase().includes(needle),
+      );
 
   const toggle = (id: string): void => {
     // A NEW SET EVERY TIME. Mutating the held one would leave React with the
@@ -177,7 +190,21 @@ export function PinAudienceDialog({
           tonight&apos;s pin only.
         </p>
 
-        <div className="flex-1 overflow-y-auto min-h-0 scrollbar-none">
+        <label className="block mb-2.5">
+          <span className="sr-only">Search friends</span>
+          <input
+            type="search"
+            inputMode="text"
+            autoComplete="off"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search friends…"
+            data-testid="pin-audience-search"
+            className="w-full min-h-[44px] rounded-[14px] border border-border bg-surface px-3.5 text-sm text-text placeholder:text-muted focus:outline-none focus:border-accent"
+          />
+        </label>
+
+        <div className="flex-1 overflow-y-auto min-h-0 max-h-[260px] scrollbar-none">
           {friendsLoading ? (
             <p className="text-muted text-sm" role="status">
               Loading your friends…
@@ -196,11 +223,20 @@ export function PinAudienceDialog({
               You don&apos;t have any mutual friends yet, so there&apos;s nobody
               to pick. Close friends or Friends will still work.
             </p>
+          ) : matching.length === 0 ? (
+            <p className="text-muted text-[13px] px-0.5 py-2" data-testid="pin-audience-no-match">
+              Nobody matches &ldquo;{query.trim()}&rdquo;.
+            </p>
           ) : (
-            <ul className="space-y-1" data-testid="pin-audience-list">
-              {friends.map((friend) => (
+            <ul className="space-y-2" data-testid="pin-audience-list">
+              {matching.map((friend) => (
                 <li key={friend.id}>
-                  <label className="flex items-center gap-3 min-h-[44px] px-2 rounded-2xl touch-manipulation cursor-pointer hover:bg-surface">
+                  <label
+                    className={[
+                      'flex items-center gap-3 min-h-[52px] px-3.5 rounded-2xl border touch-manipulation cursor-pointer transition-colors',
+                      selected.has(friend.id) ? 'border-accent bg-accent/[0.10]' : 'border-border hover:bg-surface',
+                    ].join(' ')}
+                  >
                     <input
                       type="checkbox"
                       checked={selected.has(friend.id)}
@@ -225,20 +261,26 @@ export function PinAudienceDialog({
           )}
         </div>
 
+        {/* WHO, IN WORDS (README §5): the count beneath the list. */}
+        <p className="mt-2.5 text-xs text-muted" data-testid="pin-audience-selected-count">
+          {selected.size} {selected.size === 1 ? 'person' : 'people'} will see this pin tonight.
+        </p>
         <button
           type="button"
-          // DISABLED ON AN EMPTY SELECTION, matching the server. 'people' with
+          // HELD ON AN EMPTY SELECTION, matching the server. 'people' with
           // nobody in it is not "show it to nobody" and must never fall back to
           // Friends — the RPC raises on it, so an enabled button here would be
-          // an action that can only fail.
+          // an action that can only fail. Held = bg-held on muted, never opacity.
           disabled={busy || selected.size === 0}
           onClick={() => onConfirm([...selected])}
           data-testid="pin-audience-confirm"
-          className="mt-4 min-h-[44px] rounded-full border border-accent text-accent font-display text-sm touch-manipulation disabled:opacity-50 disabled:border-border disabled:text-muted"
+          data-held={selected.size === 0 ? 'true' : 'false'}
+          className={[
+            'mt-3 min-h-[50px] rounded-full font-display text-[15px] font-bold touch-manipulation transition-colors',
+            selected.size === 0 ? 'bg-held text-muted' : 'bg-accent text-bg',
+          ].join(' ')}
         >
-          {selected.size === 0
-            ? 'Pick at least one person'
-            : `Show my pin to ${selected.size} ${selected.size === 1 ? 'person' : 'people'}`}
+          {selected.size === 0 ? 'Pick at least one person' : 'Done'}
         </button>
       </div>
     </div>

@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
+import { displayHood } from '@/lib/hoodDisplay';
 import { getBarById } from '@/lib/catalog';
 import { useBars } from '@/lib/useBars';
 import { getBrowserSupabase } from '@/lib/supabase/client';
@@ -89,7 +91,16 @@ type MinePinState =
   /** The read failed. Different from "no pin", and never written over. */
   | { kind: 'unreadable' };
 
-export default function TonightPresence(): JSX.Element {
+export default function TonightPresence({
+  surface = 'tonight',
+}: {
+  /**
+   * `tonight` = the Out tonight list on Social → Tonight (owner decision
+   * 2026-09-13: no status row there). `screen` = the You tonight controls
+   * and the pin sequence on /friends/tonight (README §4, §5).
+   */
+  surface?: 'tonight' | 'screen';
+} = {}): JSX.Element {
   // 0019 swap-day rule: this component renders getBarById lookups, so it
   // subscribes to a live server-catalog swap.
   useBars();
@@ -417,19 +428,65 @@ export default function TonightPresence(): JSX.Element {
   const myBar = myPin?.barId ? getBarById(myPin.barId) : null;
   const pendingBar = pendingBarId === null ? null : getBarById(pendingBarId);
 
+  // TONIGHT carries only "who else is out" (Social redesign 2026-09-13, owner
+  // decision: no status row on Tonight). The controls below live on
+  // /friends/tonight behind the header pin icon.
+  if (surface === 'tonight') {
+    return (
+      <div className="space-y-8" data-testid="social-tonight">
+        {/* Who else is out (README §1.6). */}
+        <section data-testid="out-tonight">
+          <h2 className="font-label text-xs font-bold uppercase tracking-[0.25em] text-muted mb-3.5">
+            Out tonight
+          </h2>
+          <OutTonightList
+            loading={loading}
+            rows={rows}
+            signedOut={auth.status !== 'loading' && auth.status !== 'signed-in'}
+          />
+        </section>
+      </div>
+    );
+  }
+
+  const signedOut = auth.status !== 'loading' && auth.status !== 'signed-in';
+  const rowClass = (on: boolean): string =>
+    [
+      'flex w-full items-center justify-between gap-3 min-h-[60px] px-[18px] rounded-[20px] border text-left touch-manipulation transition-colors',
+      on ? 'border-accent bg-accent/[0.10] text-text' : 'border-border bg-surface text-text',
+    ].join(' ');
+  const pinBlocked = pendingAudience === 'people' && pendingRecipients.length === 0;
+
+  // THE PRESENCE SCREEN — "You tonight" (README §4, §5). Status writes at once;
+  // a bar is pinned through bar → audience → Pin it, one write at the end.
   return (
-    <div className="space-y-8" data-testid="social-tonight">
-      {/* Your status — the compact pin row directly under the stories rail
-          (V8-R-PRE-001 entry point). */}
-      <section>
-        <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
-          You tonight
-        </h2>
-        <div
-          className="flex items-center gap-2"
-          role="group"
-          aria-label="Your status tonight"
+    <div className="space-y-6" data-testid="presence-screen">
+      <p className="text-[13px] leading-relaxed text-muted">
+        Manual, always. Nothing here reads your location, and it all clears at 4 AM.
+      </p>
+
+      {signedOut ? (
+        <div data-testid="presence-signed-out" className="rounded-3xl border border-border bg-surface p-5">
+          <p className="text-sm leading-relaxed mb-3">
+            Sign in to say whether you&apos;re going out and to pin your spot.
+          </p>
+          <Link
+            href="/auth"
+            className="inline-flex items-center min-h-[44px] px-5 rounded-full border border-border font-display text-sm touch-manipulation hover:border-accent hover:text-accent transition-colors"
+          >
+            Sign in
+          </Link>
+        </div>
+      ) : null}
+
+      <section aria-labelledby="presence-status-heading">
+        <h2
+          id="presence-status-heading"
+          className="font-label text-[11px] font-bold uppercase tracking-[0.2em] text-muted mb-2.5"
         >
+          Are you going out?
+        </h2>
+        <div className="space-y-2.5" role="group" aria-label="Your status tonight">
           {STATUS_ORDER.map((status) => {
             const active = mine?.status === status;
             return (
@@ -443,14 +500,16 @@ export default function TonightPresence(): JSX.Element {
                 // over a live 'close' or 'people' pin widens it to everyone.
                 disabled={busy || !mineKnown}
                 onClick={() => void choose(status)}
-                className={[
-                  'min-h-[44px] touch-manipulation px-5 rounded-full font-display text-sm border transition-colors disabled:opacity-60',
-                  active
-                    ? 'bg-transparent border-accent text-accent'
-                    : 'bg-transparent border-border text-muted hover:text-text',
-                ].join(' ')}
+                data-testid={`presence-status-${status}`}
+                className={rowClass(active)}
               >
-                {PRESENCE_LABELS[status]}
+                <span className="font-display text-base font-semibold">{PRESENCE_LABELS[status]}</span>
+                {/* The ✓ is ABSENT, not dimmed, on the rows that are not chosen. */}
+                {active ? (
+                  <span aria-hidden="true" data-testid="presence-status-check" className="text-accent font-bold shrink-0">
+                    ✓
+                  </span>
+                ) : null}
               </button>
             );
           })}
@@ -458,196 +517,185 @@ export default function TonightPresence(): JSX.Element {
 
         {/* WE DO NOT KNOW YOUR PIN — and the two reasons say so differently.
             Never the unset row, which invites a tap that would overwrite a live
-            pin with a default audience (V8-R-OPS-005 — the same rule the circle
-            list below follows). */}
+            pin with a default audience (V8-R-OPS-005). */}
         {minePin.kind === 'loading' ? (
-          <p
-            className="text-xs text-muted mt-3"
-            role="status"
-            data-testid="my-pin-loading"
-          >
+          <p className="text-xs text-muted mt-3" role="status" data-testid="my-pin-loading">
             Checking your pin tonight…
           </p>
         ) : null}
         {minePin.kind === 'unreadable' ? (
-          <p
-            className="text-xs text-muted mt-3"
-            role="status"
-            data-testid="my-pin-error"
-          >
-            Couldn&apos;t check your pin tonight. Pull again in a moment —
-            nothing has been changed.
+          <p className="text-xs text-muted mt-3" role="status" data-testid="my-pin-error">
+            Couldn&apos;t check your pin tonight. Pull again in a moment — nothing has been changed.
           </p>
         ) : null}
-
         {mine ? (
-          <div className="mt-3 space-y-2">
-            <p className="text-sm text-muted" data-testid="my-pin">
-              {myBar ? (
-                <>
-                  <span className="text-text font-display">{myBar.name}</span>
-                  {' · Pinned now'}
-                </>
-              ) : (
-                `${PRESENCE_LABELS[mine.status]} · no bar pinned`
-              )}
-            </p>
-
-            {/* V8-R-PRE-003, THE STEP THAT WAS MISSING. Choosing Going out sets
-                a status; it does not put you anywhere. Without this control a
-                new pinner could never create a bar-level pin at all, because
-                the only bar the write could carry was one they already had. */}
-            {mine.status === 'going' ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setPickingBar(true)}
-                data-testid="pin-my-spot"
-                className="min-h-[44px] touch-manipulation px-4 rounded-full text-xs font-display border border-border text-muted hover:text-text transition-colors disabled:opacity-60"
-              >
-                {myBar ? 'Change my spot' : 'Pin my spot'}
-              </button>
-            ) : null}
-
-            {/* Who can see my pin tonight? (V8-R-PRE-002 / D-C-37.) */}
-            <div
-              className="flex flex-wrap items-center gap-2"
-              role="group"
-              aria-label="Who can see my pin tonight?"
-            >
-              {AUDIENCE_ORDER.map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={mine.audience === value}
-                  disabled={busy}
-                  onClick={() => chooseAudience(value)}
-                  data-testid={`pin-audience-${value}`}
-                  className={[
-                    'min-h-[44px] touch-manipulation px-4 rounded-full text-xs font-display border transition-colors disabled:opacity-60',
-                    mine.audience === value
-                      ? 'border-accent text-accent'
-                      : 'border-border text-muted hover:text-text',
-                  ].join(' ')}
-                >
-                  {AUDIENCE_LABELS[value]}
-                </button>
-              ))}
-            </div>
-
-            {/* WHO, IN WORDS. An audience of "some people" that does not say how
-                many is not an audience the pinner can check. */}
-            {mine.audience === 'people' ? (
-              <p className="text-xs text-muted" data-testid="pin-audience-count">
-                {mine.recipientIds.length}{' '}
-                {mine.recipientIds.length === 1 ? 'person' : 'people'} can see
-                this pin tonight.
-              </p>
-            ) : null}
-          </div>
+          <p className="text-sm text-muted mt-3" data-testid="my-pin">
+            {myBar ? (
+              <>
+                <span className="text-text font-display">{myBar.name}</span>
+                {' · Pinned now'}
+              </>
+            ) : (
+              `${PRESENCE_LABELS[mine.status]} · no bar pinned`
+            )}
+          </p>
         ) : null}
+      </section>
 
-        {/* STEP TWO OF THE PIN SEQUENCE, in the page rather than in a dialog.
-            Nothing here is live: the bar is chosen, the audience is being
-            chosen, and only "Pin it" writes. That is the whole fix for a pin
-            that used to go out to every follower the instant a bar was tapped
-            (V8-R-PRE-003 → V8-R-PRE-002). */}
-        {pendingBarId !== null ? (
-          <div
-            className="mt-4 rounded-2xl border border-border p-4 space-y-3"
-            data-testid="pin-audience-step"
+      {mineKnown && !signedOut ? (
+        <section aria-labelledby="presence-where-heading">
+          <h2
+            id="presence-where-heading"
+            className="font-label text-[11px] font-bold uppercase tracking-[0.2em] text-muted mb-2.5"
           >
-            <p className="text-sm">
-              <span className="font-display text-text">
-                {pendingBar?.name ?? pendingBarId}
-              </span>
-              {' — who can see this?'}
-            </p>
-            <div
-              className="flex flex-wrap items-center gap-2"
-              role="group"
-              aria-label="Who can see this pin tonight?"
+            Where are you?
+          </h2>
+          {/* V8-R-PRE-003, available whatever the status: pinning sets Going out. */}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setPickingBar(true)}
+            data-testid="pin-my-spot"
+            className="flex w-full items-center gap-3.5 p-4 rounded-[20px] border border-border bg-surface text-left touch-manipulation hover:border-accent transition-colors"
+          >
+            <span
+              aria-hidden="true"
+              className={[
+                'shrink-0 w-11 h-11 rounded-2xl flex items-center justify-center border',
+                myBar ? 'border-accent bg-accent/[0.14] text-accent' : 'border-border text-muted',
+              ].join(' ')}
             >
-              {AUDIENCE_ORDER.map((value) => (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className="w-[19px] h-[19px]">
+                <path d="M12 21s-6-5.2-6-10.5a6 6 0 0 1 12 0C18 15.8 12 21 12 21Z" />
+                <circle cx="12" cy="10.5" r="2.2" />
+              </svg>
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-semibold truncate">
+                {myBar ? myBar.name : 'Pin my spot'}
+              </span>
+              <span className="block text-xs text-muted truncate mt-px">
+                {myBar
+                  ? `${displayHood(myBar.neighborhood)} · ${AUDIENCE_LABELS[mine?.audience ?? 'friends']} can see it`
+                  : 'Optional — a status without a place is fine'}
+              </span>
+            </span>
+            <span aria-hidden="true" className="text-accent shrink-0">›</span>
+          </button>
+
+          {/* Who can see my pin tonight? (V8-R-PRE-002 / D-C-37.) Only once a
+              pin is live; words, never colour alone. */}
+          {mine && myBar ? (
+            <div className="mt-3 space-y-2">
+              <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Who can see my pin tonight?">
+                {AUDIENCE_ORDER.map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={mine.audience === value}
+                    disabled={busy}
+                    onClick={() => chooseAudience(value)}
+                    data-testid={`pin-audience-${value}`}
+                    className={[
+                      'min-h-[44px] touch-manipulation px-4 rounded-full text-xs font-display border transition-colors',
+                      mine.audience === value ? 'border-accent text-accent' : 'border-border text-muted hover:text-text',
+                    ].join(' ')}
+                  >
+                    {AUDIENCE_LABELS[value]}
+                  </button>
+                ))}
+              </div>
+              {mine.audience === 'people' ? (
+                <p className="text-xs text-muted" data-testid="pin-audience-count">
+                  {mine.recipientIds.length}{' '}
+                  {mine.recipientIds.length === 1 ? 'person' : 'people'} can see this pin tonight.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          <p className="text-xs leading-relaxed text-muted mt-2.5">Pinning a bar sets you to Going out.</p>
+        </section>
+      ) : null}
+
+      {/* STEP TWO OF THE PIN SEQUENCE (README §5 "Audience"), in the page.
+          Nothing here is live: the bar is chosen, the audience is being chosen,
+          and only "Pin it" writes (V8-R-PRE-003 → V8-R-PRE-002). */}
+      {pendingBarId !== null ? (
+        <section
+          className="rounded-3xl border border-border bg-surface p-4 space-y-3"
+          data-testid="pin-audience-step"
+          aria-labelledby="pin-audience-heading"
+        >
+          <h2 id="pin-audience-heading" className="font-display text-2xl font-bold leading-tight">
+            {pendingBar?.name ?? pendingBarId}
+          </h2>
+          <p className="text-[13px] text-muted">Nothing is shared until you pin it.</p>
+          <p className="font-label text-xs font-bold uppercase tracking-[0.25em] text-muted pt-2">Who can see this</p>
+          <div className="space-y-2.5" role="group" aria-label="Who can see this pin tonight?">
+            {AUDIENCE_ORDER.map((value) => {
+              const on = pendingAudience === value;
+              return (
                 <button
                   key={value}
                   type="button"
-                  aria-pressed={pendingAudience === value}
+                  aria-pressed={on}
                   disabled={busy}
                   onClick={() => choosePendingAudience(value)}
                   data-testid={`pin-pending-audience-${value}`}
-                  className={[
-                    'min-h-[44px] touch-manipulation px-4 rounded-full text-xs font-display border transition-colors disabled:opacity-60',
-                    pendingAudience === value
-                      ? 'border-accent text-accent'
-                      : 'border-border text-muted hover:text-text',
-                  ].join(' ')}
+                  className={rowClass(on)}
                 >
-                  {AUDIENCE_LABELS[value]}
+                  <span className="text-[15px] font-semibold">{AUDIENCE_LABELS[value]}</span>
+                  {on ? (
+                    <span aria-hidden="true" className="text-accent font-bold shrink-0">✓</span>
+                  ) : null}
                 </button>
-              ))}
-            </div>
-            {pendingAudience === 'people' ? (
-              <p
-                className="text-xs text-muted"
-                data-testid="pin-pending-audience-count"
-              >
-                {pendingRecipients.length}{' '}
-                {pendingRecipients.length === 1 ? 'person' : 'people'} will see
-                this pin tonight.
-              </p>
-            ) : null}
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                // 'people' with nobody selected is refused server-side rather
-                // than widened, so the confirmation does not offer to send it.
-                disabled={
-                  busy ||
-                  (pendingAudience === 'people' && pendingRecipients.length === 0)
-                }
-                onClick={() => void confirmPin()}
-                data-testid="pin-confirm"
-                className="min-h-[44px] touch-manipulation px-5 rounded-full text-sm font-display border border-accent text-accent transition-colors disabled:opacity-60"
-              >
-                {busy ? 'Pinning…' : 'Pin it'}
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={cancelPin}
-                data-testid="pin-cancel"
-                className="min-h-[44px] touch-manipulation px-5 rounded-full text-sm font-display border border-border text-muted hover:text-text transition-colors disabled:opacity-60"
-              >
-                Cancel
-              </button>
-            </div>
+              );
+            })}
           </div>
-        ) : null}
+          {pendingAudience === 'people' ? (
+            <p className="text-xs text-muted" data-testid="pin-pending-audience-count">
+              {pendingRecipients.length}{' '}
+              {pendingRecipients.length === 1 ? 'person' : 'people'} will see this pin tonight.
+            </p>
+          ) : null}
+          <button
+            type="button"
+            // 'people' with nobody selected is refused server-side rather than
+            // widened, so the confirmation is HELD (bg-held, never opacity).
+            disabled={busy || pinBlocked}
+            aria-disabled={busy || pinBlocked}
+            onClick={() => void confirmPin()}
+            data-testid="pin-confirm"
+            data-held={pinBlocked ? 'true' : 'false'}
+            className={[
+              'flex w-full items-center justify-center min-h-[52px] rounded-full font-display text-base font-bold touch-manipulation transition-colors',
+              pinBlocked ? 'bg-held text-muted' : 'bg-accent text-bg',
+            ].join(' ')}
+          >
+            {busy ? 'Pinning…' : 'Pin it'}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={cancelPin}
+            data-testid="pin-cancel"
+            className="flex w-full items-center justify-center min-h-[48px] rounded-full border border-border text-muted font-display text-[15px] font-semibold touch-manipulation hover:text-text transition-colors"
+          >
+            Cancel
+          </button>
+        </section>
+      ) : null}
 
-        {failed ? (
-          <p className="text-xs text-muted mt-2" role="status">
-            That didn&apos;t save — try again in a moment.
-          </p>
-        ) : null}
-      </section>
-
-      {/* Who else is out (README §1.6). */}
-      <section data-testid="out-tonight">
-        <h2 className="font-label text-xs font-bold uppercase tracking-[0.25em] text-muted mb-3.5">
-          Out tonight
-        </h2>
-        <OutTonightList
-          loading={loading}
-          rows={rows}
-          signedOut={auth.status !== 'loading' && auth.status !== 'signed-in'}
-        />
-      </section>
+      {failed ? (
+        <p className="text-xs text-muted" role="status">
+          That didn&apos;t save — try again in a moment.
+        </p>
+      ) : null}
 
       {/* THE TWO STEPS OF THE PIN SEQUENCE (V8-R-PRE-003 then V8-R-PRE-002).
           Mounted only while open: `useModalDialog` marks the rest of the page
-          `inert` for as long as it lives, so a dialog left mounted-and-hidden
-          would take the page down with it. */}
+          `inert` for as long as it lives. */}
       {pickingBar ? (
         <PinBarDialog
           busy={busy}
@@ -660,19 +708,12 @@ export default function TonightPresence(): JSX.Element {
       {pickingPeople !== null ? (
         <PinAudienceDialog
           // MUTUALS ONLY. D-C-37 intersects any narrowed audience with the
-          // pinner's mutual friends server-side, so anyone else shown here
-          // would be a recipient the server had already dropped.
+          // pinner's mutual friends server-side.
           friends={follows.mutuals}
           friendsLoading={follows.loading}
-          // THE FAILED READ IS ITS OWN STATE (round-6 panel, Codex, MEDIUM).
-          // Without it an empty `mutuals` from a failed `get_following` was
-          // rendered as "you have no mutual friends" — the same lie CircleList
-          // refuses to tell about the presence read a few lines up.
           friendsFailed={follows.circleFailed}
           initialSelection={
-            pickingPeople === 'pending'
-              ? pendingRecipients
-              : (mine?.recipientIds ?? [])
+            pickingPeople === 'pending' ? pendingRecipients : (mine?.recipientIds ?? [])
           }
           busy={busy}
           onClose={() => setPickingPeople(null)}

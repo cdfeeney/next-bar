@@ -106,7 +106,7 @@ describe('the own-pin read is a THREE-state answer', () => {
     const held = new Deferred<{ kind: 'ok'; presence: typeof LIVE_CLOSE_PIN }>();
     fetchMyPresence.mockReturnValue(held.promise);
 
-    render(<TonightPresence />);
+    render(<TonightPresence surface="screen" />);
 
     // In flight: we do not know what the pin is, so no tap may build a write.
     await expect(
@@ -128,7 +128,7 @@ describe('the own-pin read is a THREE-state answer', () => {
 
   test('"could not read" and "still reading" say different things', async () => {
     fetchMyPresence.mockResolvedValue({ kind: 'failed' });
-    render(<TonightPresence />);
+    render(<TonightPresence surface="screen" />);
     await expect(screen.findByTestId('my-pin-error')).resolves.toBeTruthy();
     expect(screen.queryByTestId('my-pin-loading')).toBeNull();
   });
@@ -145,7 +145,7 @@ describe('the own-pin read is a THREE-state answer', () => {
    */
   test('a signed-in account with NO pin can still set one', async () => {
     fetchMyPresence.mockResolvedValue({ kind: 'unset' });
-    render(<TonightPresence />);
+    render(<TonightPresence surface="screen" />);
 
     const going = await screen.findByRole('button', { name: 'Going out' });
     await waitFor(() => expect(going).not.toBeDisabled());
@@ -169,12 +169,12 @@ describe('a read the view has moved on from cannot repaint', () => {
     const held = new Deferred<{ kind: 'ok'; presence: typeof LIVE_CLOSE_PIN }>();
     fetchMyPresence.mockReturnValue(held.promise);
 
-    const view = render(<TonightPresence />);
+    const view = render(<TonightPresence surface="screen" />);
     await waitFor(() => expect(fetchMyPresence).toHaveBeenCalled());
 
     // Sign out while the authenticated read is still in flight.
     auth = { status: 'signed-out' };
-    view.rerender(<TonightPresence />);
+    view.rerender(<TonightPresence surface="screen" />);
 
     // ...and only now does the authenticated answer arrive.
     held.resolve({ kind: 'ok', presence: LIVE_CLOSE_PIN });
@@ -202,7 +202,7 @@ describe('the pin sequence publishes on confirmation, not on selection', () => {
       },
     });
 
-    render(<TonightPresence />);
+    render(<TonightPresence surface="screen" />);
     const pin = await screen.findByTestId('pin-my-spot');
     pin.click();
     (await screen.findByTestId('fake-pick')).click();
@@ -247,7 +247,7 @@ describe('the pin sequence publishes on confirmation, not on selection', () => {
       },
     });
 
-    const view = render(<TonightPresence />);
+    const view = render(<TonightPresence surface="screen" />);
     (await screen.findByTestId('pin-my-spot')).click();
     (await screen.findByTestId('fake-pick')).click();
     await expect(
@@ -256,7 +256,7 @@ describe('the pin sequence publishes on confirmation, not on selection', () => {
 
     // Sign out on the same device, without a remount.
     auth = { status: 'signed-out' };
-    view.rerender(<TonightPresence />);
+    view.rerender(<TonightPresence surface="screen" />);
 
     await waitFor(() =>
       expect(
@@ -279,7 +279,7 @@ describe('the pin sequence publishes on confirmation, not on selection', () => {
       },
     });
 
-    render(<TonightPresence />);
+    render(<TonightPresence surface="screen" />);
     (await screen.findByTestId('pin-my-spot')).click();
     (await screen.findByTestId('fake-pick')).click();
     (await screen.findByTestId('pin-cancel')).click();

@@ -116,7 +116,13 @@ export default function YourPlanTonight({
     onHasPlan?.(state.kind === 'plan');
   }, [state.kind, onHasPlan]);
 
-  if (state.kind === 'idle' || state.kind === 'none') {
+  // Nothing is claimed before the read settles: the definitive "No plan yet."
+  // card waits for `none` (or a signed-out answer), never renders during
+  // idle/auth-loading, so its CTA never flips target under a tap (S-02 panel).
+  if (state.kind === 'idle') {
+    return variant === 'tonight' && signedOut ? <NoPlanCard signedOut /> : null;
+  }
+  if (state.kind === 'none') {
     return variant === 'tonight' ? <NoPlanCard signedOut={signedOut} /> : null;
   }
 

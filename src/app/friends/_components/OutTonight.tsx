@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import Avatar from '@/components/Avatar';
 import { getBarById } from '@/lib/catalog';
-import { describePresence } from '@/lib/presence';
+import { PRESENCE_LABELS, describePresence } from '@/lib/presence';
 import type { usePinnedHandles } from './usePinnedHandles';
 
 /**
@@ -103,7 +103,7 @@ export default function OutTonightList({
   return (
     <ul data-testid="presence-list">
       {rows.map((person) => {
-        const { barId, note } = describePresence(person);
+        const { barId } = describePresence(person);
         const bar = barId ? getBarById(barId) : null;
         const who = person.displayName?.trim()
           ? person.displayName.trim()
@@ -122,7 +122,9 @@ export default function OutTonightList({
                 {bar ? bar.name : who}
               </span>
               <span className="block text-xs text-muted truncate mt-px">
-                {bar ? `${who} · ${note}` : note}
+                {/* README §1.6: "<Name> · Going out" — the state in the
+                    contract's own words, never a "Pinned" that names no one. */}
+                {bar ? `${who} · ${PRESENCE_LABELS[person.status]}` : PRESENCE_LABELS[person.status]}
               </span>
             </span>
             {when ? (

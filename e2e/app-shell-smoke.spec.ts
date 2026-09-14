@@ -113,6 +113,14 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/friends/following');
   });
 
+  test('/friends/tonight renders You tonight with a back control (S-05)', async ({ page }) => {
+    await page.goto('/friends/tonight');
+    await expect(page.getByRole('heading', { name: /^You tonight$/ })).toBeVisible();
+    await expect(page.getByTestId('presence-screen')).toBeVisible();
+    await expect(page.getByTestId('tonight-back')).toHaveAttribute('href', '/friends');
+    await expectNoConsoleErrors(page, '/friends/tonight');
+  });
+
   test('/friends/people renders Groups & people with a back control (S-01)', async ({ page }) => {
     await page.goto('/friends/people');
     await expect(page.getByRole('heading', { name: /^Groups & people$/ })).toBeVisible();

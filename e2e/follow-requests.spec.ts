@@ -571,8 +571,9 @@ test.describe('/friends — the approved Social surface, signed in', () => {
     // Bar first, then the person — presence describes a place someone backed,
     // never a person tagged with a venue they did not claim.
     await expect(row.getByText('Attaboy')).toBeVisible();
-    // Never state by color alone — the pinned state is also a word.
-    await expect(row.getByText(/Pinned/i)).toBeVisible();
+    // Never state by color alone — the state is also a word, in the contract's
+    // own label (README §1.6 / S-05: "Sam J. · Going out").
+    await expect(row.getByText(/Sam J\. · Going out/)).toBeVisible();
   });
 
   test('the bar picker opens, Escape closes it, focus comes back', async ({

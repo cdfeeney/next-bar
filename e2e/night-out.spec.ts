@@ -1169,7 +1169,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
       },
     ]);
 
-    await page.goto('/friends');
+    await page.goto('/friends/tonight');
     await expect(page.getByTestId('my-pin')).toContainText(/no bar pinned/i);
 
     // THE STEP THAT WAS MISSING.
@@ -1180,7 +1180,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     const dialog = page.getByTestId('pin-bar-dialog');
     await expect(dialog).toBeVisible();
     await expect(
-      dialog.getByRole('heading', { name: /where are you tonight/i }),
+      dialog.getByRole('heading', { name: /where are you/i }),
     ).toBeVisible();
     // One question, one field (V8-R-PRE-003).
     await expect(dialog.getByRole('textbox', { name: /search bars/i })).toBeVisible();
@@ -1190,10 +1190,16 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     // Back returns to Tonight and takes nothing with it.
     await dialog.getByRole('button', { name: /^Back$/ }).click();
     await expect(page.getByTestId('pin-bar-dialog')).toHaveCount(0);
-    await expect(page.getByTestId('social-tonight')).toBeVisible();
+    await expect(page.getByTestId('presence-screen')).toBeVisible();
 
-    // S-01/S-02 (Social redesign): the header pin icon reads the same row. A
-    // status without a bar is the `status` state with the neutral label.
+    // S-05: exactly ONE ✓, on the chosen row, and none elsewhere (README §4).
+    await expect(page.getByTestId('presence-status-check')).toHaveCount(1);
+    await expect(page.getByTestId('presence-status-going').getByTestId('presence-status-check')).toHaveCount(1);
+    await expect(page.getByTestId('presence-status-going')).toHaveAttribute('aria-pressed', 'true');
+
+    // S-01/S-02 (Social redesign): the header pin icon on /friends reads the
+    // same row. A status without a bar is the `status` state with the neutral label.
+    await page.goto('/friends');
     const pinIcon = page.getByTestId('social-pin-icon');
     await expect(pinIcon).toHaveAttribute('data-pin-state', 'status');
     await expect(pinIcon).toHaveAttribute('aria-label', /Set whether you are going out and where/);
@@ -1223,7 +1229,9 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     const pinIcon = page.getByTestId('social-pin-icon');
     await expect(pinIcon).toHaveAttribute('data-pin-state', 'pinned');
     await expect(pinIcon).toHaveAttribute('aria-label', /^Pinned at Attaboy — change your night$/);
-    // And Tonight's own row agrees with it.
+    // And You tonight's own row agrees with it; the icon is the way there.
+    await pinIcon.click();
+    await expect(page).toHaveURL(/\/friends\/tonight$/);
     await expect(page.getByTestId('my-pin')).toContainText(/Attaboy/);
   });
 
@@ -1262,7 +1270,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
       await fulfillJson(200, true)(route);
     });
 
-    await page.goto('/friends');
+    await page.goto('/friends/tonight');
     await page.getByTestId('pin-my-spot').click();
     const dialog = page.getByTestId('pin-bar-dialog');
     await expect(dialog).toBeVisible();
@@ -1310,7 +1318,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
       await fulfillJson(200, true)(route);
     });
 
-    await page.goto('/friends');
+    await page.goto('/friends/tonight');
     await page.getByTestId('pin-my-spot').click();
     const dialog = page.getByTestId('pin-bar-dialog');
     await dialog.getByRole('textbox', { name: /search bars/i }).fill('att');
@@ -1318,7 +1326,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await page.getByTestId('pin-cancel').click();
 
     await expect(page.getByTestId('pin-audience-step')).toHaveCount(0);
-    await expect(page.getByTestId('social-tonight')).toBeVisible();
+    await expect(page.getByTestId('presence-screen')).toBeVisible();
     expect(writes, 'cancelling the pin sequence still wrote a pin').toBe(0);
   });
 
@@ -1341,7 +1349,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
       },
     ]);
 
-    await page.goto('/friends');
+    await page.goto('/friends/tonight');
     const choices = page.getByRole('group', { name: /who can see my pin tonight/i });
     await expect(choices).toBeVisible();
     await expect(page.getByTestId('pin-audience-friends')).toBeVisible();
@@ -1356,8 +1364,13 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     const picker = page.getByTestId('pin-audience-dialog');
     await expect(picker).toBeVisible();
 
-    // FAILS CLOSED IN THE UI TOO: nothing selected, nothing to confirm.
+    // FAILS CLOSED IN THE UI TOO: nothing selected, nothing to confirm — and
+    // HELD (bg-held on muted), never merely faded (README §5).
     await expect(picker.getByTestId('pin-audience-confirm')).toBeDisabled();
+    await expect(picker.getByTestId('pin-audience-confirm')).toHaveAttribute('data-held', 'true');
+    await expect(picker.getByTestId('pin-audience-confirm')).toHaveText(/Pick at least one person/);
+    await expect(picker.getByTestId('pin-audience-search')).toBeVisible();
+    await expect(picker.getByTestId('pin-audience-selected-count')).toHaveText(/^0 people will see this pin tonight.$/);
 
     await picker.getByRole('button', { name: /^Back$/ }).click();
     await expect(page.getByTestId('pin-audience-dialog')).toHaveCount(0);
@@ -1401,7 +1414,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
       await fulfillJson(200, true)(route);
     });
 
-    await page.goto('/friends');
+    await page.goto('/friends/tonight');
     // Says what happened, and does NOT render the unset row as if there were
     // no pin (V8-R-OPS-005).
     await expect(page.getByTestId('my-pin-error')).toBeVisible();
@@ -1409,10 +1422,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
 
     // Scoped to the presence region: since S-01 the header's pin icon is also
     // a button whose accessible name says "going out", and it is never disabled.
-    const going = page
-      .getByTestId('social-tonight')
-      .getByRole('button', { name: /going out/i })
-      .first();
+    const going = page.getByTestId('presence-status-going');
     await expect(going).toBeDisabled();
     // Force the tap past the disabled attribute: the guard must hold in the
     // handler too, not only in the styling.

@@ -272,9 +272,8 @@ test.describe('/friends — signed in (real graph)', () => {
     await page.goto('/friends');
 
     const strip = page.getByTestId('social-tonight');
-    // The status pills still render (they live in the same block)…
-    await expect(strip.getByRole('button', { name: /^Going out$/ })).toBeVisible();
-    // …and an EMPTY circle read with a real session is the empty state, with
+    // (S-05: the status controls moved to /friends/tonight; Tonight is the list.)
+    // An EMPTY circle read with a real session is the empty state, with
     // the forward path V8-R-OPS-005 asks for. This is the assertion that used
     // to live signed-out in night-out.spec.ts, where it was not a read at all.
     await expect(strip.getByTestId('presence-empty')).toBeVisible();

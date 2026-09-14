@@ -474,6 +474,28 @@ test.describe('Stories — signed in', () => {
     // An inset border ring is inside its own box: the box itself must not be
     // clipped. An outset shadow ring needs its full outset of headroom.
     expect(ringBox.y - clipTop).toBeGreaterThanOrEqual(stroke.shadow ? RING_OUTSET : 0);
+
+    // Tonight's rail is the heading-less, 58px-cell size (S-02, README §1.3).
+    await expect(page.getByTestId('stories-rail')).toHaveAttribute('data-size', 'tonight');
+    await expect(page.locator('#stories-heading')).toHaveCount(0);
+
+    // FEED keeps the outset shadow ring and the STORIES heading, and the
+    // scroller's top padding is what keeps that ring from being clipped — so
+    // the original measurement still runs against the rail it was written for.
+    await page.getByRole('tab', { name: /^Feed$/i }).click();
+    const feedRail = page.getByTestId('stories-rail');
+    await expect(feedRail).toHaveAttribute('data-size', 'feed');
+    await expect(page.locator('#stories-heading')).toHaveText(/Stories/i);
+    const feedRing = feedRail.getByTestId('story-ring').first();
+    await expect(feedRing).toHaveAttribute('data-active', 'true');
+    const feedShadow = await feedRing.evaluate((el) => getComputedStyle(el).boxShadow);
+    expect(feedShadow).not.toBe('none');
+    const feedRingBox = await feedRing.boundingBox();
+    const feedClipTop = await feedRail
+      .locator('[data-carousel]')
+      .evaluate((el) => el.getBoundingClientRect().top);
+    if (feedRingBox === null) throw new Error('feed rail not laid out');
+    expect(feedRingBox.y - feedClipTop).toBeGreaterThanOrEqual(RING_OUTSET);
   });
 
   test('the page under an open story dialog is inert', async ({ page }) => {

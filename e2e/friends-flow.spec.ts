@@ -154,14 +154,24 @@ test.describe('Social — the approved surface', () => {
     // visitor "No friends out yet tonight" about friends it never asked about.
     const tonight = page.getByTestId('social-tonight');
     await expect(tonight.getByText(/Sign in to see who's out/i)).toBeVisible();
-    // No accent CTA to a write the visitor cannot perform.
+    // No accent CTA to a write the visitor cannot perform, and (S-05) no status
+    // controls on Tonight at all — they live behind the header pin icon.
     await expect(
       tonight.getByRole('button', { name: /^Pin my spot$/ }),
     ).toHaveCount(0);
-    // …but the local intent flow is still live and still theirs.
-    await expect(
-      tonight.getByRole('button', { name: /^Going out$/ }),
-    ).toBeVisible();
+    await expect(tonight.getByTestId('presence-status-going')).toHaveCount(0);
+
+    // The pin icon pushes You tonight; signed out it says so and still offers
+    // the status rows (the local intent flow is theirs), never the pin control.
+    await page.getByTestId('social-pin-icon').click();
+    await expect(page).toHaveURL(/\/friends\/tonight$/);
+    const screen = page.getByTestId('presence-screen');
+    await expect(screen.getByTestId('presence-signed-out')).toBeVisible();
+    await expect(screen.getByTestId('presence-status-going')).toBeVisible();
+    await expect(screen.getByTestId('pin-my-spot')).toHaveCount(0);
+    await expect(screen.getByText(/Manual, always\. Nothing here reads your location/)).toBeVisible();
+    await page.getByTestId('tonight-back').click();
+    await expect(page).toHaveURL(/\/friends$/);
   });
 });
 
@@ -297,9 +307,9 @@ test.describe('Friends + consensus', () => {
     // cannot land, so the pill must NOT light — and the surface must say so
     // rather than going quiet.
     await page.clock.setFixedTime(new Date('2026-07-24T22:00:00'));
-    await page.goto('/friends');
+    await page.goto('/friends/tonight');
 
-    const going = page.getByRole('button', { name: /^Going out$/ });
+    const going = page.getByTestId('presence-status-going');
     await expect(going).toHaveAttribute('aria-pressed', 'false');
     await going.click();
 
@@ -308,7 +318,7 @@ test.describe('Friends + consensus', () => {
     await expect(page.getByText(/didn't save/i)).toBeVisible();
     await page.reload();
     await expect(
-      page.getByRole('button', { name: /^Going out$/ }),
+      page.getByTestId('presence-status-going'),
     ).toHaveAttribute('aria-pressed', 'false');
 
     // The other two pills are the V8 set, and none of them is lit either.
