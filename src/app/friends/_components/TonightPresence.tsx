@@ -134,6 +134,16 @@ export default function TonightPresence(): JSX.Element {
   const [pendingRecipients, setPendingRecipients] = useState<readonly string[]>([]);
 
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
+  /**
+   * AUTH ITSELF IS A THREE-STATE ANSWER (S-05c panel, Codex, HIGH). While
+   * `useAuth` is still resolving there is no `userId`, which is the SAME shape
+   * as signed out — so the read below reported "the server answered: no pin",
+   * `mineKnown` went true, the status rows enabled, and a tap in that window
+   * wrote the 'friends' default over a live Custom pin whose recipients the
+   * browser client (already carrying the restored session cookie) would happily
+   * replace. "We have not asked yet" is the loading state, not an empty pin.
+   */
+  const authLoading = auth.status === 'loading';
 
   /**
    * THE HISTORY ENTRIES THIS PAGE OWNS, oldest first — the entry it was opened
@@ -225,6 +235,11 @@ export default function TonightPresence(): JSX.Element {
 
   const reloadMine = useCallback(async (): Promise<void> => {
     const startedAt = readEpoch.current;
+    if (authLoading) {
+      // Nobody has been named yet: we know nothing, and nothing may be written.
+      setMinePin({ kind: 'loading' });
+      return;
+    }
     if (!userId) {
       // Signed out: there is no pin to read, and nothing failed.
       setMinePin({ kind: 'ok', presence: null });
@@ -260,7 +275,7 @@ export default function TonightPresence(): JSX.Element {
         return exhaustive;
       }
     }
-  }, [userId, night]);
+  }, [userId, night, authLoading]);
 
   useEffect(() => {
     // Synchronously, before `reloadMine` captures it: every read already in

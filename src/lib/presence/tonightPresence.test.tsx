@@ -331,3 +331,27 @@ describe('the pushed steps are gated like the row that opens them (S-05b, Fable 
     }
   });
 });
+
+describe('auth itself is a three-state answer (S-05c, Codex HIGH)', () => {
+  test('while auth is resolving the rows are disabled and no write can be built', async () => {
+    // The browser client can already carry a restored session here, so a tap in
+    // this window would replace a live pin's audience and recipients wholesale.
+    auth = { status: 'loading' };
+    fetchMyPresence.mockResolvedValue({ kind: 'ok', presence: LIVE_CLOSE_PIN });
+    const view = render(<TonightPresence />);
+
+    await screen.findByTestId('my-pin-loading');
+    const going = await screen.findByTestId('presence-status-going');
+    expect(going).toBeDisabled();
+    going.click();
+    expect(setPresence).not.toHaveBeenCalled();
+    // …and the pushed steps are shut while we know nothing.
+    expect(screen.queryByTestId('pin-my-spot')).toBeNull();
+
+    // Once auth names the account, the read runs and the rows open.
+    auth = { status: 'signed-in', user: { id: 'u1' } };
+    view.rerender(<TonightPresence />);
+    await waitFor(() => expect(screen.getByTestId('presence-status-going')).toBeEnabled());
+    expect(fetchMyPresence).toHaveBeenCalled();
+  });
+});
