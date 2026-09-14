@@ -124,7 +124,18 @@ function initialsOf(name: string): string {
   return letters.join('') || '?';
 }
 
-export default function PlanInvites(): JSX.Element | null {
+export type PlanInviteSummary = { nightOutId: string; myStatus: MyNightOut['myStatus'] };
+
+export default function PlanInvites({
+  onPlansChange,
+}: {
+  /**
+   * The plans this list knows about, with the viewer's status, after every
+   * read. Plans uses it to hide the duplicate invitation notification while a
+   * card is on the page and to settle it once the card is answered (S-03).
+   */
+  onPlansChange?: (plans: ReadonlyArray<PlanInviteSummary>) => void;
+} = {}): JSX.Element | null {
   const auth = useAuth();
   const router = useRouter();
   const [plans, setPlans] = useState<MyNightOut[] | null>(null);
@@ -146,6 +157,12 @@ export default function PlanInvites(): JSX.Element | null {
     }
     void load();
   }, [auth.status, load]);
+
+  useEffect(() => {
+    onPlansChange?.(
+      (plans ?? []).map((plan) => ({ nightOutId: plan.nightOutId, myStatus: plan.myStatus })),
+    );
+  }, [plans, onPlansChange]);
 
   const respond = async (
     planId: string,

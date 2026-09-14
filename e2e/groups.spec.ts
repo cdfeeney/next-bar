@@ -323,6 +323,73 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
     await expect(page.getByTestId('group-unread')).toContainText('3');
   });
 
+  test('one invitation is ONE row on Plans: the card hides its notification, and answering settles it (S-03 round 2)', async ({ page }) => {
+    // 0067 invite_one_to_night_out writes BOTH a pending member row and a
+    // notification, so the same invitation used to render as an "I'm in / Not
+    // tonight" card AND a "Got it" row under one heading (round-1 panel, HIGH).
+    const PLAN = '44444444-4444-4444-8444-444444444444';
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [],
+      invites: [{
+        id: 7,
+        night_out_id: PLAN,
+        night: '2026-09-04',
+        title: 'Sam-s birthday',
+        group_id: GROUP_ID,
+        group_name: 'Thursday Crew',
+        invited_by: OTHER_ID,
+        created_at: '2026-09-01T00:00:00Z',
+        read_at: null,
+      }],
+    });
+    let myStatus = 'pending';
+    await page.route('**/rest/v1/rpc/get_my_night_outs*', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{
+          night_out_id: PLAN,
+          night: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
+          title: 'Sam-s birthday',
+          status: 'open',
+          owner_handle: 'sam_j',
+          owner_display_name: 'Sam J.',
+          my_status: myStatus,
+          responded_at: null,
+          accepted_count: 2,
+          share_token: null,
+          plan_updated: false,
+          is_past: false,
+          my_revision: 1,
+        }]),
+      });
+    });
+    await page.route('**/rest/v1/rpc/respond_night_out*', async (route) => {
+      myStatus = 'declined';
+      await route.fulfill({ status: 200, contentType: 'application/json', body: 'true' });
+    });
+    const marked: number[] = [];
+    await page.route('**/rest/v1/rpc/mark_night_out_invitation_notification_read', async (route) => {
+      const body = route.request().postDataJSON() as { p_id?: number; p_notification?: number } | null;
+      marked.push(Number(body?.p_id ?? body?.p_notification ?? Object.values(body ?? {})[0]));
+      await route.fulfill({ status: 200, contentType: 'application/json', body: 'true' });
+    });
+
+    await page.goto('/friends');
+    await page.getByRole('tab', { name: /^Plans$/i }).click();
+
+    // One invitation, one card — the notification row is hidden behind it.
+    await expect(page.getByTestId('invite-pending')).toHaveCount(1);
+    await expect(page.getByTestId('group-invite-notification')).toHaveCount(0);
+
+    // Answering the card settles the notification (marked read, after confirm).
+    await page.getByRole('button', { name: 'Not tonight' }).click();
+    await expect.poll(() => marked).toEqual([7]);
+    await expect(page.getByTestId('invite-pending')).toHaveCount(0);
+    await expect(page.getByTestId('group-invite-notification')).toHaveCount(0);
+  });
+
   test('New group reveals the name field, and Create sends the typed name (S-01 carry-forward)', async ({ page }) => {
     // The redesign hides the create form behind a 44px outlined "New group"
     // pill (README §10). The S-01 panel found nothing exercised the reveal, so a

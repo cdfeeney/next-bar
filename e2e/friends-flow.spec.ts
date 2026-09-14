@@ -84,10 +84,13 @@ test.describe('Social — the approved surface', () => {
     await expect(plans.getByRole('heading', { name: /^Earlier nights$/i })).toHaveCount(0);
     await expect(plans.getByTestId('plan-invites')).toHaveCount(0);
     await expect(plans.getByTestId('group-invite-notifications')).toHaveCount(0);
+    // Signed out, Start goes to sign-in (the same rule as Tonight's card); the
+    // signed-in destination (/friends/consensus) is covered in night-out.spec.
     const start = page.getByRole('link', { name: /Start a Night Out/i });
     await expect(start).toBeVisible();
+    await expect(start).toHaveAttribute('href', '/auth');
     await start.click();
-    await expect(page).toHaveURL(/\/friends\/consensus$/);
+    await expect(page).toHaveURL(/\/auth$/);
   });
 
   test('the legacy dashboard’s primary action card is gone', async ({

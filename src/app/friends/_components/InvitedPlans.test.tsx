@@ -64,6 +64,29 @@ describe('InvitedPlans', () => {
     expect(container.querySelector('[data-testid="invited-notifications"]')).toBeNull();
   });
 
+  test('a notification whose plan already has a card is hidden; an answered plan marks it read', async () => {
+    fetchNotifications.mockResolvedValue({
+      ok: true,
+      value: [invite(1, { nightOutId: 'plan-a' }), invite(2, { nightOutId: 'plan-b' })],
+    });
+    markRead.mockResolvedValue({ ok: true, value: true });
+    const { rerender } = render(
+      <InvitedPlans cardedNightOutIds={new Set(['plan-a'])} answeredNightOutIds={new Set()} />,
+    );
+    await screen.findByTestId('group-invite-notification');
+    // plan-a is carded → hidden; plan-b has no card → shown.
+    expect(screen.getAllByTestId('group-invite-notification')).toHaveLength(1);
+    expect(screen.getByText(/Night 2/)).toBeTruthy();
+    expect(markRead).not.toHaveBeenCalled();
+
+    // The viewer answers plan-a's card: its notification is marked read (once).
+    rerender(
+      <InvitedPlans cardedNightOutIds={new Set(['plan-a'])} answeredNightOutIds={new Set(['plan-a'])} />,
+    );
+    await waitFor(() => expect(markRead).toHaveBeenCalledTimes(1));
+    expect(markRead.mock.calls[0][1]).toBe(1);
+  });
+
   test('a refused dismiss keeps the row and shows the message; a confirmed one removes it', async () => {
     fetchNotifications.mockResolvedValue({ ok: true, value: [invite(7)] });
     markRead.mockResolvedValueOnce({ ok: false, message: 'Could not mark as read.' });

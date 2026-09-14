@@ -22,7 +22,25 @@ import {
  * it, dismissing wrote read_at, the row left optimistically, and the next load
  * put it straight back.
  */
-export default function InvitedPlans(): JSX.Element | null {
+export default function InvitedPlans({
+  cardedNightOutIds,
+  answeredNightOutIds,
+}: {
+  /**
+   * Plans whose membership row already renders as a PlanInvites card. A group
+   * invitation writes BOTH a pending member row and a notification (0067
+   * `invite_one_to_night_out`), so without this the same invitation showed
+   * twice under one heading (S-03 panel, HIGH). The card is the richer
+   * surface; its notification row is hidden while the card is on the page.
+   */
+  cardedNightOutIds?: ReadonlySet<string>;
+  /**
+   * Plans the viewer has ANSWERED (I'm in / Not tonight). `respond_night_out`
+   * only changes night_out_members, so the notification is marked read here —
+   * after the server confirms, never optimistically.
+   */
+  answeredNightOutIds?: ReadonlySet<string>;
+} = {}): JSX.Element | null {
   const auth = useAuth();
   const client = useMemo(() => getBrowserSupabase(), []);
   const isSignedIn = auth.status === 'signed-in';
@@ -47,18 +65,39 @@ export default function InvitedPlans(): JSX.Element | null {
    * a notification that vanishes on a failed write is a notification never
    * delivered.
    */
-  const onDismiss = async (id: number): Promise<void> => {
-    if (client === null) return;
-    const result = await markInvitationNotificationRead(client, id);
-    if (!result.ok) {
-      setNotice(result.message);
-      return;
+  const markRead = useCallback(
+    async (id: number): Promise<boolean> => {
+      if (client === null) return false;
+      const result = await markInvitationNotificationRead(client, id);
+      if (!result.ok) {
+        setNotice(result.message);
+        return false;
+      }
+      setNotice(null);
+      setInvites((current) => current.filter((invite) => invite.id !== id));
+      return true;
+    },
+    [client],
+  );
+
+  // An answered card settles its notification: mark read, then drop the row.
+  const answeredKey = answeredNightOutIds ? Array.from(answeredNightOutIds).sort().join(',') : '';
+  useEffect(() => {
+    if (!answeredNightOutIds || answeredNightOutIds.size === 0) return;
+    for (const invite of invites) {
+      if (answeredNightOutIds.has(invite.nightOutId)) void markRead(invite.id);
     }
-    setInvites((current) => current.filter((invite) => invite.id !== id));
-  };
+    // `invites` is intentionally not a dependency: this runs when the ANSWERED
+    // set changes, and markRead removes rows as each write is confirmed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answeredKey, markRead]);
+
+  const visible = invites.filter(
+    (invite) => !(cardedNightOutIds?.has(invite.nightOutId) ?? false),
+  );
 
   if (!isSignedIn) return null;
-  if (!failed && invites.length === 0 && notice === null) return null;
+  if (!failed && visible.length === 0 && notice === null) return null;
 
   return (
     <div className="space-y-2" data-testid="invited-notifications">
@@ -72,9 +111,9 @@ export default function InvitedPlans(): JSX.Element | null {
           Your night out invitations could not be loaded.
         </p>
       ) : null}
-      {invites.length > 0 ? (
+      {visible.length > 0 ? (
         <ul data-testid="group-invite-notifications" className="space-y-2">
-          {invites.map((invite) => (
+          {visible.map((invite) => (
             <li
               key={invite.id}
               data-testid="group-invite-notification"
@@ -86,7 +125,7 @@ export default function InvitedPlans(): JSX.Element | null {
               </span>
               <button
                 type="button"
-                onClick={() => void onDismiss(invite.id)}
+                onClick={() => void markRead(invite.id)}
                 data-testid="group-invite-seen"
                 className="shrink-0 min-h-[44px] px-3 rounded-full border border-border text-sm font-display touch-manipulation"
               >

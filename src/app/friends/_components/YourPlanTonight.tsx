@@ -108,7 +108,11 @@ export default function YourPlanTonight({
     };
   }, [load]);
 
+  // Report only once the read has SETTLED (plan / none / failed). Reporting
+  // during idle or loading told Plans "no plan" before anything was known and
+  // flashed the no-plan line under a plan that was about to render (S-03 panel).
   useEffect(() => {
+    if (state.kind === 'idle' || state.kind === 'loading') return;
     onHasPlan?.(state.kind === 'plan');
   }, [state.kind, onHasPlan]);
 

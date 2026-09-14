@@ -14,36 +14,49 @@ import { fetchSavedNights } from '@/lib/nightOutMedia/server';
  * and a chevron; each opens the saved-night recap at /nights/<id>.
  *
  * Reads the same `get_saved_nights` the archive page reads. States are kept
- * apart on purpose: signed out, still loading and a failed read all render
- * nothing HERE — the archive page (`/nights`) is where failure is stated; this
- * is a shortcut list, and a shortcut must never claim "nothing saved" on a
- * read it could not complete. Empty renders nothing (the Plans no-plan line
+ * apart on purpose (V8-R-ACC-002): signed out and still loading render nothing;
+ * a FAILED read states so in one quiet line rather than rendering what an empty
+ * archive renders; genuinely empty renders nothing (the Plans no-plan line
  * already says what lands on this tab).
  */
 export default function EarlierNights({ limit = 5 }: { limit?: number }): JSX.Element | null {
   const auth = useAuth();
   const signedIn = auth.status === 'signed-in';
-  const [cards, setCards] = useState<SavedNightCard[] | null>(null);
+  const [read, setRead] = useState<
+    { kind: 'idle' } | { kind: 'failed' } | { kind: 'ready'; cards: SavedNightCard[] }
+  >({ kind: 'idle' });
 
   useEffect(() => {
     if (!signedIn) {
-      setCards(null);
+      setRead({ kind: 'idle' });
       return undefined;
     }
     const supabase = getBrowserSupabase();
-    if (supabase === null) return undefined;
+    if (supabase === null) {
+      setRead({ kind: 'failed' });
+      return undefined;
+    }
     let cancelled = false;
     void (async () => {
       const next = await fetchSavedNights(supabase);
       if (cancelled) return;
-      setCards(next);
+      setRead(next === null ? { kind: 'failed' } : { kind: 'ready', cards: next });
     })();
     return () => {
       cancelled = true;
     };
   }, [signedIn]);
 
-  if (!signedIn || cards === null || cards.length === 0) return null;
+  if (!signedIn || read.kind === 'idle') return null;
+  if (read.kind === 'failed') {
+    return (
+      <p role="status" data-testid="earlier-nights-error" className="text-[13px] text-muted pt-1.5">
+        Couldn&apos;t load your earlier nights. Pull again in a moment.
+      </p>
+    );
+  }
+  const { cards } = read;
+  if (cards.length === 0) return null;
 
   return (
     <section aria-labelledby="earlier-nights-heading" data-testid="earlier-nights">
