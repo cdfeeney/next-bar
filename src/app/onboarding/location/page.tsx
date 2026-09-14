@@ -27,6 +27,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import OnboardingTile from '../_OnboardingTile';
 import NeighborhoodPicker from '@/components/NeighborhoodPicker';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import { deriveArchetype } from '@/lib/quiz';
@@ -127,10 +128,7 @@ export default function OnboardingLocationPage(): JSX.Element {
         className="min-h-screen flex items-center justify-center px-6 outline-none"
       >
         <div className="max-w-sm w-full text-center">
-          <div
-            aria-hidden="true"
-            className="w-20 h-20 rounded-3xl bg-surface border border-border mx-auto mb-8"
-          />
+          <OnboardingTile glyph="pin" />
           <h1 className="font-display text-2xl md:text-3xl mb-3 leading-snug">
             No problem — pick a neighborhood instead
           </h1>
@@ -170,10 +168,7 @@ export default function OnboardingLocationPage(): JSX.Element {
       className="min-h-screen flex items-center justify-center px-6 outline-none"
     >
       <div className="max-w-sm w-full text-center">
-        <div
-          aria-hidden="true"
-          className="w-20 h-20 rounded-3xl bg-surface border border-border mx-auto mb-8"
-        />
+        <OnboardingTile glyph="pin" />
         <h1 className="font-display text-2xl md:text-3xl mb-3 leading-snug">
           So we can find bars near you tonight
         </h1>

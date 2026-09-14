@@ -41,6 +41,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import OnboardingTile from '../_OnboardingTile';
 import { useAuth } from '@/hooks/useAuth';
 import { signOutAndRevokePush } from '@/app/settings/_signOut';
 import {
@@ -288,10 +289,7 @@ export default function OnboardingAgePage(): JSX.Element | null {
     return (
       <main className="min-h-screen flex items-center justify-center px-6">
         <div className="max-w-sm w-full text-center">
-          <div
-            aria-hidden="true"
-            className="w-20 h-20 rounded-3xl bg-surface border border-border mx-auto mb-8"
-          />
+          <OnboardingTile glyph="bookmark" />
           <h1
             ref={heading}
             tabIndex={-1}
@@ -357,10 +355,7 @@ export default function OnboardingAgePage(): JSX.Element | null {
     return (
       <main className="min-h-screen flex items-center justify-center px-6">
         <div className="max-w-sm w-full text-center">
-          <div
-            aria-hidden="true"
-            className="w-20 h-20 rounded-3xl bg-surface border border-border mx-auto mb-8"
-          />
+          <OnboardingTile glyph="bookmark" />
           <h1 className="font-display text-2xl md:text-3xl mb-3 leading-snug">
             This app is for bars and nightlife
           </h1>
@@ -382,10 +377,7 @@ export default function OnboardingAgePage(): JSX.Element | null {
   return (
     <main className="min-h-screen flex items-center justify-center px-6">
       <div className="max-w-sm w-full text-center">
-        <div
-          aria-hidden="true"
-          className="w-20 h-20 rounded-3xl bg-surface border border-border mx-auto mb-8"
-        />
+        <OnboardingTile glyph="bookmark" />
         <h1 className="font-display text-2xl md:text-3xl mb-3 leading-snug">
           This app is for bars and nightlife
         </h1>
