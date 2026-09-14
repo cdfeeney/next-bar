@@ -51,7 +51,17 @@ const refresh = vi.fn();
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => auth }));
 // S-05: the screen surface returns to /friends after Pin it; no app router in jsdom.
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: () => undefined, back: () => undefined }) }));
+// The whole surface the component uses: S-05b pushes forward, replaces when a
+// step is not one of this page's own history entries, and pushes /friends after
+// Pin it. A mock missing one of these throws uncaught INSIDE an effect, which
+// vitest reports as an unhandled error while every test still passes.
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({
+    push: () => undefined,
+    replace: () => undefined,
+    back: () => undefined,
+  }),
+}));
 vi.mock('@/hooks/useFollows', () => ({
   useFollows: () => ({ mutuals: [], loading: false }),
 }));
