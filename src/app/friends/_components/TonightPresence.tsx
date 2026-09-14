@@ -24,7 +24,6 @@ import {
 } from '@/lib/presence/server';
 import { PinAudienceDialog, PinBarDialog, isAudienceHeld } from '@/lib/presence/PinDialogs';
 import { usePinnedHandles, announcePresenceChanged } from './usePinnedHandles';
-import OutTonightList from './OutTonight';
 
 /**
  * Social · Tonight — current awareness (V8-R-SOC-001, V8-R-PRE-001..005).
@@ -92,22 +91,19 @@ type MinePinState =
   /** The read failed. Different from "no pin", and never written over. */
   | { kind: 'unreadable' };
 
-export default function TonightPresence({
-  surface = 'tonight',
-}: {
-  /**
-   * `tonight` = the Out tonight list on Social → Tonight (owner decision
-   * 2026-09-13: no status row there). `screen` = the You tonight controls
-   * and the pin sequence on /friends/tonight (README §4, §5).
-   */
-  surface?: 'tonight' | 'screen';
-} = {}): JSX.Element {
+/**
+ * The You tonight controls and the pin sequence on /friends/tonight (README
+ * §4, §5). Owner decision 2026-09-13: Tonight itself carries no status row;
+ * its Out tonight list is `OutTonightSection` (OutTonight.tsx), which reads
+ * only what it draws.
+ */
+export default function TonightPresence(): JSX.Element {
   // 0019 swap-day rule: this component renders getBarById lookups, so it
   // subscribes to a live server-catalog swap.
   useBars();
   const auth = useAuth();
   const router = useRouter();
-  const { loading, rows, night, refresh } = usePinnedHandles();
+  const { night, refresh } = usePinnedHandles();
   // The mutual-follow list the 'people' audience picks from. Read here rather
   // than inside the dialog so the dialog stays a presentation of a list it is
   // given, and so "still loading" is distinguishable from "you have nobody".
@@ -323,6 +319,10 @@ export default function TonightPresence({
    */
   const confirmPin = useCallback(async (): Promise<void> => {
     if (busy || pendingBarId === null) return;
+    // The held state is enforced HERE as well as on the button (R-02, S-05
+    // panel): an audience of "only some people" with nobody picked must never
+    // reach the write, whatever the DOM says.
+    if (isAudienceHeld(pendingAudience, pendingRecipients.length)) return;
     const supabase = getBrowserSupabase();
     if (!supabase) {
       setFailed(true);
@@ -352,7 +352,7 @@ export default function TonightPresence({
       announcePresenceChanged();
       // README §5: Pin it is the end of the sequence — back to Social, where
       // the header pin icon and Out tonight now reflect the write.
-      if (surface === 'screen') router.push('/friends');
+      router.push('/friends');
     } else {
       // The sequence STAYS OPEN on a failure: the user's chosen bar and
       // audience are still on screen to retry from, rather than being thrown
@@ -360,7 +360,7 @@ export default function TonightPresence({
       setFailed(true);
     }
     setBusy(false);
-  }, [busy, pendingAudience, pendingBarId, pendingRecipients, reloadMine, refresh, router, surface]);
+  }, [busy, pendingAudience, pendingBarId, pendingRecipients, reloadMine, refresh, router]);
 
   const writeAudience = useCallback(
     async (
@@ -437,27 +437,6 @@ export default function TonightPresence({
   const myPin = mine ? describePresence(mine) : null;
   const myBar = myPin?.barId ? getBarById(myPin.barId) : null;
   const pendingBar = pendingBarId === null ? null : getBarById(pendingBarId);
-
-  // TONIGHT carries only "who else is out" (Social redesign 2026-09-13, owner
-  // decision: no status row on Tonight). The controls below live on
-  // /friends/tonight behind the header pin icon.
-  if (surface === 'tonight') {
-    return (
-      <div className="space-y-8" data-testid="social-tonight">
-        {/* Who else is out (README §1.6). */}
-        <section data-testid="out-tonight">
-          <h2 className="font-label text-xs font-bold uppercase tracking-[0.25em] text-muted mb-3.5">
-            Out tonight
-          </h2>
-          <OutTonightList
-            loading={loading}
-            rows={rows}
-            signedOut={auth.status !== 'loading' && auth.status !== 'signed-in'}
-          />
-        </section>
-      </div>
-    );
-  }
 
   const signedOut = auth.status !== 'loading' && auth.status !== 'signed-in';
   const rowClass = (on: boolean): string =>

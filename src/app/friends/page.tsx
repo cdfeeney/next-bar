@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import TonightPresence from './_components/TonightPresence';
+import { OutTonightSection } from './_components/OutTonight';
 import PlansSection from './_components/PlansSection';
 import FeedSection from './_components/FeedSection';
 import YourPlanTonight from './_components/YourPlanTonight';
@@ -154,7 +154,7 @@ export default function SocialPage(): JSX.Element {
 
   return (
     <main className="min-h-screen pb-28">
-      <header className="px-6 pt-8 pb-4 max-w-md mx-auto w-full flex items-start justify-between gap-3">
+      <header className="px-6 pt-[18px] pb-4 max-w-md mx-auto w-full flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="font-display text-2xl uppercase tracking-[0.14em]">
             Next Bar
@@ -241,12 +241,12 @@ export default function SocialPage(): JSX.Element {
             {/* PLAN-LED TONIGHT (Social redesign 2026-09-13, README §1):
                 stories rail → the plan card → Out tonight. V8-R-SOC-003 (the
                 Next Bar? card) was retired 2026-09-09; Groups & people moved to
-                /friends/people in S-01. The "You tonight" controls inside
-                TonightPresence are INTERIM: S-05 rehomes them to /friends/tonight
-                behind the header pin icon, and Tonight keeps only Out tonight. */}
+                /friends/people in S-01; the "You tonight" controls live on
+                /friends/tonight behind the header pin icon (S-05). Tonight
+                keeps only Out tonight, and reads only what it draws (R-02). */}
             {railFor('tonight')}
             <YourPlanTonight variant="tonight" />
-            <TonightPresence />
+            <OutTonightSection />
           </Panel>
         ) : null}
 

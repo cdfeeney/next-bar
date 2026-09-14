@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
@@ -25,6 +25,7 @@ import {
 export default function InvitedPlans({
   cardedNightOutIds,
   answeredNightOutIds,
+  showHeading = false,
 }: {
   /**
    * Plans whose membership row already renders as a PlanInvites card. A group
@@ -40,6 +41,12 @@ export default function InvitedPlans({
    * after the server confirms, never optimistically.
    */
   answeredNightOutIds?: ReadonlySet<string>;
+  /**
+   * PlanInvites owns the "Invited" heading while it has a card on the page;
+   * when it has none, these rows are the whole INVITED section and carry the
+   * heading themselves (R-02) — never an unlabelled list.
+   */
+  showHeading?: boolean;
 } = {}): JSX.Element | null {
   const auth = useAuth();
   const client = useMemo(() => getBrowserSupabase(), []);
@@ -65,10 +72,16 @@ export default function InvitedPlans({
    * a notification that vanishes on a failed write is a notification never
    * delivered.
    */
+  // Ids with a mark-read write IN FLIGHT. The auto-mark effect below re-runs
+  // whenever the list changes, which is exactly when a sibling write has just
+  // been confirmed — without this, every still-pending id is written again.
+  const marking = useRef(new Set<number>());
   const markRead = useCallback(
     async (id: number): Promise<boolean> => {
-      if (client === null) return false;
+      if (client === null || marking.current.has(id)) return false;
+      marking.current.add(id);
       const result = await markInvitationNotificationRead(client, id);
+      marking.current.delete(id);
       if (!result.ok) {
         setNotice(result.message);
         return false;
@@ -81,16 +94,20 @@ export default function InvitedPlans({
   );
 
   // An answered card settles its notification: mark read, then drop the row.
+  // Runs when the ANSWERED set changes AND when the notifications load (R-02:
+  // a plan answered before this list arrived was never settled), and again on
+  // any later list change, which is what retries a mark that failed.
+  // A confirmed mark removes its row, so a successful pass never re-runs; a
+  // failed one leaves the row, and `invites` does not change on failure.
   const answeredKey = answeredNightOutIds ? Array.from(answeredNightOutIds).sort().join(',') : '';
   useEffect(() => {
     if (!answeredNightOutIds || answeredNightOutIds.size === 0) return;
     for (const invite of invites) {
       if (answeredNightOutIds.has(invite.nightOutId)) void markRead(invite.id);
     }
-    // `invites` is intentionally not a dependency: this runs when the ANSWERED
-    // set changes, and markRead removes rows as each write is confirmed.
+    // `answeredKey` stands in for the set so a same-content Set does not re-fire.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [answeredKey, markRead]);
+  }, [answeredKey, invites, markRead]);
 
   const visible = invites.filter(
     (invite) => !(cardedNightOutIds?.has(invite.nightOutId) ?? false),
@@ -101,6 +118,11 @@ export default function InvitedPlans({
 
   return (
     <div className="space-y-2" data-testid="invited-notifications">
+      {showHeading && visible.length > 0 ? (
+        <h2 className="font-label text-xs font-bold uppercase tracking-[0.25em] text-muted mt-[30px] mb-3">
+          Invited
+        </h2>
+      ) : null}
       {notice !== null ? (
         <p role="status" className="text-sm rounded-2xl border border-border bg-surface px-4 py-3">
           {notice}
@@ -112,22 +134,27 @@ export default function InvitedPlans({
         </p>
       ) : null}
       {visible.length > 0 ? (
-        <ul data-testid="group-invite-notifications" className="space-y-2">
+        <ul data-testid="group-invite-notifications" className="space-y-3">
+          {/* README §2.3 card shape: 24px radius, surface, name over a muted
+              meta line, then one 44px action. */}
           {visible.map((invite) => (
             <li
               key={invite.id}
               data-testid="group-invite-notification"
-              className="flex items-center justify-between gap-3 rounded-3xl border border-accent bg-surface px-4 py-3"
+              className="rounded-3xl border border-border bg-surface p-4"
             >
-              <span className="min-w-0 text-sm">
-                You are invited to {invite.title ?? 'a night out'} on {invite.night}
-                {invite.groupName !== null ? ` via ${invite.groupName}` : ''}.
-              </span>
+              <p className="text-[15px] font-semibold truncate">
+                You are invited to {invite.title ?? 'a night out'}
+              </p>
+              <p className="text-xs text-muted truncate mt-px">
+                {invite.night}
+                {invite.groupName !== null ? ` · via ${invite.groupName}` : ''}
+              </p>
               <button
                 type="button"
                 onClick={() => void markRead(invite.id)}
                 data-testid="group-invite-seen"
-                className="shrink-0 min-h-[44px] px-3 rounded-full border border-border text-sm font-display touch-manipulation"
+                className="mt-3.5 w-full min-h-[44px] rounded-full border border-border text-sm font-display touch-manipulation"
               >
                 Got it
               </button>

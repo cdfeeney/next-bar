@@ -828,3 +828,37 @@ describe('FeedSection — "no tags" and "we could not read the tags" are differe
     expect(screen.queryByTestId('feed-post-tags')).toBeNull();
   });
 });
+
+describe('FeedSection — the card actions (S-04, README §3)', () => {
+  test('exactly two actions; REPLY flips to REPLIES · N after a confirmed send; open state is accent', async () => {
+    postPlan = [{ ok: true, value: [makePost({ nightOutId: 'night-1', nightShareToken: 'tok-1' })] }];
+    // Empty thread first; the refresh after the confirmed send answers with it.
+    const sent = makeComment({ id: 'sent', body: 'hello', authorId: VIEWER });
+    commentPlan = [
+      { ok: true, value: new Map([['post-1', []]]) },
+      { ok: true, value: new Map([['post-1', [sent]]]) },
+    ];
+    addResult = { ok: true, value: sent };
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+    const user = userEvent.setup();
+
+    await screen.findByTestId('feed-post');
+    const toggle = screen.getByTestId('feed-reply');
+    // The action row holds View night and the reply toggle — and nothing else.
+    const actions = toggle.parentElement as HTMLElement;
+    expect(actions.querySelectorAll('a, button')).toHaveLength(2);
+    expect(actions.querySelector('[data-testid="feed-view-night"]')).toBeTruthy();
+    expect(toggle.textContent).toBe('Reply');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.classList.contains('border-accent')).toBe(false);
+
+    await user.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.classList.contains('border-accent')).toBe(true);
+    expect(toggle.classList.contains('text-accent')).toBe(true);
+
+    await user.type(screen.getByTestId('feed-comment-input'), 'hello');
+    await user.click(screen.getByTestId('feed-comment-submit'));
+    await waitFor(() => expect(toggle.textContent).toBe('Replies · 1'));
+  });
+});

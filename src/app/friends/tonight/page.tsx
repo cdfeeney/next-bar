@@ -26,7 +26,7 @@ export default function YouTonightPage(): JSX.Element {
       </header>
 
       <div className="max-w-md mx-auto px-6 pt-2">
-        <TonightPresence surface="screen" />
+        <TonightPresence />
       </div>
     </main>
   );

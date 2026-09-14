@@ -78,10 +78,7 @@ export default function EarlierNights({ limit = 5 }: { limit?: number }): JSX.El
                 {card.coverMediaIds.length > 0 ? (
                   <MediaThumb mediaId={card.coverMediaIds[0]} alt="" className="w-12 h-12 object-cover" />
                 ) : (
-                  <span
-                    className="block w-12 h-12"
-                    style={{ background: 'linear-gradient(140deg, #c54328, #2a1c2e)' }}
-                  />
+                  <span className="block w-12 h-12 bg-gradient-to-br from-accentDim to-held" />
                 )}
               </span>
               <span className="min-w-0 flex-1">

@@ -31,7 +31,7 @@
  *     dismissed flag, and adding one is not in this goal's scope.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
@@ -124,7 +124,28 @@ function initialsOf(name: string): string {
   return letters.join('') || '?';
 }
 
-export type PlanInviteSummary = { nightOutId: string; myStatus: MyNightOut['myStatus'] };
+export type PlanInviteSummary = {
+  nightOutId: string;
+  myStatus: MyNightOut['myStatus'];
+  /**
+   * Whether this plan renders as a card RIGHT NOW. R-02 (S-03 panel, medium):
+   * Plans hid a notification for every plan this list knew, so a pending plan
+   * past the two-day grace or a dismissed expired card left a notification
+   * nobody could see or clear. Only a visible card may hide its notification.
+   */
+  carded: boolean;
+};
+
+/** Declined rows leave the list; dismissed and long-past ones leave for this session. */
+function isCardVisible(plan: MyNightOut, dismissed: ReadonlySet<string>, tonight: string): boolean {
+  return (
+    plan.myStatus !== 'declined'
+    && !dismissed.has(plan.nightOutId)
+    // Without this, every plan the user was ever invited to comes back as an
+    // expired invite in every new session (round 1, Claude).
+    && isWithinExpiryGrace(plan.night, tonight)
+  );
+}
 
 export default function PlanInvites({
   onPlansChange,
@@ -158,11 +179,22 @@ export default function PlanInvites({
     void load();
   }, [auth.status, load]);
 
+  // The SAME night key the render below filters with, so the summary and the
+  // cards on the page can never disagree about which plans are visible. The
+  // memo re-keys when the string changes (a rollover seen by a later render).
+  const tonight = nycNightKey();
+  const summary = useMemo(
+    () =>
+      (plans ?? []).map((plan) => ({
+        nightOutId: plan.nightOutId,
+        myStatus: plan.myStatus,
+        carded: isCardVisible(plan, dismissed, tonight),
+      })),
+    [plans, dismissed, tonight],
+  );
   useEffect(() => {
-    onPlansChange?.(
-      (plans ?? []).map((plan) => ({ nightOutId: plan.nightOutId, myStatus: plan.myStatus })),
-    );
-  }, [plans, onPlansChange]);
+    onPlansChange?.(summary);
+  }, [summary, onPlansChange]);
 
   const respond = async (
     planId: string,
@@ -205,19 +237,10 @@ export default function PlanInvites({
 
   if (auth.status !== 'signed-in' || plans === null) return null;
 
-  // Declined rows leave the list; dismissed expired cards leave for this
-  // session. Hidden when empty, matching the Requests consent inbox on this
-  // same page rather than inventing an empty state (that belongs to the
-  // deferred operational-states work).
-  const tonight = nycNightKey();
-  const visible = plans.filter(
-    (p) =>
-      p.myStatus !== 'declined'
-      && !dismissed.has(p.nightOutId)
-      // Without this, every plan the user was ever invited to comes back as an
-      // expired invite in every new session (round 1, Claude).
-      && isWithinExpiryGrace(p.night, tonight),
-  );
+  // Hidden when empty, matching the Requests consent inbox on this same page
+  // rather than inventing an empty state (that belongs to the deferred
+  // operational-states work).
+  const visible = plans.filter((p) => isCardVisible(p, dismissed, tonight));
   if (visible.length === 0) return null;
 
   return (

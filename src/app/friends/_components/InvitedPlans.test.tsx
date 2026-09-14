@@ -104,3 +104,36 @@ describe('InvitedPlans', () => {
     expect(markRead.mock.calls[0][1]).toBe(7);
   });
 });
+
+describe('InvitedPlans — R-02 follow-ups', () => {
+  beforeEach(() => {
+    fetchNotifications.mockReset();
+    markRead.mockReset();
+  });
+
+  test('a plan answered BEFORE the notifications load is settled once they arrive', async () => {
+    fetchNotifications.mockResolvedValue({
+      ok: true,
+      value: [invite(1, { nightOutId: 'plan-a' }), invite(2, { nightOutId: 'plan-b' })],
+    });
+    markRead.mockResolvedValue({ ok: true, value: true });
+    render(
+      <InvitedPlans cardedNightOutIds={new Set(['plan-a'])} answeredNightOutIds={new Set(['plan-a'])} />,
+    );
+    await waitFor(() => expect(markRead).toHaveBeenCalledTimes(1));
+    expect(markRead.mock.calls[0][1]).toBe(1);
+    // plan-b has no card and was not answered: it stays, and is the only row.
+    expect(screen.getAllByTestId('group-invite-notification')).toHaveLength(1);
+  });
+
+  test('rows with no card on the page carry their own Invited heading', async () => {
+    fetchNotifications.mockResolvedValue({ ok: true, value: [invite(3, { nightOutId: 'plan-c' })] });
+    const { rerender } = render(<InvitedPlans cardedNightOutIds={new Set()} showHeading />);
+    await screen.findByTestId('group-invite-notification');
+    expect(screen.getByRole('heading', { name: 'Invited' })).toBeTruthy();
+
+    // PlanInvites owns the heading while it has a card: no second one here.
+    rerender(<InvitedPlans cardedNightOutIds={new Set()} showHeading={false} />);
+    expect(screen.queryByRole('heading', { name: 'Invited' })).toBeNull();
+  });
+});

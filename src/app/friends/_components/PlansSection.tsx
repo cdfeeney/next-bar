@@ -36,8 +36,9 @@ export default function PlansSection(): JSX.Element {
   const onPlansChange = useCallback((plans: ReadonlyArray<PlanInviteSummary>) => {
     setInvitePlans(plans);
   }, []);
+  // Only a card that is ON THE PAGE may hide its notification (R-02).
   const carded = useMemo(
-    () => new Set(invitePlans.map((plan) => plan.nightOutId)),
+    () => new Set(invitePlans.filter((plan) => plan.carded).map((plan) => plan.nightOutId)),
     [invitePlans],
   );
   const answered = useMemo(
@@ -89,7 +90,11 @@ export default function PlansSection(): JSX.Element {
       {/* Invitations addressed to this account, and the way into an accepted
           plan's shortlist. Renders nothing when there are none. */}
       <PlanInvites onPlansChange={onPlansChange} />
-      <InvitedPlans cardedNightOutIds={carded} answeredNightOutIds={answered} />
+      <InvitedPlans
+        cardedNightOutIds={carded}
+        answeredNightOutIds={answered}
+        showHeading={carded.size === 0}
+      />
 
       <EarlierNights />
     </section>

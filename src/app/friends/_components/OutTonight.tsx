@@ -2,9 +2,41 @@
 
 import Link from 'next/link';
 import Avatar from '@/components/Avatar';
+import { useAuth } from '@/hooks/useAuth';
 import { getBarById } from '@/lib/catalog';
+import { useBars } from '@/lib/useBars';
 import { PRESENCE_LABELS, describePresence } from '@/lib/presence';
-import type { usePinnedHandles } from './usePinnedHandles';
+import { usePinnedHandles } from './usePinnedHandles';
+
+/**
+ * Social → Tonight's OUT TONIGHT section, reading only what it draws. R-02
+ * (S-05 panel, medium): Tonight used to mount the whole TonightPresence state
+ * machine — the own-pin read and the three follows RPCs — for a surface that
+ * renders none of it. The controls and the pin sequence live on
+ * /friends/tonight (TonightPresence); this is the split the S-05 scope named.
+ */
+export function OutTonightSection(): JSX.Element {
+  // 0019 swap-day rule: rows render getBarById lookups, so subscribe to a
+  // live server-catalog swap.
+  useBars();
+  const auth = useAuth();
+  const { loading, rows } = usePinnedHandles();
+  return (
+    <div className="space-y-8" data-testid="social-tonight">
+      {/* Who else is out (README §1.6). */}
+      <section data-testid="out-tonight">
+        <h2 className="font-label text-xs font-bold uppercase tracking-[0.25em] text-muted mb-3.5">
+          Out tonight
+        </h2>
+        <OutTonightList
+          loading={loading}
+          rows={rows}
+          signedOut={auth.status !== 'loading' && auth.status !== 'signed-in'}
+        />
+      </section>
+    </div>
+  );
+}
 
 /**
  * Social · Tonight → OUT TONIGHT (Social redesign 2026-09-13, README §1.6):

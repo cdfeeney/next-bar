@@ -334,7 +334,7 @@ export default function FeedSection({
         id="feed-heading"
         className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3"
       >
-        Tonight
+        Feed
       </h2>
 
       {loadFailed ? (

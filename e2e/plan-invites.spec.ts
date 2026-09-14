@@ -221,4 +221,50 @@ test.describe('/friends — Social → Plans invitation cards', () => {
     await expect(page.getByRole('link', { name: /Start a Night Out/i })).toBeVisible();
     await expect(page.getByTestId('plan-invites')).toHaveCount(0);
   });
+
+  test('a 500 on Not tonight keeps the card on the page and says so', async ({ page }) => {
+    // R-02: the decline path had no browser coverage. A refused write must not
+    // drop the card — the invitation is still unanswered.
+    await stubFriendsPage(page, [pendingInviteRow()]);
+    await page.route('**/rest/v1/rpc/respond_night_out*', fulfillJson(500, { message: 'boom' }));
+
+    await page.goto('/friends');
+    await page.getByRole('tab', { name: /^Plans$/i }).click();
+    await expect(page.getByTestId('invite-pending')).toBeVisible();
+    await page.getByRole('button', { name: /^Not tonight/ }).click();
+
+    await expect(page.getByText(/didn't go through/i)).toBeVisible();
+    await expect(page.getByTestId('invite-pending')).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Not tonight/ })).toBeEnabled();
+  });
+
+  test('Earlier nights lists a saved night as a row that opens its recap', async ({ page }) => {
+    // R-02: EarlierNights (S-03) had no browser coverage. The catch-all answers
+    // get_saved_nights with [] — register the real answer AFTER it.
+    const SAVED_ID = '923e4567-e89b-42d3-a456-426614174000';
+    await stubFriendsPage(page, []);
+    await page.route(
+      '**/rest/v1/rpc/get_saved_nights*',
+      fulfillJson(200, [
+        {
+          id: SAVED_ID,
+          title: 'Birthday crawl',
+          night: '2026-07-24',
+          bar_count: 3,
+          photo_count: 1,
+          archived_at: '2026-07-25T09:00:00.000Z',
+          cover_media_ids: [],
+        },
+      ]),
+    );
+
+    await page.goto('/friends');
+    await page.getByRole('tab', { name: /^Plans$/i }).click();
+    await expect(page.getByRole('heading', { name: /earlier nights/i })).toBeVisible();
+    const row = page.getByTestId('earlier-night');
+    await expect(row).toHaveCount(1);
+    await expect(row).toContainText('Birthday crawl');
+    await expect(row).toContainText(/3 bars · 1 photo/);
+    await expect(row).toHaveAttribute('href', `/nights/${SAVED_ID}`);
+  });
 });
