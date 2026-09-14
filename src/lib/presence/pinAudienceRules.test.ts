@@ -30,7 +30,7 @@ describe('filterFriends', () => {
 });
 
 describe('isAudienceHeld', () => {
-  test('Only some people with nobody picked holds the confirm; anything else does not', () => {
+  test('Custom with nobody picked holds the confirm; anything else does not', () => {
     expect(isAudienceHeld('people', 0)).toBe(true);
     expect(isAudienceHeld('people', 1)).toBe(false);
     expect(isAudienceHeld('friends', 0)).toBe(false);

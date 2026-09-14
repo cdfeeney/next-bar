@@ -75,17 +75,15 @@ vi.mock('../../app/friends/_components/usePinnedHandles', () => ({
   announcePresenceChanged: vi.fn(),
   PRESENCE_CHANGED_EVENT: 'next-bar:presence-changed',
 }));
-// The bar dialog is another packet's surface; what matters here is what the
-// component does with the bar it hands back.
-vi.mock('@/lib/presence/PinDialogs', () => ({
-  // The pure rule the component reads; the real one is unit-tested in pinAudienceRules.test.ts.
-  isAudienceHeld: (audience: string, count: number) => audience === 'people' && count === 0,
-  PinBarDialog: ({ onPick }: { onPick: (bar: { id: string }) => void }) => (
+// The bar picker is another packet's surface; what matters here is what the
+// component does with the bar it hands back (S-05b: the Where are you? step
+// renders it inline, so the fake stands in for the search + list).
+vi.mock('@/components/BarPicker', () => ({
+  default: ({ onPick }: { onPick: (bar: { id: string }) => void }) => (
     <button type="button" data-testid="fake-pick" onClick={() => onPick({ id: 'attaboy' })}>
       pick attaboy
     </button>
   ),
-  PinAudienceDialog: () => null,
 }));
 
 import TonightPresence from '../../app/friends/_components/TonightPresence';

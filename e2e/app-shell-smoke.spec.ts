@@ -121,6 +121,15 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/friends/tonight');
   });
 
+  test('/friends/tonight?step=where renders Where are you? with a back control (S-05b)', async ({ page }) => {
+    await page.goto('/friends/tonight?step=where');
+    // The step body first: the status screen also has a "Where are you?" section heading.
+    await expect(page.getByTestId('pin-where-step')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: /^Where are you\?$/ })).toBeVisible();
+    await expect(page.getByTestId('pin-step-back')).toBeVisible();
+    await expectNoConsoleErrors(page, '/friends/tonight?step=where');
+  });
+
   test('/friends/people renders Groups & people with a back control (S-01)', async ({ page }) => {
     await page.goto('/friends/people');
     await expect(page.getByRole('heading', { name: /^Groups & people$/ })).toBeVisible();

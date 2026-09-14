@@ -94,7 +94,7 @@ const AUDIENCES: ReadonlySet<string> = new Set<PresenceAudience>([
 export const AUDIENCE_LABELS: Readonly<Record<PresenceAudience, string>> = {
   friends: 'Friends',
   close: 'Close friends',
-  people: 'Only some people',
+  people: 'Custom',
 };
 
 /** Same shape the migration's check constraint enforces. */

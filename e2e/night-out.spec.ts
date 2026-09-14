@@ -1140,6 +1140,10 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
    * unreachable: choosing "Going out" could only ever send the bar the user
    * already had, and a new pinner had none, so V8-R-PRE-001 and V8-R-PRE-003
    * could not be satisfied at all.
+   *
+   * S-05b (owner decision 2026-09-14): the sequence is three PUSHED screens —
+   * You tonight → Where are you? → Pin your spot — mirrored to `?step=`, not
+   * modal dialogs. The Custom picker is inline on Pin your spot.
    */
   async function stubTonight(page: Page, mine: unknown[]): Promise<void> {
     await stubNightOutRest(page);
@@ -1148,6 +1152,14 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await page.route('**/rest/v1/rpc/get_circle_presence*', fulfillJson(200, []));
     await page.route('**/rest/v1/rpc/get_my_presence*', fulfillJson(200, mine));
   }
+
+  const NO_BAR = {
+    status: 'going',
+    bar_id: null,
+    audience: 'friends',
+    updated_at: '2026-08-20T02:00:00.000Z',
+    recipient_ids: [],
+  };
 
   test('a new pinner can reach the bar step, and the trust line is on it', async ({
     page,
@@ -1159,15 +1171,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
     // Status set, no bar — the state a first "Going out" tap produces.
-    await stubTonight(page, [
-      {
-        status: 'going',
-        bar_id: null,
-        audience: 'friends',
-        updated_at: '2026-08-20T02:00:00.000Z',
-        recipient_ids: [],
-      },
-    ]);
+    await stubTonight(page, [NO_BAR]);
 
     await page.goto('/friends/tonight');
     await expect(page.getByTestId('my-pin')).toContainText(/no bar pinned/i);
@@ -1177,20 +1181,22 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await expect(pin).toBeVisible();
     await pin.click();
 
-    const dialog = page.getByTestId('pin-bar-dialog');
-    await expect(dialog).toBeVisible();
-    await expect(
-      dialog.getByRole('heading', { name: /where are you/i }),
-    ).toBeVisible();
+    // A pushed screen with its own title, back control and URL.
+    const where = page.getByTestId('pin-where-step');
+    await expect(where).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: /^Where are you\?$/ })).toBeVisible();
+    await expect(page).toHaveURL(/\/friends\/tonight\?step=where$/);
     // One question, one field (V8-R-PRE-003).
-    await expect(dialog.getByRole('textbox', { name: /search bars/i })).toBeVisible();
+    await expect(where.getByRole('textbox', { name: /search bars/i })).toBeVisible();
     // The trust line "stays in place throughout" (V8-R-PRE-001 accessibility).
-    await expect(dialog.getByText(/never tracks you automatically/i)).toBeVisible();
+    await expect(where.getByText(/never tracks you automatically/i)).toBeVisible();
 
-    // Back returns to Tonight and takes nothing with it.
-    await dialog.getByRole('button', { name: /^Back$/ }).click();
-    await expect(page.getByTestId('pin-bar-dialog')).toHaveCount(0);
+    // Back returns to You tonight and takes nothing with it.
+    await page.getByTestId('pin-step-back').click();
+    await expect(page.getByTestId('pin-where-step')).toHaveCount(0);
     await expect(page.getByTestId('presence-screen')).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^You tonight$/ })).toBeVisible();
+    await expect(page).toHaveURL(/\/friends\/tonight$/);
 
     // S-05: exactly ONE ✓, on the chosen row, and none elsewhere (README §4).
     await expect(page.getByTestId('presence-status-check')).toHaveCount(1);
@@ -1237,16 +1243,12 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
 
   /**
    * V8-R-PRE-003 → V8-R-PRE-002, and the defect round 3 found (Codex gate,
-   * HIGH): picking a bar used to WRITE it immediately, carrying whatever
-   * audience was already there or the 'friends' default, and then close the
-   * dialog. A first-time pinner's location went live to every follower before
-   * anyone asked who should see it.
-   *
-   * "Tapping a result selects that bar and advances straight to the audience
-   * step." Selecting is not publishing — and the assertion that matters is the
-   * negative one: `set_night_presence` is not called until Pin it.
+   * HIGH): picking a bar used to WRITE it immediately. "Tapping a result
+   * selects that bar and advances straight to the audience step." Selecting is
+   * not publishing — and the assertion that matters is the negative one:
+   * `set_night_presence` is not called until Pin it.
    */
-  test('picking a bar advances to the audience step and writes NOTHING until it is confirmed', async ({
+  test('picking a bar advances to Pin your spot and writes NOTHING until it is confirmed', async ({
     page,
     context,
     baseURL,
@@ -1255,15 +1257,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await context.addCookies([
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
-    await stubTonight(page, [
-      {
-        status: 'going',
-        bar_id: null,
-        audience: 'friends',
-        updated_at: '2026-08-20T02:00:00.000Z',
-        recipient_ids: [],
-      },
-    ]);
+    await stubTonight(page, [NO_BAR]);
     let writes = 0;
     await page.route('**/rest/v1/rpc/set_night_presence*', async (route) => {
       writes += 1;
@@ -1272,15 +1266,17 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
 
     await page.goto('/friends/tonight');
     await page.getByTestId('pin-my-spot').click();
-    const dialog = page.getByTestId('pin-bar-dialog');
-    await expect(dialog).toBeVisible();
-    await dialog.getByRole('textbox', { name: /search bars/i }).fill('att');
-    await dialog.getByRole('button', { name: /attaboy/i }).first().click();
+    const where = page.getByTestId('pin-where-step');
+    await expect(where).toBeVisible();
+    await where.getByRole('textbox', { name: /search bars/i }).fill('att');
+    await where.getByRole('button', { name: /attaboy/i }).first().click();
 
-    // The dialog closes into the audience STEP, not into a written pin.
-    await expect(page.getByTestId('pin-bar-dialog')).toHaveCount(0);
+    // The bar step gives way to the audience STEP, not to a written pin.
+    await expect(page.getByTestId('pin-where-step')).toHaveCount(0);
     const step = page.getByTestId('pin-audience-step');
     await expect(step).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Pin your spot$/ })).toBeVisible();
+    await expect(page).toHaveURL(/\/friends\/tonight\?step=audience$/);
     await expect(step).toContainText(/who can see this/i);
     expect(writes, 'selecting a bar published the pin before it was confirmed').toBe(0);
 
@@ -1294,7 +1290,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
    * Cancelling the sequence takes the selection with it and still writes
    * nothing — the other half of "selecting is not publishing".
    */
-  test('cancelling the audience step leaves no pin behind', async ({
+  test('cancelling Pin your spot leaves no pin behind and returns to You tonight', async ({
     page,
     context,
     baseURL,
@@ -1303,15 +1299,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await context.addCookies([
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
-    await stubTonight(page, [
-      {
-        status: 'going',
-        bar_id: null,
-        audience: 'friends',
-        updated_at: '2026-08-20T02:00:00.000Z',
-        recipient_ids: [],
-      },
-    ]);
+    await stubTonight(page, [NO_BAR]);
     let writes = 0;
     await page.route('**/rest/v1/rpc/set_night_presence*', async (route) => {
       writes += 1;
@@ -1320,17 +1308,84 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
 
     await page.goto('/friends/tonight');
     await page.getByTestId('pin-my-spot').click();
-    const dialog = page.getByTestId('pin-bar-dialog');
-    await dialog.getByRole('textbox', { name: /search bars/i }).fill('att');
-    await dialog.getByRole('button', { name: /attaboy/i }).first().click();
+    const where = page.getByTestId('pin-where-step');
+    await where.getByRole('textbox', { name: /search bars/i }).fill('att');
+    await where.getByRole('button', { name: /attaboy/i }).first().click();
     await page.getByTestId('pin-cancel').click();
 
     await expect(page.getByTestId('pin-audience-step')).toHaveCount(0);
     await expect(page.getByTestId('presence-screen')).toBeVisible();
+    await expect(page).toHaveURL(/\/friends\/tonight$/);
     expect(writes, 'cancelling the pin sequence still wrote a pin').toBe(0);
   });
 
-  test('all three audience choices are offered, and "some people" opens a picker', async ({
+  /**
+   * S-05b acceptance 4: back from Pin your spot returns to Where are you? with
+   * the query cleared and the chosen bar still marked; back from there returns
+   * to You tonight with no pending bar. Nothing is written on either.
+   */
+  test('back from Pin your spot keeps the bar and clears the search; back again drops it', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubTonight(page, [NO_BAR]);
+    let writes = 0;
+    await page.route('**/rest/v1/rpc/set_night_presence*', async (route) => {
+      writes += 1;
+      await fulfillJson(200, true)(route);
+    });
+
+    await page.goto('/friends/tonight');
+    await page.getByTestId('pin-my-spot').click();
+    const where = page.getByTestId('pin-where-step');
+    await where.getByRole('textbox', { name: /search bars/i }).fill('att');
+    await where.getByRole('button', { name: /attaboy/i }).first().click();
+    await expect(page.getByTestId('pin-audience-step')).toBeVisible();
+
+    await page.getByTestId('pin-step-back').click();
+    await expect(page.getByTestId('pin-where-step')).toBeVisible();
+    await expect(page).toHaveURL(/\?step=where$/);
+    await expect(page.getByTestId('pin-where-step').getByRole('textbox', { name: /search bars/i })).toHaveValue('');
+    await expect(page.getByTestId('pin-where-chosen')).toContainText(/Attaboy/);
+
+    await page.getByTestId('pin-step-back').click();
+    await expect(page.getByTestId('presence-screen')).toBeVisible();
+    await expect(page).toHaveURL(/\/friends\/tonight$/);
+    // The pending bar is gone: re-entering the bar step shows no chosen line.
+    await page.getByTestId('pin-my-spot').click();
+    await expect(page.getByTestId('pin-where-step')).toBeVisible();
+    await expect(page.getByTestId('pin-where-chosen')).toHaveCount(0);
+    expect(writes).toBe(0);
+  });
+
+  test('a deep link to the audience step with nothing chosen is the status screen', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubTonight(page, [NO_BAR]);
+
+    await page.goto('/friends/tonight?step=audience');
+    await expect(page.getByTestId('presence-screen')).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^You tonight$/ })).toBeVisible();
+    await expect(page.getByTestId('tonight-back')).toHaveAttribute('href', '/friends');
+
+    // …while a deep link to the bar step is that step.
+    await page.goto('/friends/tonight?step=where');
+    await expect(page.getByTestId('pin-where-step')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: /^Where are you\?$/ })).toBeVisible();
+  });
+
+  test('all three audience choices are offered on a live pin, and Custom opens Pin your spot on that bar', async ({
     page,
     context,
     baseURL,
@@ -1348,32 +1403,46 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
         recipient_ids: [],
       },
     ]);
+    let writes = 0;
+    await page.route('**/rest/v1/rpc/set_night_presence*', async (route) => {
+      writes += 1;
+      await fulfillJson(200, true)(route);
+    });
 
     await page.goto('/friends/tonight');
     const choices = page.getByRole('group', { name: /who can see my pin tonight/i });
     await expect(choices).toBeVisible();
     await expect(page.getByTestId('pin-audience-friends')).toBeVisible();
     await expect(page.getByTestId('pin-audience-close')).toBeVisible();
-    await expect(page.getByTestId('pin-audience-people')).toBeVisible();
+    await expect(page.getByTestId('pin-audience-people')).toHaveText('Custom');
 
-    // 'people' cannot be one tap: it needs a recipient list, and writing it
-    // without one is refused server-side rather than falling back to a wider
-    // audience. So the tap opens the picker instead of sending a request that
-    // could only fail.
+    // Custom cannot be one tap: it needs a recipient list, and writing it
+    // without one is refused server-side. So the tap opens Pin your spot on the
+    // live bar, with the picker inline and Pin it HELD.
     await page.getByTestId('pin-audience-people').click();
-    const picker = page.getByTestId('pin-audience-dialog');
-    await expect(picker).toBeVisible();
+    const step = page.getByTestId('pin-audience-step');
+    await expect(step).toBeVisible();
+    await expect(step.getByRole('heading', { name: /attaboy/i })).toBeVisible();
+    await expect(page.getByTestId('pin-pending-audience-people')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('pin-friend-picker')).toBeVisible();
+    await expect(page.getByTestId('pin-audience-search')).toBeVisible();
+    await expect(page.getByTestId('pin-pending-audience-count')).toHaveText(/^0 people will see this pin tonight\.$/);
+    const pinIt = page.getByTestId('pin-confirm');
+    await expect(pinIt).toBeDisabled();
+    await expect(pinIt).toHaveAttribute('data-held', 'true');
+    // Held is not a click target: force the event and prove nothing was written.
+    await pinIt.dispatchEvent('click');
+    expect(writes).toBe(0);
 
-    // FAILS CLOSED IN THE UI TOO: nothing selected, nothing to confirm — and
-    // HELD (bg-held on muted), never merely faded (README §5).
-    await expect(picker.getByTestId('pin-audience-confirm')).toBeDisabled();
-    await expect(picker.getByTestId('pin-audience-confirm')).toHaveAttribute('data-held', 'true');
-    await expect(picker.getByTestId('pin-audience-confirm')).toHaveText(/Pick at least one person/);
-    await expect(picker.getByTestId('pin-audience-search')).toBeVisible();
-    await expect(picker.getByTestId('pin-audience-selected-count')).toHaveText(/^0 people will see this pin tonight.$/);
+    // S-05b addendum: the inline picker never widens the page (iPhone 13 / Pixel 7).
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow, 'the Custom picker widened the page').toBeLessThanOrEqual(0);
 
-    await picker.getByRole('button', { name: /^Back$/ }).click();
-    await expect(page.getByTestId('pin-audience-dialog')).toHaveCount(0);
+    await page.getByTestId('pin-cancel').click();
+    await expect(page.getByTestId('presence-screen')).toBeVisible();
+    expect(writes).toBe(0);
   });
 
   /**
@@ -1419,8 +1488,8 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
   });
 
   /**
-   * S-05 acceptance (README §5): the bar search narrows, "Only some people"
-   * holds Pin it until somebody is picked, the friends search narrows and says
+   * S-05 / S-05b acceptance (README §5): the bar search narrows, Custom holds
+   * Pin it until somebody is picked, the inline friends search narrows and says
    * "Nobody matches", and Pin it is the ONE write — carrying the bar, the
    * audience `people` and the recipient — after which the screen returns to
    * Social.
@@ -1434,15 +1503,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await context.addCookies([
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
-    await stubTonight(page, [
-      {
-        status: 'going',
-        bar_id: null,
-        audience: 'friends',
-        updated_at: '2026-08-20T02:00:00.000Z',
-        recipient_ids: [],
-      },
-    ]);
+    await stubTonight(page, [NO_BAR]);
     // One MUTUAL friend: in the circle AND a follower (D-C-37).
     const MUTUAL = '66666666-6666-4666-8666-666666666666';
     const mutualRow = [{ id: MUTUAL, handle: 'sam_j', display_name: 'Sam J.' }];
@@ -1450,9 +1511,7 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await page.route('**/rest/v1/rpc/get_followers*', fulfillJson(200, mutualRow));
     // The own-pin read answers with whatever the last write stored, so the
     // header icon on /friends can read the pin this sequence creates.
-    let mine: unknown[] = [
-      { status: 'going', bar_id: null, audience: 'friends', updated_at: '2026-08-20T02:00:00.000Z', recipient_ids: [] },
-    ];
+    let mine: unknown[] = [NO_BAR];
     await page.route('**/rest/v1/rpc/get_my_presence*', async (route) => {
       await fulfillJson(200, mine)(route);
     });
@@ -1472,27 +1531,23 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
 
     await page.goto('/friends/tonight');
     await page.getByTestId('pin-my-spot').click();
-    const dialog = page.getByTestId('pin-bar-dialog');
+    const where = page.getByTestId('pin-where-step');
     // The search NARROWS: "att" keeps Attaboy and drops a bar that does not match.
-    const search = dialog.getByRole('textbox', { name: /search bars/i });
+    const search = where.getByRole('textbox', { name: /search bars/i });
     await search.fill('att');
-    await expect(dialog.getByRole('button', { name: /attaboy/i }).first()).toBeVisible();
-    await expect(dialog.getByRole('button', { name: /death & co/i })).toHaveCount(0);
-    await dialog.getByRole('button', { name: /attaboy/i }).first().click();
+    await expect(where.getByRole('button', { name: /attaboy/i }).first()).toBeVisible();
+    await expect(where.getByRole('button', { name: /death & co/i })).toHaveCount(0);
+    await where.getByRole('button', { name: /attaboy/i }).first().click();
 
     const step = page.getByTestId('pin-audience-step');
     await expect(step).toBeVisible();
     await expect(step).toContainText(/Nothing is shared until you pin it\./);
     expect(writes.length, 'selecting a bar must not write').toBe(0);
 
-    // "Only some people" lights the row and HOLDS Pin it; dismissing the picker
-    // with nobody picked keeps it held (never a silent fall-back to Friends).
+    // Custom lights the row, opens the picker INLINE and HOLDS Pin it.
     await page.getByTestId('pin-pending-audience-people').click();
-    const picker = page.getByTestId('pin-audience-dialog');
-    await expect(picker).toBeVisible();
-    await picker.getByRole('button', { name: /^Back$/ }).click();
-    await expect(page.getByTestId('pin-audience-dialog')).toHaveCount(0);
     await expect(page.getByTestId('pin-pending-audience-people')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('pin-friend-picker')).toBeVisible();
     await expect(page.getByTestId('pin-pending-audience-count')).toHaveText(/^0 people will see this pin tonight\.$/);
     const pinIt = page.getByTestId('pin-confirm');
     await expect(pinIt).toHaveAttribute('data-held', 'true');
@@ -1501,19 +1556,13 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await pinIt.dispatchEvent('click');
     expect(writes.length, 'a held Pin it must not write').toBe(0);
 
-    // Re-open the picker: the friends search narrows and says when nobody matches.
-    await page.getByTestId('pin-pending-audience-people').click();
-    await expect(picker).toBeVisible();
-    const friendSearch = picker.getByTestId('pin-audience-search');
+    // The friends search narrows and says when nobody matches.
+    const friendSearch = page.getByTestId('pin-audience-search');
     await friendSearch.fill('zzz');
-    await expect(picker.getByTestId('pin-audience-no-match')).toContainText(/Nobody matches “zzz”\./);
+    await expect(page.getByTestId('pin-audience-no-match')).toContainText(/Nobody matches “zzz”\./);
     await friendSearch.fill('sam');
-    await expect(picker.getByRole('checkbox')).toHaveCount(1);
-    await picker.getByRole('checkbox').check();
-    await expect(picker.getByTestId('pin-audience-selected-count')).toHaveText(/^1 person will see this pin tonight\.$/);
-    await expect(picker.getByTestId('pin-audience-confirm')).toHaveAttribute('data-held', 'false');
-    await picker.getByTestId('pin-audience-confirm').click();
-    await expect(page.getByTestId('pin-audience-dialog')).toHaveCount(0);
+    await expect(step.getByRole('checkbox')).toHaveCount(1);
+    await step.getByRole('checkbox').check();
 
     // One person picked: the count reads in words and Pin it is live.
     await expect(page.getByTestId('pin-pending-audience-count')).toHaveText(/^1 person will see this pin tonight\.$/);
@@ -1534,18 +1583,11 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
 
   /**
    * THE ONE WHERE A FAILED READ USED TO CHANGE WHO CAN SEE YOU — round 2, both
-   * gates, HIGH.
-   *
-   * `fetchMyPresence` returned the same `null` for "no pin tonight" and "the
-   * read failed", so a transport error rendered the unset row. The next status
-   * tap then wrote `audience: mine?.audience ?? 'friends'`, and
-   * `set_night_presence` REPLACES the row and deletes its recipients wholesale
-   * — turning a live 'close' or 'people' pin into one every follower can see,
-   * on a tap the user made about something else entirely.
-   *
-   * The pills are disabled and the row says the read failed. The assertion that
-   * actually protects the user is the negative one: `set_night_presence` is
-   * never called.
+   * gates, HIGH. `fetchMyPresence` returned the same `null` for "no pin
+   * tonight" and "the read failed", so a transport error rendered the unset
+   * row and the next status tap widened a live 'close' or 'people' pin to every
+   * follower. The rows are disabled and the row says the read failed; the
+   * assertion that protects the user is the negative one.
    */
   test('a FAILED own-pin read disables the write instead of widening the audience', async ({
     page,
