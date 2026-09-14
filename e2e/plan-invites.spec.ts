@@ -153,9 +153,9 @@ test.describe('/friends — Social → Plans invitation cards', () => {
     await page.getByRole('tab', { name: /^Plans$/i }).click();
     await expect(page.getByTestId('plan-invites')).toBeVisible();
     await expect(page.getByTestId('invite-pending')).toBeVisible();
-    await expect(page.getByText(/conor invited you/i)).toBeVisible();
+    await expect(page.getByTestId('invite-pending').getByText(/conor/i)).toBeVisible();
 
-    await page.getByRole('button', { name: 'Accept' }).click();
+    await page.getByRole('button', { name: /^I'm in/ }).click();
     await expect.poll(() => respondBody, { timeout: 10_000 }).not.toBeNull();
 
     // The exact defect both lanes filed: the browser used to send only
@@ -202,7 +202,7 @@ test.describe('/friends — Social → Plans invitation cards', () => {
     await page.getByRole('tab', { name: /^Plans$/i }).click();
     const urlBefore = page.url();
     await expect(page.getByTestId('invite-pending')).toBeVisible();
-    await page.getByRole('button', { name: 'Accept' }).click();
+    await page.getByRole('button', { name: /^I'm in/ }).click();
 
     await expect(page.getByTestId('invite-accepted-confirm')).toBeVisible();
     await expect(page.getByText(/you accepted — see you/i)).toBeVisible();
@@ -212,9 +212,9 @@ test.describe('/friends — Social → Plans invitation cards', () => {
   test('no invitations means no section at all — the Requests idiom', async ({ page }) => {
     await stubFriendsPage(page, []);
     await page.goto('/friends');
-    // The page itself still renders — Tonight lands first and its people
-    // search is live…
-    await expect(page.getByPlaceholder(/search @username/i)).toBeVisible();
+    // The page itself still renders — Tonight lands first (the people search
+    // moved to /friends/people in S-01)…
+    await expect(page.getByTestId('social-tonight')).toBeVisible();
     // …and Plans still renders its own surface. Only the invitations
     // section is absent. (V8-1f: invitations live under the Plans sub-tab.)
     await page.getByRole('tab', { name: /^Plans$/i }).click();

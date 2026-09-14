@@ -38,8 +38,11 @@ import { forgetOwnedNightOut, recallOwnedNightOut } from '@/lib/ownedNightOut';
  */
 export default function YourPlanTonight({
   variant = 'plans',
+  onHasPlan,
 }: {
   variant?: 'tonight' | 'plans';
+  /** Plans uses this to show its no-plan line only when there is no live plan. */
+  onHasPlan?: (hasPlan: boolean) => void;
 } = {}): JSX.Element | null {
   const auth = useAuth();
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
@@ -105,6 +108,10 @@ export default function YourPlanTonight({
     };
   }, [load]);
 
+  useEffect(() => {
+    onHasPlan?.(state.kind === 'plan');
+  }, [state.kind, onHasPlan]);
+
   if (state.kind === 'idle' || state.kind === 'none') {
     return variant === 'tonight' ? <NoPlanCard signedOut={signedOut} /> : null;
   }
@@ -139,19 +146,26 @@ export default function YourPlanTonight({
   const { plan } = state;
   if (variant === 'tonight') return <PlanCard plan={plan} />;
 
+  // README §2.1: title 18px/700 ("Open for votes" / "<Bar> · locked in"), then
+  // the plan's name and night as the meta line.
+  const decided = plan.status === 'decided' && plan.decidedBarId ? getBarById(plan.decidedBarId) : null;
   return (
     <Link
       href={`/night-out/${plan.shareToken}`}
       data-testid="your-plan-tonight"
-      className="flex items-center gap-4 bg-surface border border-accent rounded-3xl px-4 py-4 touch-manipulation min-h-[44px]"
+      className="flex items-center gap-3.5 bg-surface border border-accent rounded-3xl p-4 touch-manipulation min-h-[44px]"
     >
       <span className="min-w-0 flex-1">
-        <span className="block text-[11px] uppercase tracking-widest text-muted">Your plan tonight</span>
-        <span className="block font-display text-lg leading-snug truncate">
-          {plan.title ?? 'Night Out'}
+        <span className="block font-label text-[11px] uppercase tracking-[0.14em] text-muted">
+          Your plan tonight
         </span>
-        <span className="block text-xs text-muted mt-1">
-          {plan.status === 'decided' ? 'Bar decided' : 'Open for suggestions'}
+        <span className="block font-display text-lg font-bold leading-snug mt-1 truncate">
+          {plan.status === 'decided'
+            ? `${decided?.name ?? 'Bar'} · locked in`
+            : 'Open for votes'}
+        </span>
+        <span className="block text-xs text-muted mt-1 truncate">
+          {plan.title ?? 'Night Out'} · {weekdayOf(plan.night)}
         </span>
       </span>
       <span aria-hidden="true" className="text-muted shrink-0">

@@ -37,6 +37,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { nycNightKey } from '@/lib/nightKey';
 import { getMyNightOuts, respondNightOut, type MyNightOut } from '@/lib/nightOuts.server';
+import Avatar from '@/components/Avatar';
+import { formatNightDate } from '@/lib/nightOutMedia';
 
 function nightLabel(plan: MyNightOut): string {
   const parts = [plan.title ?? 'Night Out', plan.night];
@@ -113,6 +115,13 @@ function isWithinExpiryGrace(night: string, todayKey: string): boolean {
 function inviterLabel(plan: MyNightOut): string {
   const who = plan.ownerDisplayName ?? (plan.ownerHandle ? `@${plan.ownerHandle}` : 'Someone');
   return `${who} invited you`;
+}
+
+/** "Dev P." → "DP"; "@handle" → "H". Never empty, never more than two. */
+function initialsOf(name: string): string {
+  const words = name.replace(/^@/, '').split(/\s+/).filter(Boolean);
+  const letters = words.slice(0, 2).map((word) => word[0]?.toUpperCase() ?? '');
+  return letters.join('') || '?';
 }
 
 export default function PlanInvites(): JSX.Element | null {
@@ -196,8 +205,9 @@ export default function PlanInvites(): JSX.Element | null {
 
   return (
     <div data-testid="plan-invites">
-      <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
-        Plans · {visible.length}
+      {/* README §2.3: the INVITED section of Plans. */}
+      <h2 className="font-label text-xs font-bold uppercase tracking-[0.25em] text-muted mt-[30px] mb-3">
+        Invited
       </h2>
       {error !== null ? (
         <p className="mb-3 text-sm text-red-400" role="status">
@@ -242,30 +252,48 @@ export default function PlanInvites(): JSX.Element | null {
           }
 
           if (plan.myStatus === 'pending') {
+            // README §2.3: host avatar, the plan's name, "<Host> · <night>", then
+            // I'm in (accent) / Not tonight (outlined), 44px each. The write is
+            // the same respond_night_out call with the rendered status+revision.
+            const host = plan.ownerDisplayName ?? (plan.ownerHandle ? `@${plan.ownerHandle}` : 'Someone');
+            const held = busy === plan.nightOutId;
             return (
               <div
                 key={plan.nightOutId}
                 data-testid="invite-pending"
-                className="bg-surface border border-border rounded-2xl px-4 py-3"
+                className="bg-surface border border-border rounded-3xl p-4"
               >
-                <p className="font-display text-sm">{inviterLabel(plan)}</p>
-                <p className="text-xs text-muted truncate">{nightLabel(plan)}</p>
-                <div className="mt-3 flex gap-2">
+                <div className="flex items-center gap-3">
+                  <Avatar initials={initialsOf(host)} seed={plan.ownerHandle ?? plan.nightOutId} size="sm" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[15px] font-semibold truncate">
+                      {plan.title ?? `${host}'s night out`}
+                    </p>
+                    <p className="text-xs text-muted truncate mt-px">
+                      {host} · {formatNightDate(plan.night)}
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-3.5 flex gap-2.5">
                   <button
                     type="button"
-                    disabled={busy === plan.nightOutId}
+                    disabled={held}
+                    aria-label={`I'm in — ${inviterLabel(plan)}`}
                     onClick={() => void respond(plan.nightOutId, true, plan.myStatus, plan.myRevision)}
-                    className="flex-1 rounded-full bg-accent py-2 text-sm font-semibold text-black touch-manipulation disabled:opacity-50"
+                    className={[
+                      'flex-1 min-h-[44px] rounded-2xl text-[13px] font-display font-bold touch-manipulation',
+                      held ? 'bg-held text-muted' : 'bg-accent text-bg',
+                    ].join(' ')}
                   >
-                    Accept
+                    I&apos;m in
                   </button>
                   <button
                     type="button"
-                    disabled={busy === plan.nightOutId}
+                    disabled={held}
                     onClick={() => void respond(plan.nightOutId, false, plan.myStatus, plan.myRevision)}
-                    className="flex-1 rounded-full border border-border py-2 text-sm touch-manipulation disabled:opacity-50"
+                    className="flex-1 min-h-[44px] rounded-2xl border border-border text-[13px] font-display font-bold text-muted touch-manipulation"
                   >
-                    Decline
+                    Not tonight
                   </button>
                 </div>
               </div>

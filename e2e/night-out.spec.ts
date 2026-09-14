@@ -218,6 +218,8 @@ async function stubSocialShellRest(page: Page): Promise<void> {
     'get_outgoing_requests',
     'group_unread_counts',
     'get_my_night_out_invitation_notifications',
+    // S-03: Plans now reads the saved-nights archive for its Earlier nights list.
+    'get_saved_nights',
     'get_friend_ratings',
     'get_circle_presence',
     'get_my_presence',

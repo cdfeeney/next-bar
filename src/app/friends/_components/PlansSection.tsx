@@ -1,66 +1,58 @@
 'use client';
 
 /**
- * Social → Plans, per `docs/design-reference/approved/next-bar-social-v2-core.png`
- * (screen 3A, "shortlist vote").
+ * Social → PLANS (Social redesign 2026-09-13, README §2). Everything about
+ * plans and nothing else, top to bottom:
  *
- * The canvas's own note: "Start a Night Out closes the creation gap. The
- * compact entry sits directly under the sub-tabs and above the open plan, so
- * the same one tap works with one plan open and with zero plans, where it
- * becomes the empty state's single primary action."
- *
- * Two things this screen draws are deliberately NOT rebuilt here, because they
- * already exist and criterion 11 says preserve, not duplicate:
- *
- *  - The SHORTLIST · VOTE board (suggest / ▲ vote / lock) is the live
- *    `/night-out/[token]` surface over `get_night_out_board`,
- *    `suggest_night_out_bar` and `vote_night_out_bar`. `PlanInvites` already
- *    routes an accepted plan straight into it.
- *  - Plan CREATION with its people picker is `StartNightOutButton`, which
- *    needs a settled invitee list and therefore lives on the group screen it
- *    is selected from. The card here is the entry point into that flow.
- *
- * WHERE THIS CARD LEADS (round-9 panel). `/friends/consensus` was filed as
- * "the legacy consensus screen" rather than the Start a Night Out form, and it
- * was: the form there had a CTA and none of the three rows the ledger names as
- * NO-002's, NO-003's and NO-005's entry point, so an owner could not set When,
- * Area or Voting closes anywhere in the product. The rows now render above that
- * CTA (`NightOutPlanFields`), which is what makes this destination the planning
- * form the requirement asks for. The route keeps its name — it is also where
- * Group Favorites and the people picker live, and NO-005's row exists only
- * once somebody is selected there.
+ *   1. Your plan tonight — the plan THIS account started (V9-03: the owner is
+ *      excluded from `get_my_night_outs`, so without this row a creator could
+ *      not find their own plan again).
+ *   2. Start a Night Out — the single way to create one.
+ *   3. When there is no live plan: "Invitations you've been sent land here too.
+ *      Nothing else lives on this tab."
+ *   4. INVITED — invitations addressed to this account (`PlanInvites`, with
+ *      I'm in / Not tonight) and the in-app invitation notifications that used
+ *      to render inside Groups & people (`InvitedPlans`).
+ *   5. EARLIER NIGHTS — saved nights, each opening its recap.
  */
 
+import { useState } from 'react';
 import Link from 'next/link';
 import PlanInvites from '@/components/PlanInvites';
+import EarlierNights from '@/app/nights/_components/EarlierNights';
+import InvitedPlans from './InvitedPlans';
 import YourPlanTonight from './YourPlanTonight';
 
 export default function PlansSection(): JSX.Element {
+  const [hasPlan, setHasPlan] = useState(false);
+
   return (
     <section aria-labelledby="plans-heading" className="space-y-3">
       <h2
         id="plans-heading"
-        className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3"
+        className="font-label text-xs font-bold uppercase tracking-[0.25em] text-muted mb-3.5"
       >
         Plans
       </h2>
 
+      <YourPlanTonight variant="plans" onHasPlan={setHasPlan} />
+
       <Link
         href="/friends/consensus"
         data-testid="start-night-out"
-        className="flex items-center gap-4 bg-surface border border-border rounded-3xl px-4 py-4 touch-manipulation min-h-[44px] hover:border-accent transition-colors"
+        className="flex items-center gap-3.5 bg-surface border border-border rounded-3xl p-4 touch-manipulation min-h-[44px] hover:border-accent transition-colors"
       >
         <span
           aria-hidden="true"
-          className="shrink-0 w-11 h-11 rounded-2xl bg-accent/15 text-accent font-display text-xl flex items-center justify-center"
+          className="shrink-0 w-11 h-11 rounded-2xl bg-accent/15 text-accent font-display text-xl font-bold flex items-center justify-center"
         >
           +
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block font-display text-lg leading-snug">
+          <span className="block font-display text-lg font-bold leading-snug">
             Start a Night Out
           </span>
-          <span className="block text-[11px] uppercase tracking-widest text-muted mt-1">
+          <span className="block font-label text-[11px] uppercase tracking-[0.1em] text-muted mt-1">
             New plan · time, area, people
           </span>
         </span>
@@ -69,14 +61,18 @@ export default function PlansSection(): JSX.Element {
         </span>
       </Link>
 
-      {/* V9-03: the plan THIS account started tonight. `get_my_night_outs`
-          excludes owned plans, so without this card a creator could not find
-          their own plan again. Renders nothing when nothing was started. */}
-      <YourPlanTonight />
+      {hasPlan ? null : (
+        <p data-testid="plans-empty-line" className="text-[13px] leading-relaxed text-muted pt-1.5">
+          Invitations you&apos;ve been sent land here too. Nothing else lives on this tab.
+        </p>
+      )}
 
       {/* Invitations addressed to this account, and the way into an accepted
           plan's shortlist. Renders nothing when there are none. */}
       <PlanInvites />
+      <InvitedPlans />
+
+      <EarlierNights />
     </section>
   );
 }

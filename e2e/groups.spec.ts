@@ -323,6 +323,42 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
     await expect(page.getByTestId('group-unread')).toContainText('3');
   });
 
+  test('New group reveals the name field, and Create sends the typed name (S-01 carry-forward)', async ({ page }) => {
+    // The redesign hides the create form behind a 44px outlined "New group"
+    // pill (README §10). The S-01 panel found nothing exercised the reveal, so a
+    // regression that never shows the form would pass the gate. Both halves are
+    // asserted: the form is ABSENT until the tap, and Create carries the name.
+    await signInStub(page);
+    await stubGroups(page, { groups: [] });
+    let sent: unknown = null;
+    await page.route('**/rest/v1/rpc/create_group', async (route) => {
+      sent = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify('11111111-1111-4111-8111-111111111111'),
+      });
+    });
+    await page.goto('/friends/people');
+
+    await expect(page.getByTestId('groups-empty')).toContainText(/No groups yet/);
+    await expect(page.getByTestId('group-name')).toHaveCount(0);
+    const reveal = page.getByTestId('group-new');
+    await expect(reveal).toBeVisible();
+    const box = await reveal.boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await reveal.click();
+
+    const name = page.getByTestId('group-name');
+    await expect(name).toBeVisible();
+    // Held, not merely faded, while the name is empty.
+    await expect(page.getByTestId('group-create')).toBeDisabled();
+    await name.fill('Saturday crew');
+    await expect(page.getByTestId('group-create')).toBeEnabled();
+    await page.getByTestId('group-create').click();
+    await expect.poll(() => sent).toEqual({ p_name: 'Saturday crew' });
+  });
+
   test('a night out invitation is DELIVERED IN-APP, not only recorded (GRP-008, round 9)', async ({ page }) => {
     // The round-8 finding: 0067 wrote night_out_invitation_notifications and the read RPC, and
     // nothing in the product displayed either — so an invitee became a plan member and was never
@@ -344,7 +380,7 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
       }],
     });
     await page.goto('/friends');
-    await page.getByRole('link', { name: /groups and people/i }).click();
+    await page.getByRole('tab', { name: /^Plans$/i }).click(); // S-03: invitations moved to Plans
 
     const notice = page.getByTestId('group-invite-notification');
     await expect(notice).toContainText('Sam-s birthday');
@@ -392,7 +428,7 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
       ],
     });
     await page.goto('/friends');
-    await page.getByRole('link', { name: /groups and people/i }).click();
+    await page.getByRole('tab', { name: /^Plans$/i }).click(); // S-03: invitations moved to Plans
 
     await expect(page.getByTestId('group-invite-notification')).toHaveCount(1);
     await expect(page.getByTestId('group-invite-notification')).toContainText('still new');
@@ -408,11 +444,13 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
       invites: null,
     });
     await page.goto('/friends');
-    await page.getByRole('link', { name: /groups and people/i }).click();
+    await page.getByRole('tab', { name: /^Plans$/i }).click(); // S-03: invitations moved to Plans
 
     await expect(page.getByTestId('group-invites-failed')).toBeVisible();
     await expect(page.getByTestId('group-invite-notification')).toHaveCount(0);
-    // The group list itself is unaffected: one failed read does not blank the surface.
+    // The group list itself (on /friends/people since S-01) is unaffected: one
+    // failed read does not blank the surface.
+    await page.goto('/friends/people');
     await expect(page.getByTestId('group-row').first()).toContainText('Thursday Crew');
   });
 
@@ -423,11 +461,13 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
       invites: [],
     });
     await page.goto('/friends');
-    await page.getByRole('link', { name: /groups and people/i }).click();
+    await page.getByRole('tab', { name: /^Plans$/i }).click(); // S-03: invitations moved to Plans
 
-    await expect(page.getByTestId('group-list')).toBeVisible();
+    await expect(page.getByTestId('social-panel-plans')).toBeVisible();
     await expect(page.getByTestId('group-invite-notifications')).toHaveCount(0);
     await expect(page.getByTestId('group-invites-failed')).toHaveCount(0);
+    await page.goto('/friends/people');
+    await expect(page.getByTestId('group-list')).toBeVisible();
   });
 
   test('a failed thread load states the failure and does NOT clear unread state', async ({ page }) => {

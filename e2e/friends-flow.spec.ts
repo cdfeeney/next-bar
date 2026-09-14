@@ -71,8 +71,19 @@ test.describe('Social — the approved surface', () => {
     await expect(page.getByRole('link', { name: /groups and people/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /Groups & people/i })).toHaveCount(0);
 
-    // Plans' single entry point, and where it goes.
+    // PLANS (S-03, README §2): signed out with nothing started, the tab is the
+    // heading, the Start card and the one line that says what else lands here —
+    // nothing else. Invited and Earlier nights appear only with content.
     await page.getByRole('tab', { name: /^Plans$/i }).click();
+    const plans = page.getByTestId('social-panel-plans');
+    await expect(plans.getByRole('heading', { name: /^Plans$/i })).toBeVisible();
+    await expect(plans.getByTestId('plans-empty-line')).toContainText(
+      /Invitations you.ve been sent land here too\. Nothing else lives on this tab\./,
+    );
+    await expect(plans.getByRole('heading', { name: /^Invited$/i })).toHaveCount(0);
+    await expect(plans.getByRole('heading', { name: /^Earlier nights$/i })).toHaveCount(0);
+    await expect(plans.getByTestId('plan-invites')).toHaveCount(0);
+    await expect(plans.getByTestId('group-invite-notifications')).toHaveCount(0);
     const start = page.getByRole('link', { name: /Start a Night Out/i });
     await expect(start).toBeVisible();
     await start.click();
