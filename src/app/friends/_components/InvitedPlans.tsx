@@ -95,22 +95,30 @@ export default function InvitedPlans({
 
   // An answered card settles its notification: mark read, then drop the row.
   // Runs when the ANSWERED set changes AND when the notifications load (R-02:
-  // a plan answered before this list arrived was never settled), and again on
-  // any later list change, which is what retries a mark that failed.
-  // A confirmed mark removes its row, so a successful pass never re-runs; a
-  // failed one leaves the row, and `invites` does not change on failure.
+  // a plan answered before this list arrived was never settled). A confirmed
+  // mark removes its row, so a successful pass never re-runs.
+  //
+  // A FAILED automatic mark is not retried blindly (R-02b, Codex): the row
+  // is UNHIDDEN instead, so the notice says what failed and the existing
+  // "Got it" control is the retry — a notification nobody can see or clear is
+  // the defect this whole component exists to prevent.
+  const [autoMarkFailed, setAutoMarkFailed] = useState<ReadonlySet<number>>(new Set());
   const answeredKey = answeredNightOutIds ? Array.from(answeredNightOutIds).sort().join(',') : '';
   useEffect(() => {
     if (!answeredNightOutIds || answeredNightOutIds.size === 0) return;
     for (const invite of invites) {
-      if (answeredNightOutIds.has(invite.nightOutId)) void markRead(invite.id);
+      if (!answeredNightOutIds.has(invite.nightOutId) || marking.current.has(invite.id)) continue;
+      void markRead(invite.id).then((ok) => {
+        if (!ok) setAutoMarkFailed((prev) => new Set(prev).add(invite.id));
+      });
     }
     // `answeredKey` stands in for the set so a same-content Set does not re-fire.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [answeredKey, invites, markRead]);
 
   const visible = invites.filter(
-    (invite) => !(cardedNightOutIds?.has(invite.nightOutId) ?? false),
+    (invite) =>
+      autoMarkFailed.has(invite.id) || !(cardedNightOutIds?.has(invite.nightOutId) ?? false),
   );
 
   if (!isSignedIn) return null;

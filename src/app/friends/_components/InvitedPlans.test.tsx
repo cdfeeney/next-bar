@@ -137,3 +137,28 @@ describe('InvitedPlans — R-02 follow-ups', () => {
     expect(screen.queryByRole('heading', { name: 'Invited' })).toBeNull();
   });
 });
+
+describe('InvitedPlans — R-02b: a failed automatic mark-read is not left hidden', () => {
+  beforeEach(() => {
+    fetchNotifications.mockReset();
+    markRead.mockReset();
+  });
+
+  test('the carded row surfaces with the notice, and Got it retries the write', async () => {
+    fetchNotifications.mockResolvedValue({ ok: true, value: [invite(9, { nightOutId: 'plan-a' })] });
+    markRead.mockResolvedValueOnce({ ok: false, message: 'Could not mark as read.' });
+    markRead.mockResolvedValueOnce({ ok: true, value: true });
+    render(
+      <InvitedPlans cardedNightOutIds={new Set(['plan-a'])} answeredNightOutIds={new Set(['plan-a'])} />,
+    );
+    // The automatic mark fails once → the row is no longer hidden behind the card.
+    expect(await screen.findByText('Could not mark as read.')).toBeTruthy();
+    expect(screen.getAllByTestId('group-invite-notification')).toHaveLength(1);
+    expect(markRead).toHaveBeenCalledTimes(1);
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('group-invite-seen'));
+    await waitFor(() => expect(screen.queryByTestId('group-invite-notification')).toBeNull());
+    expect(markRead).toHaveBeenCalledTimes(2);
+  });
+});
