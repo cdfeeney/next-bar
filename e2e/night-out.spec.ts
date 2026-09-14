@@ -1120,13 +1120,14 @@ test.describe('Social sub-tabs (V8-R-NAV-002)', () => {
     // NOT follow-stats, and the change is a DECISION, not a relaxation. This
     // used to assert the two follower statistics absent as well, because on the
     // pre-merge /friends they were part of the dashboard being replaced. The
-    // WP1 merge (7c6b085) re-homed them deliberately: they are now a section of
-    // Groups & people INSIDE Tonight, reached by the header control, and
+    // WP1 merge (7c6b085) re-homed them deliberately, and S-01 (2026-09-13)
+    // moved them again to /friends/people behind the header's people icon;
     // friends-flow.spec.ts asserts they are visible there. Keeping the old
     // negative would have made this suite and that one contradict each other on
     // the same branch. What the guard now protects is the dashboard's IDENTITY,
     // not every element that survived it.
-    await page.getByRole('button', { name: /Groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
+    await expect(page).toHaveURL(/\/friends\/people$/);
     await expect(page.getByTestId('follow-stats')).toBeVisible();
   });
 });
@@ -1370,7 +1371,12 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await expect(page.getByTestId('my-pin-error')).toBeVisible();
     await expect(page.getByTestId('my-pin')).toHaveCount(0);
 
-    const going = page.getByRole('button', { name: /going out/i }).first();
+    // Scoped to the presence region: since S-01 the header's pin icon is also
+    // a button whose accessible name says "going out", and it is never disabled.
+    const going = page
+      .getByTestId('social-tonight')
+      .getByRole('button', { name: /going out/i })
+      .first();
     await expect(going).toBeDisabled();
     // Force the tap past the disabled attribute: the guard must hold in the
     // handler too, not only in the styling.

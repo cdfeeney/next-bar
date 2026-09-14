@@ -1,18 +1,14 @@
 'use client';
 
 /**
- * Social → Groups & People.
+ * Social → Groups & People, the body of `/friends/people`.
  *
- * `next-bar-social-v2-core.png` puts a single `GROUPS & PEOPLE` control in the
- * Social header and describes Social as "everything involving other people".
- * This is what that control leads to: the consent inbox, the friend graph, the
- * people search, and the group pick.
- *
- * It is a SECTION rather than a route on purpose. The canvas's three sub-tabs
- * (Tonight / Plans / Feed) are the story-and-feed lane's build (`g-f1e128da`,
- * which inherits `src/app/friends/**` after this goal); until that chrome
- * exists there is no tab bar for a people surface to sit beside, and giving it
- * its own route now would mean moving it again in the very next lane.
+ * Pushed from the Social header's people icon since the 2026-09-13 redesign
+ * (`docs/design-reference/social-redesign-20260913/README.md` §10). Order,
+ * top to bottom: the consent inbox when non-empty, the two count tiles, Find
+ * friends (moved ABOVE Groups), Groups, Group Favorites. The page owns the
+ * title; this section keeps its id and `aria-labelledby` so the existing
+ * `#groups-and-people` assertions still find one labelled region.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -66,13 +62,6 @@ export default function GroupsAndPeople(): JSX.Element {
       aria-labelledby="groups-and-people-heading"
       className="space-y-6 scroll-mt-6"
     >
-      <h2
-        id="groups-and-people-heading"
-        className="font-label text-xs uppercase tracking-[0.25em] text-muted"
-      >
-        Groups &amp; people
-      </h2>
-
       {/* Consent inbox (B3b) — only when non-empty, and never behind a tap. */}
       {isServer && requests.length > 0 ? (
         <div>
@@ -95,50 +84,30 @@ export default function GroupsAndPeople(): JSX.Element {
       <div className="grid grid-cols-2 gap-3" data-testid="follow-stats">
         <Link
           href="/friends/followers"
-          className="bg-surface border border-border rounded-3xl py-5 text-center touch-manipulation hover:border-accent transition-colors"
+          className="bg-surface border border-border rounded-3xl py-[18px] text-center touch-manipulation hover:border-accent transition-colors"
         >
-          <p className="font-display text-3xl tabular-nums leading-none">
+          <p className="font-display text-[28px] font-bold tabular-nums leading-none">
             {loading ? '–' : followerCount}
           </p>
-          <p className="text-[11px] uppercase tracking-widest text-muted mt-2">
+          <p className="text-[11px] uppercase tracking-widest text-muted mt-1.5">
             Followers
           </p>
         </Link>
         <Link
           href="/friends/following"
-          className="bg-surface border border-border rounded-3xl py-5 text-center touch-manipulation hover:border-accent transition-colors"
+          className="bg-surface border border-border rounded-3xl py-[18px] text-center touch-manipulation hover:border-accent transition-colors"
         >
-          <p className="font-display text-3xl tabular-nums leading-none">
+          <p className="font-display text-[28px] font-bold tabular-nums leading-none">
             {loading ? '–' : followingCount}
           </p>
-          <p className="text-[11px] uppercase tracking-widest text-muted mt-2">
+          <p className="text-[11px] uppercase tracking-widest text-muted mt-1.5">
             Following
           </p>
         </Link>
       </div>
 
-      {/* Groups (V8-R-GRP-001 … 008). Creation and editing live HERE, in
-          Social — V8-R-GRP-004's exclusion is that audience pickers elsewhere
-          never create or invite to a group. */}
-      <GroupsSection isServer={isServer} circle={circle} followers={followers} />
-
-      {/* The group pick — Group Favorites over the circle's own scores. */}
-      <Link
-        href="/friends/consensus"
-        className="flex items-center justify-between gap-3 bg-surface border border-border rounded-3xl px-4 py-4 min-h-[44px] touch-manipulation hover:border-accent transition-colors"
-      >
-        <span className="min-w-0">
-          <span className="block font-display text-base">Group Favorites</span>
-          <span className="block text-xs text-muted mt-1">
-            Bars your circle all rate highly
-          </span>
-        </span>
-        <span aria-hidden="true" className="text-muted shrink-0">
-          ›
-        </span>
-      </Link>
-
-      <div>
+      {/* Find friends sits directly under the counts now (README §10). */}
+      <div data-testid="find-friends">
         <h3 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
           Find friends
         </h3>
@@ -152,6 +121,28 @@ export default function GroupsAndPeople(): JSX.Element {
           <DemoFind isFollowing={isFollowing} toggleFollow={toggleFollow} />
         )}
       </div>
+
+      {/* Groups (V8-R-GRP-001 … 008). Creation and editing live HERE, in
+          Social — V8-R-GRP-004's exclusion is that audience pickers elsewhere
+          never create or invite to a group. */}
+      <GroupsSection isServer={isServer} circle={circle} followers={followers} />
+
+      {/* The group pick — Group Favorites over the circle's own scores. */}
+      <Link
+        href="/friends/consensus"
+        data-testid="group-favorites"
+        className="flex items-center justify-between gap-3 bg-surface border border-border rounded-3xl px-4 py-4 min-h-[44px] touch-manipulation hover:border-accent transition-colors"
+      >
+        <span className="min-w-0">
+          <span className="block font-display text-base font-semibold">Group Favorites</span>
+          <span className="block text-xs text-muted mt-1">
+            Bars your circle all rate highly
+          </span>
+        </span>
+        <span aria-hidden="true" className="text-muted shrink-0">
+          ›
+        </span>
+      </Link>
     </section>
   );
 }
@@ -188,6 +179,9 @@ function GroupsSection({
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  // README §10: the create control is a 44px outlined "New group" pill that
+  // reveals the name field, so an empty Groups block is one sentence, not a form.
+  const [creating, setCreating] = useState(false);
 
   const viewerId = auth.status === 'signed-in' ? auth.user.id : null;
   const accessToken = auth.status === 'signed-in' ? auth.session.access_token : null;
@@ -397,12 +391,15 @@ function GroupsSection({
       ) : null}
 
       {status === 'ready' && groups.length === 0 ? (
-        <p data-testid="groups-empty" className="text-sm text-muted">
-          No groups yet. Name one below.
+        <p
+          data-testid="groups-empty"
+          className="rounded-[20px] border border-dashed border-border p-4 text-[13px] leading-relaxed text-muted"
+        >
+          No groups yet. A group is a standing chat with the friends who follow you back.
         </p>
       ) : null}
 
-      <ul data-testid="group-list" className="space-y-3">
+      <ul data-testid="group-list" className="space-y-2">
         {groups.map((group) => {
           const count = unread.get(group.id) ?? 0;
           return (
@@ -411,15 +408,15 @@ function GroupsSection({
                 type="button"
                 onClick={() => setOpenId(group.id)}
                 data-testid="group-row"
-                className="w-full flex items-center justify-between gap-3 bg-surface border border-border rounded-3xl px-4 py-4 min-h-[44px] touch-manipulation hover:border-accent transition-colors text-left"
+                className="w-full flex items-center justify-between gap-3 bg-surface border border-border rounded-[20px] px-4 py-3.5 min-h-[44px] touch-manipulation hover:border-accent transition-colors text-left"
               >
-                <span className="min-w-0 font-display text-base truncate">
+                <span className="min-w-0 font-display text-base font-semibold truncate">
                   {group.name}
                 </span>
                 {count > 0 ? (
                   <span
                     data-testid="group-unread"
-                    className="shrink-0 rounded-full bg-accent text-bg px-2 py-0.5 text-[11px] tabular-nums"
+                    className="shrink-0 min-w-[22px] h-[22px] px-[7px] rounded-full bg-accent text-bg text-[11px] font-bold tabular-nums flex items-center justify-center"
                   >
                     {count}
                     <span className="sr-only"> unread messages</span>
@@ -431,29 +428,48 @@ function GroupsSection({
         })}
       </ul>
 
-      <div className="space-y-2">
-        <label htmlFor="group-name" className="sr-only">
-          New group name
-        </label>
-        <input
-          id="group-name"
-          data-testid="group-name"
-          value={name}
-          maxLength={MAX_GROUP_NAME_LENGTH}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="New group name…"
-          className="w-full bg-surface border border-border rounded-2xl px-4 py-3 text-base text-text placeholder:text-muted focus:outline-none focus:border-accent min-h-[44px]"
-        />
+      {creating ? (
+        <div className="space-y-2">
+          <label htmlFor="group-name" className="sr-only">
+            New group name
+          </label>
+          <input
+            id="group-name"
+            data-testid="group-name"
+            value={name}
+            maxLength={MAX_GROUP_NAME_LENGTH}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="New group name…"
+            autoFocus
+            className="w-full bg-surface border border-border rounded-2xl px-4 py-3 text-base text-text placeholder:text-muted focus:outline-none focus:border-accent min-h-[44px]"
+          />
+          <button
+            type="button"
+            onClick={() => void onCreate()}
+            disabled={busy || name.trim().length === 0}
+            data-testid="group-create"
+            className={[
+              'min-h-[44px] px-4 rounded-full text-sm font-display touch-manipulation',
+              // Held, not faded: the design's disabled treatment is #1c1c1c on
+              // muted text, never opacity alone.
+              busy || name.trim().length === 0
+                ? 'bg-held text-muted'
+                : 'bg-accent text-bg',
+            ].join(' ')}
+          >
+            {busy ? 'Creating…' : 'Create group'}
+          </button>
+        </div>
+      ) : (
         <button
           type="button"
-          onClick={() => void onCreate()}
-          disabled={busy || name.trim().length === 0}
-          data-testid="group-create"
-          className="min-h-[44px] px-4 rounded-full bg-accent text-bg text-sm font-display touch-manipulation disabled:opacity-50"
+          onClick={() => setCreating(true)}
+          data-testid="group-new"
+          className="inline-flex items-center min-h-[44px] px-[18px] rounded-full border border-border text-text text-sm font-display font-bold touch-manipulation hover:border-accent transition-colors"
         >
-          {busy ? 'Creating…' : 'Create group'}
+          New group
         </button>
-      </div>
+      )}
     </section>
   );
 }

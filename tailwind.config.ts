@@ -31,6 +31,9 @@ const config: Config = {
         accentDim: '#c54328',
         text: '#f5f5f0',
         muted: '#8a8a85',
+        // Social redesign 2026-09-13: held/disabled fills and placeholder
+        // blocks. A held action is `bg-held text-muted`, never opacity alone.
+        held: '#1c1c1c',
       },
       // Brand kit 2026-07-23: Poppins everywhere (Bold headlines via
       // .font-display weight rule in globals.css; Regular body).

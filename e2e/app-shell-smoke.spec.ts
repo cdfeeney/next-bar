@@ -94,8 +94,10 @@ test.describe('App-shell smoke', () => {
     // that carried the `friends-tonight` id went with the suggestions-backed
     // presence source it read. One region, one name.
     await expect(page.getByTestId('social-tonight')).toBeVisible();
-    await expect(page.getByRole('link', { name: /Followers/i })).toBeVisible();
-    await expect(page.getByRole('link', { name: /Following/i })).toBeVisible();
+    // S-01 (2026-09-13): the follower/following counts moved to /friends/people,
+    // reached by the header's people icon; Tonight no longer carries them.
+    await expect(page.getByRole('link', { name: /groups and people/i })).toBeVisible();
+    await expect(page.getByTestId('follow-stats')).toHaveCount(0);
     await expectNoConsoleErrors(page, '/friends');
   });
 
@@ -109,6 +111,14 @@ test.describe('App-shell smoke', () => {
     await page.goto('/friends/following');
     await expect(page.getByRole('heading', { name: /^Following$/ })).toBeVisible();
     await expectNoConsoleErrors(page, '/friends/following');
+  });
+
+  test('/friends/people renders Groups & people with a back control (S-01)', async ({ page }) => {
+    await page.goto('/friends/people');
+    await expect(page.getByRole('heading', { name: /^Groups & people$/ })).toBeVisible();
+    await expect(page.getByTestId('follow-stats')).toBeVisible();
+    await expect(page.getByTestId('people-back')).toHaveAttribute('href', '/friends');
+    await expectNoConsoleErrors(page, '/friends/people');
   });
 
   test('/friends/consensus renders the group picker', async ({ page }) => {

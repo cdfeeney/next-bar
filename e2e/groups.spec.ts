@@ -47,24 +47,28 @@ test.describe('Social · Groups', () => {
     await page.goto('/friends');
 
     // V8-R-NAV-003 — one control in the Social header, 44px, and it leads to
-    // the people surface rather than to Settings.
-    const control = page.getByRole('button', { name: /groups & people/i });
+    // the people surface rather than to Settings. Since the 2026-09-13 Social
+    // redesign (S-01) it is the PEOPLE ICON, and it pushes /friends/people.
+    const control = page.getByRole('link', { name: /groups and people/i });
     await expect(control).toBeVisible();
     const box = await control.boundingBox();
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+    expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
 
     await control.click();
 
-    // It selects Tonight first: the section it targets belongs to that sub-tab.
-    await expect(page.getByTestId('social-panel-tonight')).toBeVisible();
+    await expect(page).toHaveURL(/\/friends\/people$/);
     await expect(page.locator('#groups-and-people')).toBeVisible();
+    // Back returns to Social.
+    await page.getByTestId('people-back').click();
+    await expect(page).toHaveURL(/\/friends$/);
   });
 
   test('Groups is part of that surface and states the truth when signed out', async ({
     page,
   }) => {
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
 
     const heading = page.getByRole('heading', { name: /^groups$/i });
     await expect(heading).toBeVisible();
@@ -79,7 +83,7 @@ test.describe('Social · Groups', () => {
     page,
   }) => {
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
 
     // THE NEGATIVE STATE. Each of these calls a server verb that requires a
     // session and a membership; rendering one signed out would be a control
@@ -109,7 +113,7 @@ test.describe('Social · Groups', () => {
     page,
   }) => {
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
 
     await page.getByTestId('groups-sign-in').click();
     await expect(page).toHaveURL(/\/auth$/);
@@ -119,7 +123,7 @@ test.describe('Social · Groups', () => {
     page,
   }) => {
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
 
     const surface = page.locator('#groups-and-people');
 
@@ -135,7 +139,7 @@ test.describe('Social · Groups', () => {
     page,
   }) => {
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
 
     // Groups is a SECTION of Social, not a sixth tab. CLAUDE.md pins the
     // five-tab contract, and a new surface is the usual way it grows a sixth.
@@ -297,7 +301,7 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
       unread: [{ group_id: GROUP_ID, unread_count: 2 }],
     });
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
 
     await expect(page.getByTestId('group-list')).toBeVisible();
     await expect(page.getByTestId('group-row').first()).toContainText('Thursday Crew');
@@ -315,7 +319,7 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
       unread: [{ group_id: GROUP_ID, unread_count: 3 }],
     });
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
     await expect(page.getByTestId('group-unread')).toContainText('3');
   });
 
@@ -340,7 +344,7 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
       }],
     });
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
 
     const notice = page.getByTestId('group-invite-notification');
     await expect(notice).toContainText('Sam-s birthday');
@@ -388,7 +392,7 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
       ],
     });
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
 
     await expect(page.getByTestId('group-invite-notification')).toHaveCount(1);
     await expect(page.getByTestId('group-invite-notification')).toContainText('still new');
@@ -404,7 +408,7 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
       invites: null,
     });
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
 
     await expect(page.getByTestId('group-invites-failed')).toBeVisible();
     await expect(page.getByTestId('group-invite-notification')).toHaveCount(0);
@@ -419,7 +423,7 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
       invites: [],
     });
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
 
     await expect(page.getByTestId('group-list')).toBeVisible();
     await expect(page.getByTestId('group-invite-notifications')).toHaveCount(0);
@@ -437,7 +441,7 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
       thread: null,
     });
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
     await page.getByTestId('group-row').first().click();
 
     await expect(page.getByTestId('groups-notice').or(page.getByText(/could not be loaded/i)).first()).toBeVisible();
@@ -448,7 +452,7 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
   /** Open Thursday Crew's thread. Every signed-in thread test starts here. */
   async function openThread(page: import('@playwright/test').Page): Promise<void> {
     await page.goto('/friends');
-    await page.getByRole('button', { name: /groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
     await page.getByTestId('group-row').first().click();
   }
 

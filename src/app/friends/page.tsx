@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import TonightPresence from './_components/TonightPresence';
 import PlansSection from './_components/PlansSection';
 import FeedSection from './_components/FeedSection';
-import GroupsAndPeople, {
-  GROUPS_AND_PEOPLE_ID,
-} from './_components/GroupsAndPeople';
 import { usePinnedHandles, useMyPresence } from './_components/usePinnedHandles';
+import { getBarById } from '@/lib/catalog';
+import { isValidPin } from '@/lib/presence';
+import { PinGlyph, PeopleGlyph } from './_components/HeaderGlyphs';
 import AddStoryFlow from '@/components/story/AddStoryFlow';
 import StoriesRail from '@/components/story/StoriesRail';
 import StoryViewer from '@/components/story/StoryViewer';
@@ -30,9 +31,14 @@ import { nycNightKey } from '@/lib/nightKey';
  * why the tab state lives here rather than inside the viewer: "the five-tab IA
  * has no separate Home tab, so Tonight is the documented landing surface".
  *
- * `Groups & people` stays what the Wave-1 surface made it — one control that
- * reveals the people graph — and now selects Tonight before scrolling to it,
- * because the section it targets belongs to that sub-tab.
+ * The header carries the title, the night, and TWO icon buttons (Social
+ * redesign 2026-09-13, `docs/design-reference/social-redesign-20260913/README.md`
+ * §1.1): the PIN is your whole presence — muted when nothing is set, text
+ * when a status is set, accent once a bar is pinned — and the PEOPLE icon
+ * pushes `/friends/people` (counts, search, groups, Group Favorites) with the
+ * pending follow-request count as its badge. Groups & people no longer lives
+ * on Tonight. Owner decision 2026-09-13: there is no status row on Tonight;
+ * the pin icon is the only entry to "You tonight" (S-05 gives it a route).
  */
 
 type Tab = 'tonight' | 'plans' | 'feed';
@@ -73,6 +79,16 @@ export default function SocialPage(): JSX.Element {
   // is a presence row that names a bar — a status without a place is not a pin.
   const { rows: presenceRows } = usePinnedHandles();
   const myPresence = useMyPresence();
+  // The pin icon's three states, in words for the accessible name and in
+  // tint for the eye. `isValidPin` is the same rule Tonight applies: a bar
+  // attached to anything but Going out is not a pin.
+  const pinnedBarId =
+    myPresence !== null && isValidPin(myPresence.status, myPresence.barId)
+      ? myPresence.barId
+      : null;
+  const pinState: 'none' | 'status' | 'pinned' =
+    pinnedBarId !== null ? 'pinned' : myPresence !== null ? 'status' : 'none';
+  const pinnedBarName = pinnedBarId !== null ? getBarById(pinnedBarId)?.name ?? null : null;
   // YOUR OWN PIN IS UNIONED IN HERE, and it has to be. `get_circle_presence` answers
   // "who ELSE is out" — its SQL carries `np.user_id <> auth.uid()` on purpose, because
   // Social - Tonight lists other people. Deriving the rail's badges from it alone made the
@@ -125,27 +141,59 @@ export default function SocialPage(): JSX.Element {
           </h1>
           <p className="text-muted text-sm mt-1">{weekdayOf(night)}</p>
         </div>
-        {/* The canvas's one header control. It selects Tonight first: the
-            people graph is a section of that sub-tab, and scrolling to an
-            anchor on a panel that is not rendered would go nowhere. */}
-        <button
-          type="button"
-          onClick={() => {
-            setTab('tonight');
-            requestAnimationFrame(() => {
-              document.getElementById(GROUPS_AND_PEOPLE_ID)?.scrollIntoView();
-            });
-          }}
-          className="shrink-0 flex items-center gap-2 rounded-2xl border border-border bg-surface px-3 min-h-[44px] touch-manipulation text-[11px] font-label uppercase tracking-widest text-text hover:border-accent transition-colors"
-        >
-          Groups &amp; people
-          {requests.length > 0 ? (
-            <span className="rounded-full bg-accent text-bg px-2 py-0.5 text-[11px] tabular-nums">
-              {requests.length}
-              <span className="sr-only"> follow requests waiting</span>
-            </span>
-          ) : null}
-        </button>
+        <div className="shrink-0 flex items-center gap-2">
+          {/* PIN — your whole presence. Until S-05 lands `/friends/tonight`
+              this selects Tonight and scrolls to the presence controls, so the
+              icon is never a dead end. */}
+          <button
+            type="button"
+            data-testid="social-pin-icon"
+            data-pin-state={pinState}
+            aria-label={
+              pinState === 'pinned'
+                ? `Pinned at ${pinnedBarName ?? 'a bar'} — change your night`
+                : 'Set whether you are going out and where'
+            }
+            onClick={() => {
+              setTab('tonight');
+              requestAnimationFrame(() => {
+                document
+                  .querySelector('[data-testid="social-tonight"]')
+                  ?.scrollIntoView({ block: 'start' });
+              });
+            }}
+            className={[
+              'flex items-center justify-center min-w-[44px] min-h-[44px] rounded-2xl border touch-manipulation transition-colors',
+              pinState === 'pinned'
+                ? 'border-accent bg-accent/[0.12] text-accent'
+                : pinState === 'status'
+                  ? 'border-border bg-surface text-text'
+                  : 'border-border bg-surface text-muted',
+            ].join(' ')}
+          >
+            <PinGlyph />
+          </button>
+
+          {/* PEOPLE — pushes the people graph. The badge is the pending
+              follow-request count, so consent is one tap away and never hidden. */}
+          <Link
+            href="/friends/people"
+            data-testid="social-people-icon"
+            aria-label="Groups and people"
+            className="relative flex items-center justify-center min-w-[44px] min-h-[44px] rounded-2xl border border-border bg-surface text-text touch-manipulation hover:border-accent transition-colors"
+          >
+            <PeopleGlyph />
+            {requests.length > 0 ? (
+              <span
+                data-testid="social-people-badge"
+                className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-bg text-[10px] font-bold tabular-nums flex items-center justify-center"
+              >
+                {requests.length}
+                <span className="sr-only"> follow requests waiting</span>
+              </span>
+            ) : null}
+          </Link>
+        </div>
       </header>
 
       <div className="max-w-md mx-auto px-6">
@@ -183,10 +231,10 @@ export default function SocialPage(): JSX.Element {
           <Panel id="tonight">
             {rail}
             {/* V8-R-SOC-003 (the Next Bar? card) was retired by the owner on
-                2026-09-09 — docs/V10-DECISIONS-2026-09-10.md. Tonight is the
-                rail, presence and the people graph. */}
+                2026-09-09 — docs/V10-DECISIONS-2026-09-10.md. Groups & people
+                moved to /friends/people on 2026-09-13 (Social redesign S-01).
+                Tonight is the rail and presence; S-02 makes it plan-led. */}
             <TonightPresence />
-            <GroupsAndPeople />
           </Panel>
         ) : null}
 

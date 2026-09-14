@@ -34,16 +34,25 @@ test.describe('Social — the approved surface', () => {
     // The canvas header: wordmark + night line, not an h1 reading "Friends".
     await expect(page.getByRole('heading', { name: /^Next Bar$/i })).toBeVisible();
 
-    // V8-1f: the order the Wave-1 surface stacked is now the sub-tab order —
-    // Tonight lands first, and it still leads with presence and then the
-    // people graph. Plans moved to its own sub-tab, not off Social.
+    // Tonight lands first and leads with presence. The people graph left
+    // Tonight on 2026-09-13 (Social redesign S-01): it is /friends/people now,
+    // behind the header's people icon, so it must NOT be a Tonight heading.
     await expect(page.getByTestId('social-panel-tonight')).toBeVisible();
     const tonightHeadings = page
       .getByTestId('social-panel-tonight')
       .getByRole('heading', { name: /^(Stories|Out tonight|Groups & people)$/i });
     await expect(tonightHeadings.nth(0)).toHaveText(/Stories/i);
     await expect(tonightHeadings.nth(1)).toHaveText(/Out tonight/i);
-    await expect(tonightHeadings.nth(2)).toHaveText(/Groups & people/i);
+    await expect(tonightHeadings).toHaveCount(2);
+    await expect(page.getByTestId('follow-stats')).toHaveCount(0);
+
+    // The header carries two icon buttons and nothing else on the right: the
+    // pin (your presence, in words for the reader) and the people icon.
+    const pin = page.getByTestId('social-pin-icon');
+    await expect(pin).toHaveAttribute('aria-label', /Set whether you are going out and where/);
+    await expect(pin).toHaveAttribute('data-pin-state', 'none');
+    await expect(page.getByRole('link', { name: /groups and people/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Groups & people/i })).toHaveCount(0);
 
     // Plans' single entry point, and where it goes.
     await page.getByRole('tab', { name: /^Plans$/i }).click();
@@ -65,21 +74,42 @@ test.describe('Social — the approved surface', () => {
     ).toHaveCount(0);
   });
 
-  test('the Groups & people control reaches the people section without leaving Social', async ({
+  test('the people icon pushes /friends/people in the redesign’s order, and back returns to Social', async ({
     page,
   }) => {
     await page.goto('/friends');
-    // V8-1f: the control is a button now, because the section it targets
-    // lives on the Tonight sub-tab and has to be selected before it can be
-    // scrolled to. It still never leaves Social.
     await page.getByRole('tab', { name: /^Feed$/i }).click();
-    await page.getByRole('button', { name: /Groups & people/i }).click();
+    await page.getByRole('link', { name: /groups and people/i }).click();
 
-    // Same route — this is a jump within Social, not a navigation away.
-    await expect(page).toHaveURL(/\/friends$/);
-    await expect(page.getByTestId('social-panel-tonight')).toBeVisible();
+    // A pushed screen with its own URL and a back affordance (README §10).
+    await expect(page).toHaveURL(/\/friends\/people$/);
+    await expect(page.getByRole('heading', { name: /^Groups & people$/i })).toBeVisible();
     await expect(page.getByTestId('follow-stats')).toBeVisible();
     await expect(page.getByPlaceholder(/Search @handle or name/i)).toBeVisible();
+
+    // ORDER CHANGED with the redesign: counts → Find friends → Groups →
+    // Group Favorites. Compared by document position, not by eye.
+    const order = await page.evaluate(() => {
+      const ids = ['follow-stats', 'find-friends', 'group-favorites'];
+      const nodes = ids.map((id) => document.querySelector(`[data-testid="${id}"]`));
+      const groups = Array.from(document.querySelectorAll('h3')).find(
+        (h) => /^groups$/i.test(h.textContent?.trim() ?? ''),
+      );
+      const all = [nodes[0], nodes[1], groups ?? null, nodes[2]];
+      if (all.some((n) => n === null)) return 'missing';
+      return all.every((n, i) =>
+        i === 0
+          ? true
+          : Boolean(
+              all[i - 1]!.compareDocumentPosition(n!) & Node.DOCUMENT_POSITION_FOLLOWING,
+            ),
+      );
+    });
+    expect(order).toBe(true);
+
+    await page.getByTestId('people-back').click();
+    await expect(page).toHaveURL(/\/friends$/);
+    await expect(page.getByTestId('social-panel-tonight')).toBeVisible();
   });
 
   test('signed out, Tonight says so instead of rendering an empty pinned list', async ({
@@ -106,7 +136,8 @@ test.describe('Social — the approved surface', () => {
 
 test.describe('Friends + consensus', () => {
   test('following a suggested curator bumps the Following stat and lands them in the list (UX-A)', async ({ page }) => {
-    await page.goto('/friends');
+    // The stats and Find friends live on /friends/people since S-01.
+    await page.goto('/friends/people');
 
     // Instagram-model stats: default demo circle is 2 (claire, john).
     const followingStat = page.getByRole('link', { name: /2\s+Following/i });
@@ -154,7 +185,7 @@ test.describe('Friends + consensus', () => {
   test('near-misses are marked, never presented as Group Favorites or as the shareable pick', async ({
     page,
   }) => {
-    await page.goto('/friends');
+    await page.goto('/friends/people');
     await page
       .locator('.bg-surface')
       .filter({ hasText: '@sasha' })

@@ -267,7 +267,7 @@ test.describe('/friends — follow requests (B3b)', () => {
       followResult: 'requested',
       cancelResult: true,
     });
-    await page.goto('/friends');
+    await page.goto('/friends/people');
 
     const search = page.getByPlaceholder(/search @username/i);
     await search.click();
@@ -303,7 +303,7 @@ test.describe('/friends — follow requests (B3b)', () => {
     });
     // UX-A: pending targets live on the Following LIST page as
     // withdrawable Requested rows; the /friends stat stays at 0.
-    await page.goto('/friends');
+    await page.goto('/friends/people');
     await expect(page.getByRole('link', { name: /0\s+Following/i })).toBeVisible();
 
     await page.goto('/friends/following');
@@ -335,7 +335,7 @@ test.describe('/friends — follow requests (B3b)', () => {
       acceptResult: true,
       declineResult: true,
     });
-    await page.goto('/friends');
+    await page.goto('/friends/people');
 
     await expect(page.getByText(/Requests · 2/)).toBeVisible();
     await expect(page.getByText(/wants to follow you/).first()).toBeVisible();
@@ -364,7 +364,7 @@ test.describe('/friends — follow requests (B3b)', () => {
     page,
   }) => {
     await stubSupabase(page, { following: [], incomingRequests: [] });
-    await page.goto('/friends');
+    await page.goto('/friends/people');
 
     await expect(page.getByRole('link', { name: /0\s+Following/i })).toBeVisible();
     await expect(page.getByText(/Requests ·/)).not.toBeVisible();
@@ -431,7 +431,7 @@ test.describe('/friends — friends list (B3c)', () => {
       followers: [AVA, SAM],
     });
     // UX-A: the stats carry the counts; the followers LIST carries the rows.
-    await page.goto('/friends');
+    await page.goto('/friends/people');
     await expect(page.getByRole('link', { name: /2\s+Followers/i })).toBeVisible();
     await expect(page.getByRole('link', { name: /1\s+Following/i })).toBeVisible();
 
@@ -631,7 +631,7 @@ test.describe('/friends — the approved Social surface, signed in', () => {
       searchResults: [{ handle: 'sam_j', display_name: 'Sam J.' }],
       profileByHandle: [SAM],
     });
-    await page.goto('/friends');
+    await page.goto('/friends/people');
 
     const search = page.getByPlaceholder(/search @username/i);
     await search.click();
@@ -660,12 +660,14 @@ test.describe('/friends — the approved Social surface, signed in', () => {
     });
     await page.goto('/friends');
 
-    // V8-1f: the control became a button — the section it targets lives on
-    // the Tonight sub-tab and has to be selected before it can be scrolled to.
-    const control = page.getByRole('button', { name: /Groups & people/i });
+    // S-01 (2026-09-13): the control is the header's people icon; its badge
+    // is the pending-request count (README §1.1).
+    const control = page.getByRole('link', { name: /groups and people/i });
     await expect(control).toBeVisible();
-    await expect(control).toContainText('1');
-    // Consent is never hidden behind the jump: the inbox itself is on-page.
+    await expect(page.getByTestId('social-people-badge')).toHaveText(/^1/);
+    // Consent is one tap away and first on the pushed screen.
+    await control.click();
+    await expect(page).toHaveURL(/\/friends\/people$/);
     await expect(page.getByText(/Requests · 1/)).toBeVisible();
   });
 });
