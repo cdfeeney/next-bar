@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Avatar from '@/components/Avatar';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import {
   addFeedComment,
@@ -140,6 +141,13 @@ export default function FeedComments({
     }
   };
 
+  // README §3 / Interactions: the Send button is `border`/`muted` while the
+  // draft is empty and accent-outlined once there is text; "N left" appears
+  // only inside the last 200 characters of the 2000 ceiling.
+  const draftLength = draft.trim().length;
+  const remaining = MAX_FEED_COMMENT_LENGTH - draft.length;
+  const showCounter = remaining <= 200;
+
   return (
     <section data-testid="feed-comments" data-post={postId} className="mt-3 border-t border-border pt-3">
       <h3 className="sr-only">Replies</h3>
@@ -170,7 +178,7 @@ export default function FeedComments({
           No replies yet.
         </p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="space-y-2.5">
           {visible.map((comment) => (
             <li key={comment.id} data-testid="feed-comment" data-comment={comment.id}>
               <CommentRow
@@ -201,40 +209,51 @@ export default function FeedComments({
       ) : null}
 
       {viewerId === null ? null : (
-        <form
-          className="mt-3 flex items-end gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submit();
-          }}
-        >
-          <label className="flex-1">
-            <span className="sr-only">Write a reply</span>
-            <textarea
-              data-testid="feed-comment-input"
-              value={draft}
-              rows={2}
-              maxLength={MAX_FEED_COMMENT_LENGTH}
-              onChange={(event) => setDraft(event.target.value)}
-              placeholder="Reply…"
-              className="w-full min-h-[44px] rounded-2xl border border-border bg-surface px-3 py-2 text-sm"
-            />
-          </label>
-          {/*
-            `aria-disabled`, not `disabled`, while a write is in flight: a
-            disabled button loses focus to <body>. The guard in `submit` is what
-            actually prevents a double write. Same treatment TonightPresence's
-            pin control carries.
-          */}
-          <button
-            type="submit"
-            data-testid="feed-comment-submit"
-            aria-disabled={busy || draft.trim().length === 0}
-            className="min-h-[44px] min-w-[44px] shrink-0 rounded-2xl border border-border px-4 text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+        <>
+          <form
+            className="mt-2.5 flex items-end gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submit();
+            }}
           >
-            Send
-          </button>
-        </form>
+            <label className="flex-1 min-w-0">
+              <span className="sr-only">Write a reply</span>
+              <textarea
+                data-testid="feed-comment-input"
+                value={draft}
+                rows={1}
+                maxLength={MAX_FEED_COMMENT_LENGTH}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="Reply…"
+                className="w-full min-h-[44px] rounded-2xl border border-border bg-bg px-3.5 py-2.5 text-sm resize-none"
+              />
+            </label>
+            {/*
+              `aria-disabled`, not `disabled`, while a write is in flight: a
+              disabled button loses focus to <body>. The guard in `submit` is what
+              actually prevents a double write. Same treatment TonightPresence's
+              pin control carries.
+            */}
+            <button
+              type="submit"
+              data-testid="feed-comment-submit"
+              data-ready={draftLength > 0 ? 'true' : 'false'}
+              aria-disabled={busy || draftLength === 0}
+              className={[
+                'min-h-[44px] min-w-[44px] shrink-0 rounded-2xl border px-4 text-[11px] font-label font-bold uppercase tracking-[0.12em] touch-manipulation transition-colors',
+                draftLength > 0 ? 'border-accent text-accent' : 'border-border text-muted',
+              ].join(' ')}
+            >
+              Send
+            </button>
+          </form>
+          {showCounter ? (
+            <p data-testid="feed-comment-remaining" className="mt-1.5 text-right text-[11px] text-muted">
+              {remaining} left
+            </p>
+          ) : null}
+        </>
       )}
 
       {/* The failure the server reported, in the user's own reading order. */}
@@ -263,27 +282,43 @@ function CommentRow({
   busy: boolean;
   onDelete: () => void;
 }): JSX.Element {
+  // README §3 reply row: 36px avatar, name 13px/600 with the age beside it,
+  // body 13px/1.45, and a × that renders ONLY where the viewer may delete. The
+  // visible mark is 28px; the hit area stays 44px (HIG), drawn as padding.
+  const name = displayName(author);
   return (
-    <div className="flex items-start gap-2">
+    <div className="flex items-start gap-2.5">
+      <Avatar initials={initialsOf(name)} seed={author?.id ?? comment.authorId} size="sm" />
       <span className="min-w-0 flex-1">
-        <span className="block text-[11px] text-muted">
-          {displayName(author)} · {ageLabel(comment.createdAt)}
+        <span className="flex items-baseline gap-2">
+          <span className="text-[13px] font-semibold truncate">{name}</span>
+          <span className="text-[11px] text-muted shrink-0">{ageLabel(comment.createdAt)}</span>
         </span>
-        <span className="block text-sm leading-relaxed break-words">{comment.body}</span>
+        <span className="block text-[13px] leading-[1.45] break-words mt-0.5">{comment.body}</span>
       </span>
       {canDelete ? (
         <button
           type="button"
           data-testid="feed-comment-delete"
+          aria-label="Delete reply"
           aria-disabled={busy}
           onClick={onDelete}
-          className="min-h-[44px] min-w-[44px] shrink-0 text-[11px] text-muted hover:text-accent transition-colors touch-manipulation"
+          className="-m-2 p-2 shrink-0 flex items-center justify-center min-h-[44px] min-w-[44px] text-muted hover:text-accent transition-colors touch-manipulation"
         >
-          Remove
+          <span aria-hidden="true" className="w-7 h-7 flex items-center justify-center text-[17px] leading-none">
+            ×
+          </span>
         </button>
       ) : null}
     </div>
   );
+}
+
+/** "Claire R." → "CR"; "@handle" → "H"; "Someone" → "S". Never empty. */
+function initialsOf(name: string): string {
+  const words = name.replace(/^@/, '').split(/[\s._-]+/).filter(Boolean);
+  const letters = words.slice(0, 2).map((word) => word[0]?.toUpperCase() ?? '');
+  return letters.join('') || '?';
 }
 
 /**

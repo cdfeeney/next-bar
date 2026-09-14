@@ -524,10 +524,11 @@ function FeedPostCard({
         />
       ) : (
         // A signing failure is an OUTAGE, not an absent photo, and it says so
-        // rather than rendering a decorative blank frame.
+        // rather than rendering a decorative blank frame. README §3: the media
+        // slot is a 200px `held` block; the sentence sits inside it.
         <p
           data-testid="feed-post-photo-unavailable"
-          className="px-4 py-6 text-center text-[11px] text-muted"
+          className="h-[200px] flex items-center justify-center bg-held px-4 text-center text-[11px] text-muted"
         >
           This photo could not be loaded.
         </p>
@@ -576,24 +577,32 @@ function FeedPostCard({
         {/* EXACTLY TWO ACTIONS. "View night" is absent — not disabled — when
             there is no night, or when it is a night this viewer may not open;
             the server made that decision, not this component. */}
-        <div className="flex items-center gap-3 mt-3">
+        <div className="flex items-center gap-2.5 mt-3.5">
           {post.nightShareToken !== null ? (
             <Link
               href={`/night-out/${post.nightShareToken}`}
               data-testid="feed-view-night"
-              className="flex-1 min-h-[44px] flex items-center justify-center rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+              className="flex-1 min-h-[44px] flex items-center justify-center rounded-2xl border border-border text-[11px] font-label font-bold uppercase tracking-[0.12em] touch-manipulation hover:border-accent transition-colors"
             >
               View night
             </Link>
           ) : null}
+          {/* README §3: the toggle reads REPLY until the thread has rows, then
+              REPLIES · N; open, it turns accent-bordered with accent text. */}
           <button
             type="button"
             data-testid="feed-reply"
             aria-expanded={threadOpen}
+            data-reply-count={comments?.length ?? 0}
             onClick={onToggleThread}
-            className="flex-1 min-h-[44px] rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+            className={[
+              'flex-1 min-h-[44px] rounded-2xl border text-[11px] font-label font-bold uppercase tracking-[0.12em] touch-manipulation transition-colors',
+              threadOpen
+                ? 'border-accent bg-accent/[0.10] text-accent'
+                : 'border-border text-text hover:border-accent',
+            ].join(' ')}
           >
-            Reply
+            {comments !== null && comments.length > 0 ? `Replies · ${comments.length}` : 'Reply'}
           </button>
         </div>
 
