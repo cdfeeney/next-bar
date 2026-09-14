@@ -120,20 +120,23 @@ beforeEach(() => {
 });
 
 describe('Social → Plans invitation cards', () => {
-  test('pending invite offers Accept and Decline, naming who invited you', async () => {
+  test("pending invite offers I'm in and Not tonight, naming who invited you", async () => {
     rows = [{ id: 'p1', myStatus: 'pending' }];
     render(<PlanInvites />);
     expect(await screen.findByTestId('invite-pending')).toBeTruthy();
-    expect(screen.getByText(/Dev invited you/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Accept' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Decline' })).toBeTruthy();
+    // S-03 (Social redesign, README §2.3): the host is named on the card's meta line and
+    // in the accept button's accessible name; the old sentence is no longer visible copy.
+    expect(screen.getByText(/^Dev · /)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /I'm in — Dev invited you/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^I'm in/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Not tonight' })).toBeTruthy();
   });
 
   test('accepting shows the confirmation state and can open the plan', async () => {
     rows = [{ id: 'p1', myStatus: 'pending' }];
     const user = userEvent.setup();
     render(<PlanInvites />);
-    await user.click(await screen.findByRole('button', { name: 'Accept' }));
+    await user.click(await screen.findByRole('button', { name: /^I'm in/ }));
     await waitFor(() => expect(responded).toEqual([['p1', true, 'pending', 0]]));
     expect(await screen.findByTestId('invite-accepted-confirm')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'View plan' }));
@@ -146,7 +149,7 @@ describe('Social → Plans invitation cards', () => {
     rows = [{ id: 'p1', myStatus: 'pending' }];
     const user = userEvent.setup();
     const { container } = render(<PlanInvites />);
-    await user.click(await screen.findByRole('button', { name: 'Decline' }));
+    await user.click(await screen.findByRole('button', { name: 'Not tonight' }));
     await waitFor(() => expect(responded).toEqual([['p1', false, 'pending', 0]]));
     await waitFor(() => expect(container.querySelector('[data-testid="plan-invites"]')).toBeNull());
   });
@@ -167,7 +170,7 @@ describe('Social → Plans invitation cards', () => {
     rows = [{ id: 'p1', myStatus: 'pending', myRevision: 4 }];
     const user = userEvent.setup();
     render(<PlanInvites />);
-    const accept = await screen.findByRole('button', { name: 'Accept' });
+    const accept = await screen.findByRole('button', { name: /^I'm in/ });
     const afterRender = getMyNightOutsCalls;
 
     // Someone else responded; the rendered card is now stale.
@@ -185,7 +188,7 @@ describe('Social → Plans invitation cards', () => {
     render(<PlanInvites />);
     expect(await screen.findByTestId('invite-responded')).toBeTruthy();
     expect(screen.getByText(/already accepted this invite/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^I'm in/ })).toBeNull();
   });
 
   test('a plan changed since you responded shows the Updated state', async () => {
@@ -211,7 +214,7 @@ describe('Social → Plans invitation cards', () => {
     rows = [{ id: 'p1', myStatus: 'pending', night: TONIGHT }];
     const user = userEvent.setup();
     render(<PlanInvites />);
-    await user.click(await screen.findByRole('button', { name: 'Accept' }));
+    await user.click(await screen.findByRole('button', { name: /^I'm in/ }));
 
     // The CONFIRM BAR specifically — the element the finding named. The plan
     // card rendered beneath it still uses nightLabel(), which carries the night
@@ -255,7 +258,7 @@ describe('Social → Plans invitation cards', () => {
     const { container } = render(<PlanInvites />);
     expect(await screen.findByTestId('invite-expired')).toBeTruthy();
     // Expired wins over pending: you cannot accept a night that already happened.
-    expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^I'm in/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Dismiss' }));
     await waitFor(() => expect(container.querySelector('[data-testid="plan-invites"]')).toBeNull());
   });
@@ -284,7 +287,7 @@ describe('Social → Plans invitation cards', () => {
     rows = [{ id: 'p1', myStatus: 'pending', myRevision: 5 }];
     const user = userEvent.setup();
     render(<PlanInvites />);
-    await user.click(await screen.findByRole('button', { name: 'Accept' }));
+    await user.click(await screen.findByRole('button', { name: /^I'm in/ }));
     await waitFor(() => expect(responded).toEqual([['p1', true, 'pending', 5]]));
   });
 
@@ -293,9 +296,9 @@ describe('Social → Plans invitation cards', () => {
     respondOk = false;
     const user = userEvent.setup();
     render(<PlanInvites />);
-    await user.click(await screen.findByRole('button', { name: 'Accept' }));
+    await user.click(await screen.findByRole('button', { name: /^I'm in/ }));
     expect(await screen.findByText(/didn't go through/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Accept' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^I'm in/ })).toBeTruthy();
   });
 
   test('a refusal re-reads state, so the retry is not doomed to repeat it', async () => {
@@ -313,12 +316,12 @@ describe('Social → Plans invitation cards', () => {
     };
     const user = userEvent.setup();
     render(<PlanInvites />);
-    await user.click(await screen.findByRole('button', { name: 'Accept' }));
+    await user.click(await screen.findByRole('button', { name: /^I'm in/ }));
 
     expect(await screen.findByText(/didn't go through/)).toBeTruthy();
     // Re-synced to what the database actually holds, so the next tap cannot
     // re-send 'pending'.
     expect(await screen.findByTestId('invite-responded')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Accept' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^I'm in/ })).toBeNull();
   });
 });

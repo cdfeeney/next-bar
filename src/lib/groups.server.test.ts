@@ -169,7 +169,8 @@ describe('V8-R-GRP-008 Night Out invitation notifications exist (round-1 finding
   it('a surface actually renders what that reader returns', () => {
     // The RPC having a caller is not delivery either; a row nothing displays is still untold.
     const ui = readFileSync(
-      path.join(__dirname, '..', 'app', 'friends', '_components', 'GroupsAndPeople.tsx'), 'utf8',
+      // S-03 (Social redesign): the notifications render on Plans (InvitedPlans), not in Groups.
+      path.join(__dirname, '..', 'app', 'friends', '_components', 'InvitedPlans.tsx'), 'utf8',
     );
     expect(ui).toMatch(/fetchNightOutInvitationNotifications/);
     expect(ui).toMatch(/group-invite-notification/);
