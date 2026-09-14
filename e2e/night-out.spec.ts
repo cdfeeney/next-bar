@@ -1356,6 +1356,15 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await page.getByTestId('pin-step-back').click();
     await expect(page.getByTestId('presence-screen')).toBeVisible();
     await expect(page).toHaveURL(/\/friends\/tonight$/);
+    // The in-app ‹ WALKED history rather than pushing (S-05b panel, Fable
+    // medium): the bar step is a forward entry now, not a new one.
+    await page.goForward();
+    await expect(page).toHaveURL(/\?step=where$/);
+    await expect(page.getByTestId('pin-where-step')).toBeVisible();
+    // …and the OS back gesture is the in-app ‹ by another route: it drops the
+    // pending pin too (S-05b panel, Codex medium).
+    await page.goBack();
+    await expect(page.getByTestId('presence-screen')).toBeVisible();
     // The pending bar is gone: re-entering the bar step shows no chosen line.
     await page.getByTestId('pin-my-spot').click();
     await expect(page.getByTestId('pin-where-step')).toBeVisible();

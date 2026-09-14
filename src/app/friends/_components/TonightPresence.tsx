@@ -104,6 +104,7 @@ function stepHref(step: PinStep): string {
   return step === 'status' ? TONIGHT_PATH : `${TONIGHT_PATH}?step=${step}`;
 }
 
+
 export default function TonightPresence(): JSX.Element {
   // 0019 swap-day rule: this component renders getBarById lookups, so it
   // subscribes to a live server-catalog swap.
@@ -134,10 +135,39 @@ export default function TonightPresence(): JSX.Element {
 
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
 
+  /**
+   * THE HISTORY ENTRIES THIS PAGE OWNS, oldest first — the entry it was opened
+   * on, then one per step pushed since. Going back walks by the real number of
+   * entries, never by the step's depth in the flow (S-05b panel round 2): the
+   * live-pin Custom chip pushes `audience` straight from the status screen, so
+   * assuming two entries sent `history.go(-2)` off the app entirely.
+   */
+  const entries = useRef<PinStep[]>(['status']);
+
+  /** Forward: push a new entry. */
   const go = useCallback(
     (next: PinStep): void => {
       setStep(next);
+      entries.current = [...entries.current, next];
       router.push(stepHref(next));
+    },
+    [router],
+  );
+
+  /** Backward: walk our own entries when the target is one of them; else replace. */
+  const goBackTo = useCallback(
+    (target: PinStep): void => {
+      const stack = entries.current;
+      const index = stack.lastIndexOf(target);
+      if (index >= 0 && index < stack.length - 1) {
+        entries.current = stack.slice(0, index + 1);
+        // popstate re-reads the step from the URL and clears any pending pin.
+        window.history.go(index - (stack.length - 1));
+        return;
+      }
+      setStep(target);
+      entries.current = [...stack.slice(0, -1), target];
+      router.replace(stepHref(target));
     },
     [router],
   );
@@ -145,8 +175,26 @@ export default function TonightPresence(): JSX.Element {
   useEffect(() => {
     // Read the URL after mount (never during render: the server renders the
     // status screen, and a client-only initial value would mismatch it).
-    const sync = (): void => setStep(stepFromSearch(window.location.search));
-    sync();
+    const initial = stepFromSearch(window.location.search);
+    entries.current = [initial];
+    setStep(initial);
+    const sync = (): void => {
+      const next = stepFromSearch(window.location.search);
+      setStep(next);
+      // Keep the owned-entry stack in step with the browser: back trims to the
+      // entry we returned to, forward adds the one we moved onto.
+      const stack = entries.current;
+      const index = stack.lastIndexOf(next);
+      entries.current = index >= 0 ? stack.slice(0, index + 1) : [...stack, next];
+      // The OS back gesture is the in-app ‹ by another route (S-05b panel,
+      // Codex, medium): landing on the status screen drops the pending pin
+      // exactly as Cancel does, so nothing half-composed waits behind it.
+      if (next === 'status') {
+        setPendingBarId(null);
+        setPendingRecipients([]);
+        setPendingAudience('friends');
+      }
+    };
     window.addEventListener('popstate', sync);
     return () => window.removeEventListener('popstate', sync);
   }, []);
@@ -294,17 +342,17 @@ export default function TonightPresence(): JSX.Element {
     setPendingBarId(null);
     setPendingRecipients([]);
     setPendingAudience('friends');
-    go('status');
-  }, [go]);
+    goBackTo('status');
+  }, [goBackTo]);
 
   /** Back from Pin your spot keeps the chosen bar; back from Where are you? drops it. */
   const stepBack = useCallback((): void => {
     if (step === 'audience') {
-      go('where');
+      goBackTo('where');
       return;
     }
     cancelPin();
-  }, [step, go, cancelPin]);
+  }, [step, goBackTo, cancelPin]);
 
   /**
    * STEP TWO: the confirmation, and the ONLY write in the sequence. Status, bar,
@@ -313,6 +361,10 @@ export default function TonightPresence(): JSX.Element {
    */
   const confirmPin = useCallback(async (): Promise<void> => {
     if (busy || pendingBarId === null) return;
+    // Never on a pin we have not read (S-05b panel, Fable, HIGH): the pending
+    // audience was snapshotted from `mine`, and while the read is loading or
+    // failed that snapshot is the DEFAULT, which would widen a live Custom pin.
+    if (!mineKnown) return;
     // The held state is enforced HERE as well as on the button (R-02): Custom
     // with nobody picked must never reach the write, whatever the DOM says.
     if (isAudienceHeld(pendingAudience, pendingRecipients.length)) return;
@@ -350,7 +402,7 @@ export default function TonightPresence(): JSX.Element {
       setFailed(true);
     }
     setBusy(false);
-  }, [busy, pendingAudience, pendingBarId, pendingRecipients, reloadMine, refresh, router]);
+  }, [busy, mineKnown, pendingAudience, pendingBarId, pendingRecipients, reloadMine, refresh, router]);
 
   const writeAudience = useCallback(
     async (audience: PresenceAudience, recipientIds: readonly string[]): Promise<void> => {
@@ -423,10 +475,23 @@ export default function TonightPresence(): JSX.Element {
   const myBar = myPin?.barId ? getBarById(myPin.barId) : null;
   const pendingBar = pendingBarId === null ? null : (getBarById(pendingBarId) ?? null);
   const signedOut = auth.status !== 'loading' && auth.status !== 'signed-in';
-  // A deep link to the audience step with nothing chosen has nothing to show:
-  // it is the status screen. (Refreshing mid-sequence drops the pending pin —
-  // nothing was written, so nothing is lost.)
-  const shown: PinStep = step === 'audience' && pendingBarId === null ? 'status' : step;
+  // THE PUSHED STEPS ARE GATED LIKE THE ROW THAT OPENS THEM (S-05b panel,
+  // Fable, HIGH): a deep link or a refresh on ?step=where must not offer the
+  // bar picker to a visitor, or before the own-pin read has answered — the
+  // pending audience is snapshotted from that read. And the audience step with
+  // nothing chosen has nothing to show. (Refreshing mid-sequence drops the
+  // pending pin — nothing was written, so nothing is lost.)
+  const stepsOpen = mineKnown && !signedOut;
+  const shown: PinStep = !stepsOpen || (step === 'audience' && pendingBarId === null) ? 'status' : step;
+
+  useEffect(() => {
+    // The URL says audience but there is nothing pending: say status in the
+    // URL too, or a later swipe forward lands on a step that cannot render.
+    if (step === 'audience' && pendingBarId === null) {
+      setStep('status');
+      router.replace(TONIGHT_PATH);
+    }
+  }, [step, pendingBarId, router]);
 
   const rowClass = (on: boolean): string =>
     [

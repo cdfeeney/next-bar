@@ -292,3 +292,32 @@ describe('the pin sequence publishes on confirmation, not on selection', () => {
     expect(setPresence).not.toHaveBeenCalled();
   });
 });
+
+describe('the pushed steps are gated like the row that opens them (S-05b, Fable HIGH)', () => {
+  test('a deep link to ?step=where on a FAILED own-pin read shows the status screen and cannot write', async () => {
+    fetchMyPresence.mockResolvedValue({ kind: 'failed' });
+    window.history.replaceState(null, '', '/friends/tonight?step=where');
+    try {
+      render(<TonightPresence />);
+      await screen.findByTestId('my-pin-error');
+      expect(screen.queryByTestId('pin-where-step')).toBeNull();
+      expect(screen.queryByTestId('fake-pick')).toBeNull();
+      expect(screen.getByTestId('presence-screen')).toBeTruthy();
+      expect(setPresence).not.toHaveBeenCalled();
+    } finally {
+      window.history.replaceState(null, '', '/');
+    }
+  });
+
+  test('a deep link to ?step=where on a KNOWN pin opens the bar step', async () => {
+    fetchMyPresence.mockResolvedValue({ kind: 'unset' });
+    window.history.replaceState(null, '', '/friends/tonight?step=where');
+    try {
+      render(<TonightPresence />);
+      await screen.findByTestId('pin-where-step');
+      expect(screen.queryByTestId('presence-screen')).toBeNull();
+    } finally {
+      window.history.replaceState(null, '', '/');
+    }
+  });
+});

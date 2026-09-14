@@ -121,12 +121,14 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/friends/tonight');
   });
 
-  test('/friends/tonight?step=where renders Where are you? with a back control (S-05b)', async ({ page }) => {
+  test('/friends/tonight?step=where signed OUT is the status screen with the sign-in box (S-05b)', async ({ page }) => {
+    // The pushed steps are gated like the row that opens them: a visitor never
+    // sees the bar picker (the signed-in deep link is covered in night-out.spec).
     await page.goto('/friends/tonight?step=where');
-    // The step body first: the status screen also has a "Where are you?" section heading.
-    await expect(page.getByTestId('pin-where-step')).toBeVisible();
-    await expect(page.getByRole('heading', { level: 1, name: /^Where are you\?$/ })).toBeVisible();
-    await expect(page.getByTestId('pin-step-back')).toBeVisible();
+    await expect(page.getByTestId('presence-screen')).toBeVisible();
+    await expect(page.getByTestId('presence-signed-out')).toBeVisible();
+    await expect(page.getByTestId('pin-where-step')).toHaveCount(0);
+    await expect(page.getByRole('heading', { level: 1, name: /^You tonight$/ })).toBeVisible();
     await expectNoConsoleErrors(page, '/friends/tonight?step=where');
   });
 
