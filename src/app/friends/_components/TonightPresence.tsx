@@ -143,6 +143,17 @@ export default function TonightPresence(): JSX.Element {
    * assuming two entries sent `history.go(-2)` off the app entirely.
    */
   const entries = useRef<PinStep[]>(['status']);
+  /** The step on screen, readable from effects that must not re-run on it. */
+  const stepRef = useRef<PinStep>('status');
+  stepRef.current = step;
+  /**
+   * The router, likewise. `useRouter` is stable in the app but NOT under test,
+   * where the mock hands back a fresh object per render — an effect that lists
+   * it as a dependency then re-runs on every render, and the account/night
+   * reset below re-entered itself until the worker ran out of memory.
+   */
+  const routerRef = useRef(router);
+  routerRef.current = router;
 
   /** Forward: push a new entry. */
   const go = useCallback(
@@ -269,7 +280,17 @@ export default function TonightPresence(): JSX.Element {
     // Only the audience step is meaningless without a pending bar. The bar
     // step survives — this effect also fires when auth settles after mount,
     // and a deep link to ?step=where must not be thrown away by that.
-    setStep((current) => (current === 'audience' ? 'status' : current));
+    //
+    // The ADDRESS is repaired HERE rather than by a watcher (S-05c, Codex):
+    // this reset is batched, so an effect comparing the state pair afterwards
+    // never observes the audience step it just left, and `?step=audience`
+    // stayed in the bar. Done on the transition itself, it cannot race the
+    // push/replace this component issues elsewhere.
+    if (stepRef.current === 'audience') {
+      setStep('status');
+      entries.current = [...entries.current.slice(0, -1), 'status'];
+      routerRef.current.replace(TONIGHT_PATH);
+    }
     setFailed(false);
     void reloadMine();
   }, [reloadMine]);
@@ -484,14 +505,36 @@ export default function TonightPresence(): JSX.Element {
   const stepsOpen = mineKnown && !signedOut;
   const shown: PinStep = !stepsOpen || (step === 'audience' && pendingBarId === null) ? 'status' : step;
 
+  /**
+   * THE ADDRESS FOLLOWS WHAT IS ON SCREEN (S-05c, both lanes at MEDIUM).
+   *
+   * Driven by `shown` — the step actually rendered — rather than by the pair
+   * (`step === 'audience' && pendingBarId === null`) the earlier version
+   * watched: React batches the account/night reset, so that pair was never
+   * observed and the URL was left on a step the page had already left. A
+   * signed-out visitor deep-linking `?step=where` is the same case.
+   *
+   * `entries` is repaired in the SAME place: a replace consumes the current
+   * history entry, so the owned-entry stack has to name the step that entry now
+   * holds, or a later back walk cannot find it and pushes a duplicate the user
+   * has to press back through twice.
+   */
   useEffect(() => {
-    // The URL says audience but there is nothing pending: say status in the
-    // URL too, or a later swipe forward lands on a step that cannot render.
-    if (step === 'audience' && pendingBarId === null) {
-      setStep('status');
-      router.replace(TONIGHT_PATH);
-    }
-  }, [step, pendingBarId, router]);
+    // The gate refused the step the address asks for — a visitor, or a failed
+    // own-pin read, or `?step=audience` with nothing pending. Say so in the
+    // address, and rewrite the entry that `replace` consumes so a later back
+    // walk still finds it (S-05c, Fable).
+    //
+    // NOT WHILE THE GATE IS STILL SETTLING: every step renders as `status`
+    // until the read answers, and rewriting then would throw away a legitimate
+    // deep link. And never by reading the live address — that races the push
+    // this component has just issued, which collapses two entries into one and
+    // sends the back gesture out of the app.
+    if (minePin.kind === 'loading' || shown === step) return;
+    setStep(shown);
+    entries.current = [...entries.current.slice(0, -1), shown];
+    router.replace(stepHref(shown));
+  }, [shown, step, minePin.kind, router]);
 
   const rowClass = (on: boolean): string =>
     [

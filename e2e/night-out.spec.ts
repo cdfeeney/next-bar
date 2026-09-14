@@ -1388,6 +1388,19 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await expect(page.getByRole('heading', { name: /^You tonight$/ })).toBeVisible();
     await expect(page.getByTestId('tonight-back')).toHaveAttribute('href', '/friends');
 
+    // The ADDRESS follows: the page rewrote the stale step out of the URL, and
+    // the entry it consumed is the one the back gesture leaves from — one press
+    // (S-05c, both lanes: the entry stack used to keep saying 'audience', so a
+    // later back pushed a duplicate the user had to press through twice).
+    await expect(page).toHaveURL(/\/friends\/tonight$/);
+    await page.getByTestId('pin-my-spot').click();
+    await expect(page.getByTestId('pin-where-step')).toBeVisible();
+    await page.getByTestId('pin-step-back').click();
+    await expect(page.getByTestId('presence-screen')).toBeVisible();
+    await expect(page).toHaveURL(/\/friends\/tonight$/);
+    await page.goBack();
+    await expect(page).not.toHaveURL(/\/friends\/tonight/);
+
     // …while a deep link to the bar step is that step.
     await page.goto('/friends/tonight?step=where');
     await expect(page.getByTestId('pin-where-step')).toBeVisible();
