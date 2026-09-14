@@ -20,6 +20,10 @@ const SCREENS: Array<{ name: string; route: string; ready: RegExp | string }> = 
   { name: 'plan-night-out-form', route: '/friends/consensus', ready: /night out|plan/i },
   { name: 'settings', route: '/settings', ready: /Account|Settings/i },
   { name: 'nights', route: '/nights', ready: /night/i },
+  // nb-social-20260914: the Social redesign's pushed screens (S-01, S-05). They 404 until
+  // those goals land; this spec runs only under VISUAL_CAPTURE_DIR, never in the release gate.
+  { name: 'social-people', route: '/friends/people', ready: /Followers|Following/i },
+  { name: 'social-tonight-sheet', route: '/friends/tonight', ready: /going out/i },
 ];
 
 test.describe('V9-11 visual evidence capture', () => {

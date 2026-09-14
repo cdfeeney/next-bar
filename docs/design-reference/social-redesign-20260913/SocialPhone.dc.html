@@ -1,0 +1,1672 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin=""><link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&amp;display=swap" rel="stylesheet"></helmet>
+<div style="width:390px;height:844px;position:relative;overflow:hidden;border-radius:40px;border:1px solid #2a2a2a;background:#0a0a0a;color:#f5f5f0;font-family:Poppins,ui-sans-serif,system-ui,sans-serif;font-weight:400;-webkit-font-smoothing:antialiased">
+<div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(600px 400px at 50% -10%, rgba(255,91,58,0.10), transparent 70%),radial-gradient(400px 300px at 100% 100%, rgba(122,92,255,0.06), transparent 70%)"></div>
+
+<div style="position:absolute;top:0;left:0;right:0;height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;z-index:5">
+<span style="font-size:13px;font-weight:600;letter-spacing:0.01em">10:42</span>
+<button type="button" onClick="{{ toggleData }}" style="border:1px dashed #3a3a3a;background:transparent;color:#8a8a85;font-family:inherit;font-size:9px;letter-spacing:0.12em;text-transform:uppercase;border-radius:20px;padding:4px 9px;cursor:pointer">{{ dataLabel }}</button>
+</div>
+
+<div style="position:absolute;top:44px;left:0;right:0;bottom:0;overflow-y:auto;scrollbar-width:none">
+
+<sc-if value="{{ showMain }}" hint-placeholder-val="{{ true }}">
+<div>
+<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:18px 24px 14px">
+<div style="min-width:0">
+<div style="font-weight:700;font-size:24px;line-height:1;text-transform:uppercase;letter-spacing:0.14em">Next Bar</div>
+<div style="color:#8a8a85;font-size:14px;margin-top:6px">Saturday</div>
+</div>
+<div style="flex:none;display:flex;align-items:center;gap:8px">
+<sc-if value="{{ isCurrent }}" hint-placeholder-val="{{ true }}">
+<button type="button" style="flex:none;border:1px solid #2a2a2a;background:#141414;color:#f5f5f0;font-family:inherit;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.1em;border-radius:16px;padding:0 12px;min-height:44px;cursor:pointer">Groups &amp; people</button>
+</sc-if>
+<sc-if value="{{ isD }}" hint-placeholder-val="{{ true }}">
+<button type="button" onClick="{{ goGroups }}" style="flex:none;border:0;background:transparent;color:#8a8a85;font-family:inherit;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.16em;padding:6px 0;min-height:44px;white-space:nowrap;cursor:pointer">People ›</button>
+</sc-if>
+<sc-if value="{{ isC }}" hint-placeholder-val="{{ true }}">
+<button type="button" onClick="{{ goStatus }}" aria-label="{{ pinAria }}" style="{{ pinIconStyle }}">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="width:22px;height:22px" aria-hidden="true"><path d="M12 21s-6-5.2-6-10.5a6 6 0 0 1 12 0C18 15.8 12 21 12 21Z"></path><circle cx="12" cy="10.5" r="2.2"></circle></svg>
+</button>
+</sc-if>
+<sc-if value="{{ showPeopleIcon }}" hint-placeholder-val="{{ true }}">
+<button type="button" onClick="{{ goGroups }}" aria-label="Groups and people" style="{{ peopleIconStyle }}">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:22px;height:22px" aria-hidden="true"><circle cx="9" cy="8" r="3.2"></circle><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M16 5.2a3.2 3.2 0 0 1 0 5.6"></path><path d="M17.5 14.3c2.1.7 3.5 2.7 3.5 5.7"></path></svg>
+<span style="{{ graphBadge }}">{{ graphBadgeCount }}</span>
+</button>
+</sc-if>
+</div>
+</div>
+
+<div style="padding:0 24px">
+<div style="display:flex;align-items:center;gap:4px;border:1px solid #2a2a2a;background:#141414;border-radius:16px;padding:4px">
+<sc-for list="{{ tabs }}" as="t" hint-placeholder-count="3">
+<button type="button" onClick="{{ t.go }}" style="{{ t.style }}">{{ t.label }}</button>
+</sc-for>
+</div>
+</div>
+
+<sc-if value="{{ onTonight }}" hint-placeholder-val="{{ true }}">
+<div>
+
+<sc-if value="{{ isCurrent }}" hint-placeholder-val="{{ true }}">
+<div style="padding:24px 0 110px">
+<div style="padding:0 24px">
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin-bottom:12px">Stories</div>
+<div style="width:64px;display:flex;flex-direction:column;align-items:center;gap:6px">
+<div style="position:relative;width:56px;height:56px">
+<div style="width:56px;height:56px;border-radius:999px;display:flex;align-items:center;justify-content:center"><div style="width:48px;height:48px;border-radius:999px;background:#e0a52e;color:#0a0a0a;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center">CD</div></div>
+<div style="position:absolute;bottom:-4px;right:-4px;width:18px;height:18px;border-radius:999px;background:#ff5b3a;border:2px solid #0a0a0a;color:#0a0a0a;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;line-height:1">+</div>
+</div>
+<div style="text-align:center;color:#8a8a85;font-size:11px">You</div>
+</div>
+</div>
+
+<div style="padding:34px 24px 0">
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin-bottom:12px">You tonight</div>
+<div style="display:flex;align-items:center;gap:8px">
+<span style="flex:1;min-height:44px;border:1px solid #2a2a2a;border-radius:999px;color:#8a8a85;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;text-align:center;padding:0 10px">Going out</span>
+<span style="flex:1;min-height:44px;border:1px solid #2a2a2a;border-radius:999px;color:#8a8a85;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;text-align:center;padding:0 10px">Maybe later</span>
+<span style="flex:1;min-height:44px;border:1px solid #2a2a2a;border-radius:999px;color:#8a8a85;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;text-align:center;padding:0 10px">Not going out</span>
+</div>
+</div>
+
+<div style="padding:34px 24px 0">
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin-bottom:12px">Out tonight</div>
+<sc-if value="{{ noFriends }}" hint-placeholder-val="{{ true }}">
+<div>
+<div style="color:#8a8a85;font-size:14px;margin-bottom:12px">No friends out yet tonight.</div>
+<span style="display:inline-flex;align-items:center;min-height:44px;padding:0 20px;border-radius:999px;border:1px solid #2a2a2a;font-weight:700;font-size:14px">Invite friends</span>
+</div>
+</sc-if>
+<sc-for list="{{ friends }}" as="f" hint-placeholder-count="0">
+<div style="background:#141414;border:1px solid #2a2a2a;border-radius:16px;padding:12px 16px;margin-bottom:8px">
+<div style="font-weight:700;font-size:14px">{{ f.lead }}</div>
+<div style="color:#8a8a85;font-size:12px;margin-top:2px">{{ f.sub }}</div>
+</div>
+</sc-for>
+</div>
+
+<div style="padding:34px 24px 0">
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin-bottom:12px">Groups &amp; people</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<div style="background:#141414;border:1px solid #2a2a2a;border-radius:24px;padding:20px 0;text-align:center">
+<div style="font-weight:700;font-size:30px;line-height:1">{{ followerCount }}</div>
+<div style="color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.1em;margin-top:8px">Followers</div>
+</div>
+<div style="background:#141414;border:1px solid #2a2a2a;border-radius:24px;padding:20px 0;text-align:center">
+<div style="font-weight:700;font-size:30px;line-height:1">{{ followingCount }}</div>
+<div style="color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.1em;margin-top:8px">Following</div>
+</div>
+</div>
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin:24px 0 12px">Groups</div>
+<div style="color:#8a8a85;font-size:14px;margin-bottom:12px">No groups yet. Name one below.</div>
+<div style="border:1px solid #2a2a2a;background:#141414;border-radius:16px;padding:13px 16px;color:#8a8a85;font-size:16px">New group name…</div>
+<div style="margin-top:10px"><span style="display:inline-flex;align-items:center;min-height:44px;padding:0 16px;border-radius:999px;background:#c54328;color:#0a0a0a;font-weight:700;font-size:14px">Create group</span></div>
+<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;background:#141414;border:1px solid #2a2a2a;border-radius:24px;padding:16px;margin-top:24px">
+<span>
+<span style="display:block;font-weight:700;font-size:16px">Group Favorites</span>
+<span style="display:block;color:#8a8a85;font-size:12px;margin-top:4px">Bars your circle all rate highly</span>
+</span>
+<span style="color:#8a8a85">›</span>
+</div>
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin:24px 0 12px">Find friends</div>
+<div style="border:1px solid #2a2a2a;background:#141414;border-radius:16px;padding:13px 16px;color:#8a8a85;font-size:16px">Search @username…</div>
+<div style="color:#8a8a85;font-size:14px;line-height:1.5;margin-top:16px">Search by @username to find friends who are already on Next Bar.</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isB }}" hint-placeholder-val="{{ true }}">
+<div style="padding:22px 24px 110px">
+<div style="background:#141414;border:1px solid #2a2a2a;border-radius:24px;padding:16px">
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+<div style="width:36px;height:36px;border-radius:999px;background:#e0a52e;color:#0a0a0a;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">CD</div>
+<div style="flex:1;min-width:0">
+<div style="font-weight:600;font-size:15px">You tonight</div>
+<div style="color:#8a8a85;font-size:12px">{{ statusLine }}</div>
+</div>
+</div>
+<div style="display:flex;gap:6px">
+<sc-for list="{{ statusOptions }}" as="s" hint-placeholder-count="3">
+<button type="button" onClick="{{ s.go }}" style="{{ s.style }}">{{ s.label }}</button>
+</sc-for>
+</div>
+<sc-if value="{{ going }}" hint-placeholder-val="{{ true }}">
+<button type="button" onClick="{{ goPinBar }}" style="display:flex;width:100%;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;min-height:52px;padding:0 4px;background:transparent;border:0;border-top:1px solid #2a2a2a;color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="min-width:0">
+<span style="display:block;font-weight:600;font-size:15px">{{ pinTitle }}</span>
+<span style="display:block;color:#8a8a85;font-size:12px;margin-top:2px">{{ pinSub }}</span>
+</span>
+<span style="color:#ff5b3a;flex:none">›</span>
+</button>
+</sc-if>
+</div>
+
+<button type="button" onClick="{{ goPlanForm }}" style="display:flex;width:100%;align-items:center;gap:14px;margin-top:14px;padding:16px;border-radius:24px;border:1px solid #ff5b3a;background:rgba(255,91,58,0.10);color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="flex:none;width:44px;height:44px;border-radius:16px;background:rgba(255,91,58,0.18);color:#ff5b3a;font-weight:700;font-size:22px;display:flex;align-items:center;justify-content:center">+</span>
+<span style="flex:1;min-width:0">
+<span style="display:block;font-weight:700;font-size:17px">Start a night out</span>
+<span style="display:block;color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.1em;margin-top:4px">Time · area · who's coming</span>
+</span>
+<span style="color:#ff5b3a;flex:none">›</span>
+</button>
+
+<div style="margin-top:30px">
+<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px">
+<span style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85">Out tonight</span>
+<span style="color:#8a8a85;font-size:11px">{{ outCount }}</span>
+</div>
+<sc-if value="{{ noFriends }}" hint-placeholder-val="{{ true }}">
+<div style="border:1px solid #2a2a2a;border-radius:24px;padding:20px 16px">
+<div style="font-size:14px;line-height:1.5;margin-bottom:14px">Nobody's out yet. Follow a few people and their spots show up here.</div>
+<button type="button" onClick="{{ goFollowing }}" style="display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:999px;background:#ff5b3a;border:0;color:#0a0a0a;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer">Find friends</button>
+</div>
+</sc-if>
+<sc-for list="{{ friends }}" as="f" hint-placeholder-count="0">
+<div style="display:flex;align-items:center;gap:12px;background:#141414;border:1px solid #2a2a2a;border-radius:20px;padding:12px 14px;margin-bottom:8px">
+<div style="{{ f.avatar }}">{{ f.initials }}</div>
+<div style="flex:1;min-width:0">
+<div style="font-weight:600;font-size:15px">{{ f.lead }}</div>
+<div style="color:#8a8a85;font-size:12px;margin-top:1px">{{ f.sub }}</div>
+</div>
+<div style="color:#8a8a85;font-size:11px;flex:none">{{ f.when }}</div>
+</div>
+</sc-for>
+</div>
+
+</div>
+</sc-if>
+
+<sc-if value="{{ isC }}" hint-placeholder-val="{{ true }}">
+<div>
+<div style="display:flex;gap:14px;overflow-x:auto;padding:18px 24px 0;scrollbar-width:none">
+<sc-for list="{{ stories }}" as="s" hint-placeholder-count="4">
+<button type="button" onClick="{{ s.go }}" style="{{ s.cellStyle }}">
+<span style="position:relative;display:inline-block">
+<span style="{{ s.ringSm }}">
+<span style="{{ s.avatarSm }}">{{ s.initials }}</span>
+</span>
+<sc-if value="{{ s.isYou }}" hint-placeholder-val="{{ false }}">
+<span style="position:absolute;bottom:-1px;right:-1px;width:18px;height:18px;border-radius:999px;background:#ff5b3a;border:2px solid #0a0a0a;color:#0a0a0a;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;line-height:1">+</span>
+</sc-if>
+</span>
+<span style="color:#8a8a85;font-size:11px;max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ s.label }}</span>
+</button>
+</sc-for>
+</div>
+</div>
+<div style="padding:22px 24px 110px">
+<sc-if value="{{ hasPlan }}" hint-placeholder-val="{{ true }}">
+<button type="button" onClick="{{ goPlanBoard }}" style="display:block;width:100%;padding:20px;border-radius:28px;border:1px solid #ff5b3a;background:linear-gradient(180deg, rgba(255,91,58,0.14), #141414);color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="display:block;color:#ff5b3a;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.22em">Your plan tonight</span>
+<span style="display:block;font-weight:700;font-size:26px;line-height:1.15;margin-top:10px">Saturday · 9:00 PM</span>
+<span style="display:block;color:#8a8a85;font-size:13px;margin-top:6px">Lower East Side · 4 going · 3 of 4 voted</span>
+<span style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,91,58,0.35)">
+<span style="font-weight:600;font-size:14px">Attaboy is leading</span>
+<span style="color:#ff5b3a;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.1em">Open ›</span>
+</span>
+</button>
+</sc-if>
+<sc-if value="{{ noPlan }}" hint-placeholder-val="{{ true }}">
+<div style="padding:22px 20px;border-radius:28px;border:1px solid #2a2a2a;background:#141414">
+<div style="color:#8a8a85;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.22em">Tonight</div>
+<div style="font-weight:700;font-size:24px;line-height:1.2;margin-top:10px">No plan yet.</div>
+<div style="color:#8a8a85;font-size:13px;line-height:1.5;margin-top:6px">Pick a time, an area and who's coming. Everyone votes on where.</div>
+<button type="button" onClick="{{ goPlanForm }}" style="display:flex;width:100%;align-items:center;justify-content:center;min-height:50px;margin-top:16px;border-radius:999px;background:#ff5b3a;border:0;color:#0a0a0a;font-family:inherit;font-weight:700;font-size:15px;cursor:pointer">Start a night out</button>
+</div>
+</sc-if>
+
+<div style="margin-top:30px">
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin-bottom:14px">Out tonight</div>
+<sc-if value="{{ noFriends }}" hint-placeholder-val="{{ true }}">
+<div style="border:1px dashed #2a2a2a;border-radius:24px;padding:20px 16px">
+<div style="font-size:14px;line-height:1.5;margin-bottom:14px">Nobody's out yet — invite the people you'd actually go out with.</div>
+<button type="button" onClick="{{ goFollowing }}" style="display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:999px;border:1px solid #2a2a2a;background:transparent;color:#f5f5f0;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer">Invite friends</button>
+</div>
+</sc-if>
+<sc-for list="{{ friends }}" as="f" hint-placeholder-count="0">
+<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #1c1c1c">
+<div style="{{ f.avatar }}">{{ f.initials }}</div>
+<div style="flex:1;min-width:0">
+<div style="font-weight:600;font-size:15px">{{ f.lead }}</div>
+<div style="color:#8a8a85;font-size:12px;margin-top:1px">{{ f.sub }}</div>
+</div>
+<div style="color:#8a8a85;font-size:11px;flex:none">{{ f.when }}</div>
+</div>
+</sc-for>
+</div>
+
+</div>
+</sc-if>
+
+<sc-if value="{{ isD }}" hint-placeholder-val="{{ true }}">
+<div style="padding:26px 24px 130px">
+<div style="display:flex;align-items:flex-end;gap:12px">
+<div style="font-weight:700;font-size:64px;line-height:0.85;color:#ff5b3a;letter-spacing:-0.03em">{{ outNumber }}</div>
+<div style="font-weight:600;font-size:15px;line-height:1.25;padding-bottom:6px;max-width:150px">{{ outHeadline }}</div>
+</div>
+
+<button type="button" onClick="{{ goStatus }}" style="display:flex;width:100%;align-items:center;gap:14px;margin-top:26px;padding:14px 0;border:0;border-top:1px solid #2a2a2a;border-bottom:1px solid #2a2a2a;background:transparent;color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="flex:none;width:48px;height:48px;border-radius:999px;background:#e0a52e;color:#0a0a0a;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center">CD</span>
+<span style="flex:1;min-width:0">
+<span style="display:block;font-weight:700;font-size:18px;letter-spacing:-0.01em">{{ rosterYouLead }}</span>
+<span style="display:block;color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.14em;margin-top:3px">You · tap to change</span>
+</span>
+<span style="color:#ff5b3a;flex:none">›</span>
+</button>
+
+<sc-for list="{{ friends }}" as="f" hint-placeholder-count="0">
+<div style="display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid #1c1c1c">
+<div style="{{ f.avatarRing }}">
+<div style="{{ f.avatar }}">{{ f.initials }}</div>
+</div>
+<div style="flex:1;min-width:0">
+<div style="font-weight:700;font-size:18px;letter-spacing:-0.01em">{{ f.lead }}</div>
+<div style="color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.14em;margin-top:3px">{{ f.rosterSub }}</div>
+</div>
+</div>
+</sc-for>
+
+<sc-if value="{{ noFriends }}" hint-placeholder-val="{{ true }}">
+<div style="margin-top:20px;font-size:14px;line-height:1.6;color:#8a8a85">Your roster is empty. Follow people and their spot for the night lands here the moment they pin it.</div>
+</sc-if>
+</div>
+<div style="position:absolute;left:0;right:0;bottom:66px;padding:12px 24px 14px;background:linear-gradient(180deg, rgba(10,10,10,0), #0a0a0a 40%)">
+<button type="button" onClick="{{ goPlanForm }}" style="display:flex;width:100%;align-items:center;justify-content:center;min-height:52px;border-radius:999px;background:#ff5b3a;border:0;color:#0a0a0a;font-family:inherit;font-weight:700;font-size:16px;cursor:pointer">Start a night out</button>
+</div>
+</sc-if>
+
+</div>
+</sc-if>
+
+<sc-if value="{{ onPlans }}" hint-placeholder-val="{{ true }}">
+<div style="padding:24px 24px 110px">
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin-bottom:14px">Plans</div>
+<sc-if value="{{ hasPlan }}" hint-placeholder-val="{{ true }}">
+<button type="button" onClick="{{ goPlanBoard }}" style="display:flex;width:100%;align-items:center;gap:14px;padding:16px;border-radius:24px;border:1px solid #ff5b3a;background:#141414;color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer;margin-bottom:12px">
+<span style="flex:1;min-width:0">
+<span style="display:block;color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.14em">Your plan tonight</span>
+<span style="display:block;font-weight:700;font-size:18px;margin-top:4px">{{ planStatusTitle }}</span>
+<span style="display:block;color:#8a8a85;font-size:12px;margin-top:4px">{{ planStatusSub }}</span>
+</span>
+<span style="color:#8a8a85;flex:none">›</span>
+</button>
+</sc-if>
+<button type="button" onClick="{{ goPlanForm }}" style="display:flex;width:100%;align-items:center;gap:14px;padding:16px;border-radius:24px;border:1px solid #2a2a2a;background:#141414;color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="flex:none;width:44px;height:44px;border-radius:16px;background:rgba(255,91,58,0.15);color:#ff5b3a;font-weight:700;font-size:20px;display:flex;align-items:center;justify-content:center">+</span>
+<span style="flex:1;min-width:0">
+<span style="display:block;font-weight:700;font-size:18px;line-height:1.3">Start a Night Out</span>
+<span style="display:block;color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.1em;margin-top:4px">New plan · time, area, people</span>
+</span>
+<span style="color:#8a8a85;flex:none">›</span>
+</button>
+<sc-if value="{{ noPlan }}" hint-placeholder-val="{{ true }}">
+<div style="color:#8a8a85;font-size:13px;line-height:1.6;margin-top:18px">Invitations you've been sent land here too. Nothing else lives on this tab.</div>
+</sc-if>
+
+<sc-if value="{{ hasInvites }}" hint-placeholder-val="{{ false }}">
+<div>
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin:30px 0 12px">Invited</div>
+<div style="border:1px solid #2a2a2a;background:#141414;border-radius:24px;padding:16px">
+<div style="display:flex;align-items:center;gap:12px">
+<div style="flex:none;width:34px;height:34px;border-radius:999px;background:#6b7fc9;color:#0a0a0a;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center">DP</div>
+<div style="flex:1;min-width:0">
+<div style="font-weight:600;font-size:15px">Dev's birthday thing</div>
+<div style="color:#8a8a85;font-size:12px;margin-top:1px">Dev P. · Saturday 10:00 PM · East Village</div>
+</div>
+</div>
+<div style="display:flex;gap:10px;margin-top:14px">
+<span style="flex:1;min-height:44px;border-radius:16px;background:#ff5b3a;color:#0a0a0a;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">I'm in</span>
+<span style="flex:1;min-height:44px;border-radius:16px;border:1px solid #2a2a2a;color:#8a8a85;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">Not tonight</span>
+</div>
+</div>
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin:30px 0 8px">Earlier nights</div>
+<sc-for list="{{ pastNights }}" as="n" hint-placeholder-count="2">
+<button type="button" onClick="{{ n.go }}" style="display:flex;width:100%;align-items:center;gap:12px;padding:11px 0;border:0;border-bottom:1px solid #1c1c1c;background:transparent;color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="{{ n.thumb }}"></span>
+<span style="flex:1;min-width:0">
+<span style="display:block;font-weight:600;font-size:15px">{{ n.title }}</span>
+<span style="display:block;color:#8a8a85;font-size:12px;margin-top:2px">{{ n.sub }}</span>
+</span>
+<span style="color:#8a8a85;flex:none">›</span>
+</button>
+</sc-for>
+</div>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{ onFeed }}" hint-placeholder-val="{{ true }}">
+<div style="padding:24px 0 110px">
+<div style="padding:0 24px">
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin-bottom:12px">Stories</div>
+</div>
+<div style="display:flex;gap:16px;overflow-x:auto;padding:4px 24px 0;scrollbar-width:none">
+<sc-for list="{{ stories }}" as="s" hint-placeholder-count="4">
+<button type="button" onClick="{{ s.go }}" style="{{ s.cellStyle }}">
+<span style="position:relative;display:inline-block">
+<span style="{{ s.ring }}">
+<span style="{{ s.avatar }}">{{ s.initials }}</span>
+</span>
+<sc-if value="{{ s.isYou }}" hint-placeholder-val="{{ false }}">
+<span style="position:absolute;bottom:0;right:0;width:18px;height:18px;border-radius:999px;background:#ff5b3a;border:2px solid #0a0a0a;color:#0a0a0a;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;line-height:1">+</span>
+</sc-if>
+</span>
+<span style="color:#8a8a85;font-size:11px;max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ s.label }}</span>
+</button>
+</sc-for>
+</div>
+<div style="padding:28px 24px 0">
+<sc-if value="{{ noFriends }}" hint-placeholder-val="{{ true }}">
+<div style="border:1px solid #2a2a2a;background:#141414;border-radius:16px;padding:20px">
+<div style="font-size:14px;line-height:1.6">Nothing here yet. Stories from you and the friends who follow you back show up here for 24 hours.</div>
+</div>
+</sc-if>
+<sc-for list="{{ feed }}" as="p" hint-placeholder-count="0">
+<div style="border:1px solid #2a2a2a;background:#141414;border-radius:16px;overflow:hidden;margin-bottom:16px">
+<div style="display:flex;align-items:center;gap:12px;padding:12px 16px">
+<div style="{{ p.avatar }}">{{ p.initials }}</div>
+<div style="flex:1;min-width:0">
+<div style="font-size:14px">{{ p.who }}</div>
+<div style="color:#8a8a85;font-size:11px;margin-top:1px">{{ p.place }}</div>
+</div>
+<div style="color:#8a8a85;font-size:11px;flex:none">{{ p.age }}</div>
+</div>
+<div style="height:200px;background:#1c1c1c;display:flex;align-items:center;justify-content:center;color:#3f3f3f;font-size:11px;text-transform:uppercase;letter-spacing:0.2em">Photo</div>
+<div style="padding:12px 16px">
+<div style="font-size:14px;line-height:1.5">{{ p.caption }}</div>
+<div style="display:flex;gap:10px;margin-top:14px">
+<span style="flex:1;min-height:44px;border:1px solid #2a2a2a;border-radius:16px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.12em">View night</span>
+<button type="button" onClick="{{ p.toggleThread }}" style="{{ p.replyBtn }}">{{ p.replyLabel }}</button>
+</div>
+
+<sc-if value="{{ p.threadOpen }}" hint-placeholder-val="{{ false }}">
+<div style="margin-top:12px;padding-top:12px;border-top:1px solid #2a2a2a">
+<sc-if value="{{ p.threadUnread }}" hint-placeholder-val="{{ false }}">
+<div style="color:#8a8a85;font-size:11px">Replies could not be loaded yet.</div>
+</sc-if>
+<sc-if value="{{ p.threadEmpty }}" hint-placeholder-val="{{ false }}">
+<div style="color:#8a8a85;font-size:11px">No replies yet.</div>
+</sc-if>
+<sc-for list="{{ p.thread }}" as="c" hint-placeholder-count="2">
+<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px">
+<div style="{{ c.avatar }}">{{ c.initials }}</div>
+<div style="flex:1;min-width:0">
+<div style="display:flex;align-items:baseline;gap:8px">
+<span style="font-weight:600;font-size:13px">{{ c.who }}</span>
+<span style="color:#8a8a85;font-size:11px">{{ c.age }}</span>
+</div>
+<div style="font-size:13px;line-height:1.45;margin-top:2px">{{ c.body }}</div>
+</div>
+<button type="button" onClick="{{ c.remove }}" style="{{ c.deleteBtn }}" aria-label="Delete reply">×</button>
+</div>
+</sc-for>
+<sc-if value="{{ p.threadTruncated }}" hint-placeholder-val="{{ false }}">
+<div style="color:#8a8a85;font-size:11px;margin-bottom:10px">Showing the most recent {{ perPost }} replies.</div>
+</sc-if>
+<div style="display:flex;align-items:flex-end;gap:8px;margin-top:10px">
+<input value="{{ draft }}" onChange="{{ setDraft }}" placeholder="Reply…" style="flex:1;min-width:0;min-height:44px;box-sizing:border-box;padding:0 14px;border-radius:16px;border:1px solid #2a2a2a;background:#0a0a0a;color:#f5f5f0;font-family:inherit;font-size:14px;outline:none">
+<button type="button" onClick="{{ p.send }}" style="{{ sendBtn }}">Send</button>
+</div>
+<div style="{{ draftCountStyle }}">{{ draftCount }}</div>
+</div>
+</sc-if>
+</div>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+</div>
+</sc-if>
+
+<sc-if value="{{ showPushed }}" hint-placeholder-val="{{ false }}">
+<div>
+<sc-if value="{{ showPushHeader }}" hint-placeholder-val="{{ true }}">
+<div style="display:flex;align-items:center;gap:10px;padding:10px 16px 8px">
+<button type="button" onClick="{{ goBack }}" style="min-width:44px;min-height:44px;border:0;background:transparent;color:#f5f5f0;font-family:inherit;font-size:18px;cursor:pointer;text-align:left">‹</button>
+<div style="flex:1;min-width:0;font-weight:700;font-size:16px">{{ pushTitle }}</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ onPinBar }}" hint-placeholder-val="{{ false }}">
+<div style="padding:8px 24px 110px">
+<div style="color:#8a8a85;font-size:13px;line-height:1.5;margin-bottom:14px">Pick where you are. Only the audience you choose next can see it, and it clears at 4 AM.</div>
+<div style="border:1px solid #2a2a2a;background:#141414;border-radius:16px;padding:13px 16px;color:#8a8a85;font-size:16px;margin-bottom:16px">Search bars…</div>
+<sc-for list="{{ barList }}" as="b" hint-placeholder-count="6">
+<button type="button" onClick="{{ b.go }}" style="display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;border:0;border-bottom:1px solid #1c1c1c;background:transparent;color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="min-width:0">
+<span style="display:block;font-weight:600;font-size:16px">{{ b.name }}</span>
+<span style="display:block;color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;margin-top:3px">{{ b.hood }}</span>
+</span>
+<span style="color:#8a8a85;flex:none">›</span>
+</button>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{ onPinAud }}" hint-placeholder-val="{{ false }}">
+<div style="padding:8px 24px 110px">
+<div style="font-weight:700;font-size:24px;line-height:1.25">{{ pendingBarName }}</div>
+<div style="color:#8a8a85;font-size:13px;margin-top:6px">Nothing is shared until you pin it.</div>
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin:26px 0 12px">Who can see this</div>
+<sc-for list="{{ audienceOptions }}" as="a" hint-placeholder-count="3">
+<button type="button" onClick="{{ a.go }}" style="{{ a.style }}">
+<span style="min-width:0;font-weight:600;font-size:15px">{{ a.label }}</span>
+<span style="{{ a.check }}">✓</span>
+</button>
+</sc-for>
+<sc-if value="{{ pinNeedsPeople }}" hint-placeholder-val="{{ false }}">
+<div>
+<div style="color:#8a8a85;font-size:12px;line-height:1.5;margin:4px 0 12px">Only friends who follow you back can be picked. This applies to tonight's pin only.</div>
+<input value="{{ pickQuery }}" onChange="{{ setPickQuery }}" placeholder="Search friends…" style="display:block;width:100%;box-sizing:border-box;margin-bottom:10px;min-height:44px;padding:0 14px;border-radius:14px;border:1px solid #2a2a2a;background:#141414;color:#f5f5f0;font-family:inherit;font-size:14px;outline:none">
+<div style="max-height:260px;overflow-y:auto;scrollbar-width:none">
+<sc-for list="{{ pinPickList }}" as="p" hint-placeholder-count="4">
+<button type="button" onClick="{{ p.go }}" style="{{ p.row }}">
+<span style="{{ p.avatar }}">{{ p.initials }}</span>
+<span style="flex:1;min-width:0;font-size:14px">{{ p.who }}</span>
+<span style="{{ p.check }}">✓</span>
+</button>
+</sc-for>
+<sc-if value="{{ pickEmpty }}" hint-placeholder-val="{{ false }}">
+<div style="color:#8a8a85;font-size:13px;padding:8px 2px">{{ pickEmptyLine }}</div>
+</sc-if>
+</div>
+<div style="color:#8a8a85;font-size:12px;margin-top:10px">{{ pinCountLine }}</div>
+</div>
+</sc-if>
+<button type="button" onClick="{{ confirmPin }}" style="{{ pinConfirmBtn }}">Pin it</button>
+<button type="button" onClick="{{ goBack }}" style="display:flex;width:100%;align-items:center;justify-content:center;min-height:48px;margin-top:10px;border-radius:999px;background:transparent;border:1px solid #2a2a2a;color:#8a8a85;font-family:inherit;font-weight:600;font-size:15px;cursor:pointer">Cancel</button>
+</div>
+</sc-if>
+
+<sc-if value="{{ onStatus }}" hint-placeholder-val="{{ false }}">
+<div style="padding:8px 24px 110px">
+<div style="color:#8a8a85;font-size:13px;line-height:1.5;margin-bottom:18px">Manual, always. Nothing here reads your location, and it all clears at 4 AM.</div>
+<div style="font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.2em;color:#8a8a85;margin-bottom:10px">Are you going out?</div>
+<sc-for list="{{ statusRows }}" as="s" hint-placeholder-count="3">
+<button type="button" onClick="{{ s.go }}" style="{{ s.style }}">
+<span style="font-weight:600;font-size:16px">{{ s.label }}</span>
+<span style="{{ s.check }}">✓</span>
+</button>
+</sc-for>
+<div style="font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.2em;color:#8a8a85;margin:24px 0 10px">Where are you?</div>
+<button type="button" onClick="{{ goPinBar }}" style="display:flex;width:100%;align-items:center;gap:14px;padding:16px;border-radius:20px;border:1px solid #2a2a2a;background:#141414;color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="{{ pinChip }}">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="width:19px;height:19px" aria-hidden="true"><path d="M12 21s-6-5.2-6-10.5a6 6 0 0 1 12 0C18 15.8 12 21 12 21Z"></path><circle cx="12" cy="10.5" r="2.2"></circle></svg>
+</span>
+<span style="flex:1;min-width:0">
+<span style="display:block;font-weight:600;font-size:15px">{{ pinTitle }}</span>
+<span style="display:block;color:#8a8a85;font-size:12px;margin-top:2px">{{ pinSub }}</span>
+</span>
+<span style="color:#ff5b3a;flex:none">›</span>
+</button>
+<div style="color:#8a8a85;font-size:12px;line-height:1.5;margin-top:10px">Pinning a bar sets you to Going out.</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ onGroups }}" hint-placeholder-val="{{ false }}">
+<div style="padding:8px 24px 110px">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<button type="button" onClick="{{ goFollowers }}" style="background:#141414;border:1px solid #2a2a2a;border-radius:24px;padding:18px 0;text-align:center;color:#f5f5f0;font-family:inherit;cursor:pointer">
+<span style="display:block;font-weight:700;font-size:28px;line-height:1">{{ followerCount }}</span>
+<span style="display:block;color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.1em;margin-top:6px">Followers</span>
+</button>
+<button type="button" onClick="{{ goFollowing }}" style="background:#141414;border:1px solid #2a2a2a;border-radius:24px;padding:18px 0;text-align:center;color:#f5f5f0;font-family:inherit;cursor:pointer">
+<span style="display:block;font-weight:700;font-size:28px;line-height:1">{{ followingCount }}</span>
+<span style="display:block;color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.1em;margin-top:6px">Following</span>
+</button>
+</div>
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin:26px 0 12px">Find friends</div>
+<div style="border:1px solid #2a2a2a;background:#141414;border-radius:16px;padding:13px 16px;color:#8a8a85;font-size:16px">Search @username…</div>
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin:26px 0 12px">Groups</div>
+<sc-for list="{{ groupList }}" as="g" hint-placeholder-count="0">
+<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;background:#141414;border:1px solid #2a2a2a;border-radius:20px;padding:14px 16px;margin-bottom:8px">
+<span style="font-weight:600;font-size:16px">{{ g.name }}</span>
+<span style="{{ g.badge }}">{{ g.unread }}</span>
+</div>
+</sc-for>
+<sc-if value="{{ noGroups }}" hint-placeholder-val="{{ true }}">
+<div style="border:1px dashed #2a2a2a;border-radius:20px;padding:16px;color:#8a8a85;font-size:13px;line-height:1.5">No groups yet. A group is a standing chat with the friends who follow you back.</div>
+</sc-if>
+<button type="button" style="display:inline-flex;align-items:center;min-height:44px;margin-top:12px;padding:0 18px;border-radius:999px;border:1px solid #2a2a2a;background:transparent;color:#f5f5f0;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer">New group</button>
+<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;background:#141414;border:1px solid #2a2a2a;border-radius:24px;padding:16px;margin-top:24px">
+<span>
+<span style="display:block;font-weight:600;font-size:16px">Group Favorites</span>
+<span style="display:block;color:#8a8a85;font-size:12px;margin-top:4px">Bars your circle all rate highly</span>
+</span>
+<span style="color:#8a8a85">›</span>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ stepCapture }}" hint-placeholder-val="{{ false }}">
+<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;background:#0a0a0a;z-index:8">
+<div style="border-top:1px solid #2a2a2a;border-radius:24px 24px 0 0;background:#141414;padding:20px 20px 32px">
+<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+<div style="min-width:0">
+<div style="font-weight:700;font-size:20px;line-height:1.2">Add to your story</div>
+<div style="color:#8a8a85;font-size:14px;margin-top:4px">Capture now, then choose who sees it.</div>
+</div>
+<button type="button" onClick="{{ goBack }}" aria-label="Close capture" style="flex:none;width:44px;height:44px;margin:-4px -8px 0 0;border:0;background:transparent;border-radius:999px;color:#8a8a85;font-family:inherit;font-size:16px;cursor:pointer">✕</button>
+</div>
+<div style="margin-top:20px;display:flex;flex-direction:column;gap:12px">
+<sc-for list="{{ captureModes }}" as="m" hint-placeholder-count="3">
+<button type="button" onClick="{{ m.go }}" style="display:flex;width:100%;align-items:center;gap:14px;min-height:64px;padding:12px 16px;border-radius:16px;border:1px solid #2a2a2a;background:#141414;color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="flex:none;display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:12px;background:rgba(255,91,58,0.12);color:#ff5b3a">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="width:21px;height:21px" aria-hidden="true"><path d="{{ m.p1 }}"></path><path d="{{ m.p2 }}"></path><circle cx="{{ m.cx }}" cy="{{ m.cy }}" r="{{ m.r }}"></circle></svg>
+</span>
+<span style="flex:1;min-width:0">
+<span style="display:block;font-size:14px">{{ m.label }}</span>
+<span style="display:block;color:#8a8a85;font-size:11px;margin-top:2px">{{ m.hint }}</span>
+</span>
+<span style="color:#8a8a85;flex:none">›</span>
+</button>
+</sc-for>
+</div>
+<div style="color:#8a8a85;font-size:13px;line-height:1.5;margin-top:16px;text-align:center">Nothing is shared until you review it and pick an audience.</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ onShare }}" hint-placeholder-val="{{ false }}">
+<div style="padding:8px 24px 110px">
+
+<sc-if value="{{ stepReview }}" hint-placeholder-val="{{ false }}">
+<div>
+<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+<span style="margin-left:auto;border:1px solid #2a2a2a;border-radius:16px;padding:5px 11px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.14em;color:#8a8a85">Draft — not shared</span>
+<span style="border:1px solid #ff5b3a;border-radius:16px;padding:5px 11px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.14em;color:#ff5b3a">{{ kindLabel }}</span>
+</div>
+<div style="position:relative;margin-top:12px;aspect-ratio:3/4;max-height:340px;border-radius:16px;border:1px solid #2a2a2a;background:#1c1c1c;display:flex;align-items:center;justify-content:center;color:#3f3f3f;font-size:10px;text-transform:uppercase;letter-spacing:0.2em">Main
+<sc-if value="{{ isDual }}" hint-placeholder-val="{{ true }}">
+<div style="position:absolute;bottom:12px;right:12px;width:92px;aspect-ratio:3/4;border-radius:12px;border:1px solid #2a2a2a;background:#0a0a0a;display:flex;align-items:center;justify-content:center;color:#3f3f3f;font-size:9px;text-transform:uppercase;letter-spacing:0.16em">Inset</div>
+</sc-if>
+</div>
+<sc-if value="{{ isDual }}" hint-placeholder-val="{{ true }}">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
+<sc-for list="{{ compositionButtons }}" as="c" hint-placeholder-count="4">
+<button type="button" onClick="{{ c.go }}" style="min-height:44px;border-radius:14px;border:1px solid #2a2a2a;background:transparent;color:#f5f5f0;font-family:inherit;font-size:12px;cursor:pointer">{{ c.label }}</button>
+</sc-for>
+</div>
+</sc-if>
+<div style="display:flex;gap:10px;margin-top:14px">
+<button type="button" onClick="{{ retakeCapture }}" style="flex:1;min-height:52px;border-radius:14px;border:1px solid #2a2a2a;background:transparent;color:#f5f5f0;font-family:inherit;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.14em;cursor:pointer">Retake</button>
+<button type="button" onClick="{{ approveCapture }}" style="flex:1;min-height:52px;border-radius:14px;border:0;background:#ff5b3a;color:#0a0a0a;font-family:inherit;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.14em;cursor:pointer">{{ approveLabel }}</button>
+</div>
+<div style="color:#8a8a85;font-size:11px;line-height:1.5;margin-top:12px;text-align:center;padding:0 16px">Retake discards this shot and reopens the capture options. Nothing has left your phone.</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ stepCompose }}" hint-placeholder-val="{{ false }}">
+<div>
+<div style="display:flex;gap:14px">
+<div style="flex:none;position:relative;width:104px;aspect-ratio:3/4;border-radius:16px;background:#1c1c1c;display:flex;align-items:center;justify-content:center;color:#3f3f3f;font-size:9px;text-transform:uppercase;letter-spacing:0.16em">Main
+<sc-if value="{{ isDual }}" hint-placeholder-val="{{ true }}">
+<div style="position:absolute;bottom:6px;right:6px;width:34px;aspect-ratio:3/4;border-radius:7px;border:1px solid #2a2a2a;background:#0a0a0a;display:flex;align-items:center;justify-content:center;color:#3f3f3f;font-size:7px;text-transform:uppercase;letter-spacing:0.1em">In</div>
+</sc-if>
+</div>
+<div style="flex:1;min-width:0">
+<div style="font-weight:700;font-size:22px;line-height:1.2">Share a moment.</div>
+<button type="button" onClick="{{ retake }}" style="margin-top:10px;min-height:44px;padding:0 14px;border-radius:999px;border:1px solid #2a2a2a;background:transparent;color:#8a8a85;font-family:inherit;font-weight:700;font-size:12px;cursor:pointer">Retake</button>
+</div>
+</div>
+<input value="{{ caption }}" onChange="{{ setCaption }}" placeholder="Add a caption…" style="display:block;width:100%;box-sizing:border-box;margin-top:18px;padding:13px 16px;border-radius:16px;border:1px solid #2a2a2a;background:#141414;color:#f5f5f0;font-family:inherit;font-size:15px;outline:none">
+<div style="{{ capCountStyle }}">{{ capCount }}</div>
+<button type="button" onClick="{{ goPinBar }}" style="display:flex;width:100%;align-items:center;gap:12px;margin-top:14px;min-height:56px;padding:0 16px;border-radius:16px;border:1px solid #2a2a2a;background:#141414;color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="flex:1;font-size:14px">Bar</span>
+<span style="color:#ff5b3a;font-size:14px">{{ shotBarName }}</span>
+<span style="color:#ff5b3a;flex:none">›</span>
+</button>
+<button type="button" onClick="{{ openPeopleSheet }}" style="display:flex;width:100%;align-items:center;gap:12px;margin-top:8px;min-height:56px;padding:0 16px;border-radius:16px;border:1px solid #2a2a2a;background:#141414;color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="flex:1;font-size:14px">People</span>
+<span style="color:#ff5b3a;font-size:14px">{{ taggedLabel }}</span>
+<span style="color:#ff5b3a;flex:none">›</span>
+</button>
+<button type="button" onClick="{{ toDestinations }}" style="display:flex;width:100%;align-items:center;justify-content:center;min-height:54px;margin-top:20px;border-radius:999px;background:#ff5b3a;border:0;color:#0a0a0a;font-family:inherit;font-weight:700;font-size:16px;cursor:pointer">Next</button>
+</div>
+</sc-if>
+
+<sc-if value="{{ stepDest }}" hint-placeholder-val="{{ false }}">
+<div>
+<div style="font-weight:700;font-size:22px;line-height:1.2">Where does this go?</div>
+<div style="margin-top:16px">
+<sc-for list="{{ destRows }}" as="d" hint-placeholder-count="4">
+<div style="{{ d.wrap }}">
+<button type="button" onClick="{{ d.go }}" style="{{ d.row }}">
+<span style="flex:1;min-width:0">
+<span style="display:block;font-size:15px;font-weight:600">{{ d.label }}</span>
+<span style="display:block;color:#8a8a85;font-size:12px;margin-top:2px">{{ d.hint }}</span>
+</span>
+<span style="{{ d.indicator }}">{{ d.state }}</span>
+</button>
+<sc-if value="{{ d.showSub }}" hint-placeholder-val="{{ false }}">
+<button type="button" onClick="{{ openAudienceSheet }}" style="display:flex;width:100%;align-items:center;gap:10px;min-height:44px;padding:10px 16px 12px;border:1px solid #ff5b3a;border-top:0;border-radius:0 0 16px 16px;background:transparent;color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="flex:1;font-size:13px">Story audience</span>
+<span style="color:#ff5b3a;font-size:13px">{{ storyAudienceLabel }}</span>
+<span style="color:#ff5b3a;flex:none">›</span>
+</button>
+</sc-if>
+</div>
+</sc-for>
+</div>
+<button type="button" onClick="{{ publish }}" style="{{ publishBtn }}">{{ publishLabel }}</button>
+<div style="color:#8a8a85;font-size:12px;line-height:1.5;margin-top:10px;text-align:center">One capture, one publish — no review screen after this.</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ stepShared }}" hint-placeholder-val="{{ false }}">
+<div>
+<div style="font-weight:700;font-size:26px;line-height:1.2;margin-top:8px">{{ sharedTitle }}</div>
+<div style="color:#8a8a85;font-size:13px;line-height:1.6;margin-top:8px">{{ sharedSub }}</div>
+<div style="position:relative;margin-top:18px;aspect-ratio:3/4;max-height:300px;border-radius:24px;background:#1c1c1c;display:flex;align-items:center;justify-content:center;color:#3f3f3f;font-size:10px;text-transform:uppercase;letter-spacing:0.2em">Main
+<sc-if value="{{ isDual }}" hint-placeholder-val="{{ true }}">
+<div style="position:absolute;bottom:12px;right:12px;width:86px;aspect-ratio:3/4;border-radius:12px;border:1px solid #2a2a2a;background:#0a0a0a;display:flex;align-items:center;justify-content:center;color:#3f3f3f;font-size:9px;text-transform:uppercase;letter-spacing:0.16em">Inset</div>
+</sc-if>
+</div>
+<div style="display:flex;gap:10px;margin-top:18px">
+<button type="button" onClick="{{ goFeed }}" style="flex:1;min-height:50px;border-radius:999px;background:#ff5b3a;border:0;color:#0a0a0a;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer">See it</button>
+<button type="button" onClick="{{ undoShare }}" style="flex:none;min-height:50px;padding:0 20px;border-radius:999px;border:1px solid #2a2a2a;background:transparent;color:#8a8a85;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer">Undo</button>
+</div>
+<div style="color:#8a8a85;font-size:12px;line-height:1.5;margin-top:12px">Undo deletes what you just shared.</div>
+</div>
+</sc-if>
+
+</div>
+</sc-if>
+
+<sc-if value="{{ sheetOpen }}" hint-placeholder-val="{{ false }}">
+<div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;background:rgba(10,10,10,0.7);z-index:9">
+<div style="border-top:1px solid #2a2a2a;border-radius:24px 24px 0 0;background:#141414;padding:20px 20px 30px;max-height:78%;overflow-y:auto;scrollbar-width:none">
+<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+<div style="min-width:0">
+<div style="font-weight:700;font-size:18px">{{ sheetTitle }}</div>
+<div style="color:#8a8a85;font-size:13px;margin-top:4px">{{ sheetSub }}</div>
+</div>
+<button type="button" onClick="{{ closeSheet }}" aria-label="Close" style="flex:none;width:44px;height:44px;margin:-4px -8px 0 0;border:0;background:transparent;color:#8a8a85;font-family:inherit;font-size:16px;cursor:pointer">✕</button>
+</div>
+
+<sc-if value="{{ sheetIsAudience }}" hint-placeholder-val="{{ false }}">
+<div style="margin-top:16px">
+<sc-for list="{{ audienceChoices }}" as="a" hint-placeholder-count="2">
+<button type="button" onClick="{{ a.go }}" style="{{ a.style }}">
+<span style="min-width:0">
+<span style="display:block;font-weight:600;font-size:15px">{{ a.label }}</span>
+<span style="display:block;color:#8a8a85;font-size:12px;margin-top:2px">{{ a.hint }}</span>
+</span>
+<span style="{{ a.check }}">✓</span>
+</button>
+</sc-for>
+<sc-if value="{{ needsPeople }}" hint-placeholder-val="{{ false }}">
+<div>
+<div style="color:#8a8a85;font-size:12px;line-height:1.5;margin:6px 0 10px">Who sees it. Only friends who follow you back can be picked.</div>
+<input value="{{ pickQuery }}" onChange="{{ setPickQuery }}" placeholder="Search friends…" style="display:block;width:100%;box-sizing:border-box;margin-bottom:10px;min-height:44px;padding:0 14px;border-radius:14px;border:1px solid #2a2a2a;background:#0a0a0a;color:#f5f5f0;font-family:inherit;font-size:14px;outline:none">
+<div style="max-height:210px;overflow-y:auto;scrollbar-width:none">
+<sc-for list="{{ pickList }}" as="p" hint-placeholder-count="4">
+<button type="button" onClick="{{ p.go }}" style="{{ p.row }}">
+<span style="{{ p.avatar }}">{{ p.initials }}</span>
+<span style="flex:1;min-width:0;font-size:14px">{{ p.who }}</span>
+<span style="{{ p.check }}">✓</span>
+</button>
+</sc-for>
+<sc-if value="{{ pickEmpty }}" hint-placeholder-val="{{ false }}">
+<div style="color:#8a8a85;font-size:13px;padding:8px 2px">{{ pickEmptyLine }}</div>
+</sc-if>
+</div>
+</div>
+</sc-if>
+<div style="color:#8a8a85;font-size:12px;line-height:1.5;margin-top:14px">Applies to this story only. Your Account default stays Friends.</div>
+<button type="button" onClick="{{ closeSheet }}" style="{{ sheetDoneBtn }}">{{ sheetDoneLabel }}</button>
+</div>
+</sc-if>
+
+<sc-if value="{{ sheetIsTag }}" hint-placeholder-val="{{ false }}">
+<div style="margin-top:16px">
+<input value="{{ pickQuery }}" onChange="{{ setPickQuery }}" placeholder="Search friends…" style="display:block;width:100%;box-sizing:border-box;min-height:44px;padding:0 14px;border-radius:14px;border:1px solid #2a2a2a;background:#0a0a0a;color:#f5f5f0;font-family:inherit;font-size:14px;outline:none">
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:10px 2px">
+<span style="color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.14em">{{ friendTotalLine }}</span>
+<span style="color:#8a8a85;font-size:11px">{{ taggedLabel }}</span>
+</div>
+<div style="max-height:290px;overflow-y:auto;scrollbar-width:none">
+<sc-for list="{{ tagList }}" as="p" hint-placeholder-count="4">
+<button type="button" onClick="{{ p.go }}" style="{{ p.row }}">
+<span style="{{ p.avatar }}">{{ p.initials }}</span>
+<span style="flex:1;min-width:0;font-size:14px">{{ p.who }}</span>
+<span style="{{ p.check }}">✓</span>
+</button>
+</sc-for>
+<sc-if value="{{ pickEmpty }}" hint-placeholder-val="{{ false }}">
+<div style="color:#8a8a85;font-size:13px;padding:8px 2px">{{ pickEmptyLine }}</div>
+</sc-if>
+</div>
+<button type="button" onClick="{{ closeSheet }}" style="display:flex;width:100%;align-items:center;justify-content:center;min-height:50px;margin-top:16px;border-radius:999px;background:#ff5b3a;border:0;color:#0a0a0a;font-family:inherit;font-weight:700;font-size:15px;cursor:pointer">Done</button>
+</div>
+</sc-if>
+
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ onList }}" hint-placeholder-val="{{ false }}">
+<div style="padding:8px 24px 110px">
+<sc-if value="{{ noPeople }}" hint-placeholder-val="{{ true }}">
+<div style="border:1px dashed #2a2a2a;border-radius:20px;padding:20px">
+<div style="font-size:14px;line-height:1.6;margin-bottom:14px">{{ emptyListLine }}</div>
+<button type="button" style="display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:999px;background:#ff5b3a;border:0;color:#0a0a0a;font-family:inherit;font-weight:700;font-size:14px;cursor:pointer">Share your invite link</button>
+</div>
+</sc-if>
+<sc-for list="{{ people }}" as="p" hint-placeholder-count="0">
+<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #1c1c1c">
+<div style="{{ p.avatar }}">{{ p.initials }}</div>
+<div style="flex:1;min-width:0">
+<div style="font-weight:600;font-size:15px">{{ p.who }}</div>
+<div style="color:#8a8a85;font-size:12px;margin-top:1px">{{ p.handle }}</div>
+</div>
+<span style="{{ p.btn }}">{{ p.action }}</span>
+</div>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{ onSuggest }}" hint-placeholder-val="{{ false }}">
+<div style="padding:8px 24px 110px">
+<div style="color:#8a8a85;font-size:13px;line-height:1.5;margin-bottom:16px">Anyone in the plan can add a bar. It goes on the board with no votes — including yours, until you give it one.</div>
+<div style="border:1px solid #2a2a2a;background:#141414;border-radius:16px;padding:13px 16px;color:#8a8a85;font-size:16px;margin-bottom:16px">Search bars…</div>
+<sc-for list="{{ suggestable }}" as="b" hint-placeholder-count="4">
+<button type="button" onClick="{{ b.go }}" style="display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;border:0;border-bottom:1px solid #1c1c1c;background:transparent;color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer">
+<span style="min-width:0">
+<span style="display:block;font-weight:600;font-size:16px">{{ b.name }}</span>
+<span style="display:block;color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;margin-top:3px">{{ b.hood }}</span>
+</span>
+<span style="color:#ff5b3a;font-weight:700;font-size:13px;flex:none">Add</span>
+</button>
+</sc-for>
+<sc-if value="{{ suggestFull }}" hint-placeholder-val="{{ false }}">
+<div style="color:#8a8a85;font-size:13px;line-height:1.5;margin-top:16px">Everything in your area is already on the board.</div>
+</sc-if>
+</div>
+</sc-if>
+
+<sc-if value="{{ onRecap }}" hint-placeholder-val="{{ false }}">
+<div style="padding:8px 24px 110px">
+<div style="height:160px;border-radius:24px;background:linear-gradient(140deg, #c54328 0%, #7a5cff 100%);display:flex;align-items:flex-end;padding:16px">
+<span style="color:#0a0a0a;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.16em;background:rgba(245,245,240,0.85);border-radius:8px;padding:4px 8px">Cover</span>
+</div>
+<div style="font-weight:700;font-size:24px;line-height:1.2;margin-top:16px">{{ recapTitle }}</div>
+<div style="color:#8a8a85;font-size:12px;margin-top:4px">{{ recapSummary }}</div>
+
+<div style="font-weight:700;font-size:20px;line-height:1.25;margin-top:22px">{{ recapHeadline }}</div>
+<sc-for list="{{ recapStops }}" as="st" hint-placeholder-count="2">
+<div style="display:flex;align-items:center;gap:12px;margin-top:12px">
+<span style="flex:none;width:16px;color:#8a8a85;font-weight:700;font-size:12px">{{ st.index }}</span>
+<span style="{{ st.tile }}">{{ st.glyph }}</span>
+<span style="flex:1;min-width:0;font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ st.name }}<span style="{{ st.heart }}"> ♥</span></span>
+<span style="{{ st.badge }}">{{ st.badgeLabel }}</span>
+</div>
+</sc-for>
+
+<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px">
+<span style="display:inline-flex;align-items:center;min-height:56px;padding:0 24px;border-radius:999px;border:1px solid #ff5b3a;color:#ff5b3a;font-weight:700;font-size:14px">{{ recapRankLabel }}</span>
+<span style="display:inline-flex;align-items:center;min-height:56px;padding:0 24px;border-radius:999px;border:1px solid #2a2a2a;color:#f5f5f0;font-weight:700;font-size:14px">Share the night</span>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:24px">
+<sc-for list="{{ recapPhotos }}" as="p" hint-placeholder-count="4">
+<div style="aspect-ratio:1;border-radius:16px;background:#1c1c1c;display:flex;align-items:center;justify-content:center;color:#3f3f3f;font-size:9px;text-transform:uppercase;letter-spacing:0.16em">{{ p.label }}</div>
+</sc-for>
+</div>
+
+<div style="height:192px;margin-top:20px;border-radius:16px;border:1px solid #2a2a2a;background:#0a0a0a;display:flex;align-items:center;justify-content:center;color:#3f3f3f;font-size:10px;text-transform:uppercase;letter-spacing:0.18em">Map · pins of the night</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ onPlanForm }}" hint-placeholder-val="{{ false }}">
+<div style="padding:8px 24px 110px">
+<button type="button" onClick="{{ toggleCover }}" style="{{ coverTile }}">
+<span style="{{ coverHint }}">{{ coverLabel }}</span>
+</button>
+<input value="{{ title }}" onChange="{{ setTitle }}" placeholder="Name the night" style="display:block;width:100%;box-sizing:border-box;margin-top:14px;padding:12px 0;border:0;border-bottom:1px solid #2a2a2a;background:transparent;color:#f5f5f0;font-family:inherit;font-weight:700;font-size:22px;letter-spacing:-0.01em;outline:none">
+<div style="color:#8a8a85;font-size:12px;line-height:1.5;margin:8px 0 26px">The name and cover are what people see on the invite.</div>
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.2em;color:#8a8a85;margin-bottom:6px">When</div>
+<div style="border:1px solid #2a2a2a;background:#141414;border-radius:16px;padding:13px 16px;font-size:16px;min-height:44px">Tonight, 9:00 PM</div>
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.2em;color:#8a8a85;margin:18px 0 6px">Area <span style="text-transform:none;letter-spacing:0">(optional)</span></div>
+<div style="border:1px solid #2a2a2a;background:#141414;border-radius:16px;padding:13px 16px;font-size:16px;min-height:44px">{{ areaValue }}</div>
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.2em;color:#8a8a85;margin:22px 0 10px">Who's going</div>
+<div style="display:flex;flex-wrap:wrap;gap:8px">
+<sc-for list="{{ inviteChips }}" as="c" hint-placeholder-count="4">
+<button type="button" onClick="{{ c.go }}" style="{{ c.style }}">{{ c.label }}</button>
+</sc-for>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;margin:22px 0 10px">
+<span style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.2em;color:#8a8a85">Shortlist</span>
+<span style="color:#8a8a85;font-size:12px">{{ shortlistCount }} of 3</span>
+</div>
+<div style="color:#8a8a85;font-size:12px;line-height:1.5;margin-bottom:10px">Seed the vote with up to three bars. Everyone can suggest more once the plan is live.</div>
+<sc-for list="{{ shortlistPicks }}" as="b" hint-placeholder-count="3">
+<button type="button" onClick="{{ b.go }}" style="{{ b.style }}">
+<span style="min-width:0">
+<span style="display:block;font-weight:600;font-size:15px">{{ b.name }}</span>
+<span style="display:block;color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;margin-top:2px">{{ b.hood }}</span>
+</span>
+<span style="{{ b.mark }}">{{ b.markLabel }}</span>
+</button>
+</sc-for>
+<button type="button" onClick="{{ createPlan }}" style="display:flex;width:100%;align-items:center;justify-content:center;min-height:54px;margin-top:24px;border-radius:999px;background:#ff5b3a;border:0;color:#0a0a0a;font-family:inherit;font-weight:700;font-size:16px;cursor:pointer">{{ createLabel }}</button>
+<div style="color:#8a8a85;font-size:12px;line-height:1.5;margin-top:12px;text-align:center">Creates the plan and sends the invitations.</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ onPlanBoard }}" hint-placeholder-val="{{ false }}">
+<div style="padding:8px 24px 110px">
+<sc-if value="{{ hasCover }}" hint-placeholder-val="{{ false }}">
+<div style="height:150px;border-radius:24px;margin-bottom:16px;background:linear-gradient(140deg, #ff5b3a 0%, #c54328 45%, #2a1c2e 100%);display:flex;align-items:flex-end;padding:16px">
+<span style="color:#0a0a0a;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.16em;background:rgba(245,245,240,0.85);border-radius:8px;padding:4px 8px">Cover</span>
+</div>
+</sc-if>
+<div style="font-weight:700;font-size:28px;line-height:1.15">{{ boardTitle }}</div>
+<div style="color:#8a8a85;font-size:13px;margin-top:6px">{{ boardMeta }}</div>
+
+<sc-if value="{{ locked }}" hint-placeholder-val="{{ false }}">
+<div style="margin-top:18px;padding:18px;border-radius:24px;border:1px solid #ff5b3a;background:linear-gradient(180deg, rgba(255,91,58,0.16), #141414)">
+<div style="color:#ff5b3a;font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.22em">Decided</div>
+<div style="font-weight:700;font-size:24px;margin-top:8px">{{ lockedBar }}</div>
+<div style="color:#8a8a85;font-size:13px;margin-top:4px">Everyone invited has been told. Doors at 9:00 PM.</div>
+<div style="display:flex;gap:10px;margin-top:16px">
+<span style="flex:1;min-height:44px;border-radius:16px;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.12em">Directions</span>
+<span style="flex:1;min-height:44px;border-radius:16px;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.12em">Share</span>
+</div>
+</div>
+</sc-if>
+
+<div style="display:flex;align-items:baseline;justify-content:space-between;margin:26px 0 12px">
+<span style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85">Shortlist</span>
+<span style="color:#ff5b3a;font-size:11px;text-transform:uppercase;letter-spacing:0.1em">{{ votingLine }}</span>
+</div>
+<sc-for list="{{ board }}" as="b" hint-placeholder-count="3">
+<div style="{{ b.row }}">
+<button type="button" onClick="{{ b.vote }}" style="{{ b.voteBtn }}">
+<span style="font-size:12px;line-height:1">▲</span>
+<span style="font-weight:700;font-size:15px;line-height:1;margin-top:2px">{{ b.count }}</span>
+</button>
+<div style="flex:1;min-width:0">
+<div style="font-weight:600;font-size:16px">{{ b.name }}</div>
+<div style="color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;margin-top:3px">{{ b.meta }}</div>
+</div>
+<span style="{{ b.tag }}">{{ b.tagLabel }}</span>
+</div>
+</sc-for>
+
+<button type="button" onClick="{{ goSuggest }}" style="{{ suggestBtn }}">
+<span style="flex:none;font-size:18px;font-weight:700;line-height:1">+</span>
+<span style="font-weight:700;font-size:14px">{{ suggestLabel }}</span>
+</button>
+
+<sc-if value="{{ notLocked }}" hint-placeholder-val="{{ true }}">
+<button type="button" onClick="{{ lockIn }}" style="display:flex;width:100%;align-items:center;justify-content:center;min-height:52px;margin-top:22px;border-radius:999px;background:#ff5b3a;border:0;color:#0a0a0a;font-family:inherit;font-weight:700;font-size:16px;cursor:pointer">Lock in {{ leaderName }}</button>
+<div style="color:#8a8a85;font-size:12px;line-height:1.5;margin-top:10px;text-align:center">You're the host, so you decide. Voting closes on its own at 11:00 PM.</div>
+</sc-if>
+
+<div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.25em;color:#8a8a85;margin:28px 0 12px">Going</div>
+<sc-for list="{{ members }}" as="m" hint-placeholder-count="4">
+<div style="display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid #1c1c1c">
+<div style="{{ m.avatar }}">{{ m.initials }}</div>
+<div style="flex:1;min-width:0">
+<div style="font-weight:600;font-size:15px">{{ m.who }}</div>
+<div style="color:#8a8a85;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;margin-top:2px">{{ m.role }}</div>
+</div>
+<span style="{{ m.tag }}">{{ m.state }}</span>
+</div>
+</sc-for>
+<div style="display:flex;gap:10px;margin-top:20px">
+<span style="flex:1;min-height:48px;border-radius:999px;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px">Copy invite link</span>
+<span style="flex:1;min-height:48px;border-radius:999px;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#8a8a85">Not tonight</span>
+</div>
+</div>
+</sc-if>
+
+</div>
+</sc-if>
+
+</div>
+
+<div style="position:absolute;left:0;right:0;bottom:0;height:66px;border-top:1px solid #2a2a2a;background:rgba(10,10,10,0.95);backdrop-filter:blur(12px);display:flex;align-items:stretch;z-index:6">
+<sc-for list="{{ navTabs }}" as="n" hint-placeholder-count="5">
+<div style="{{ n.style }}">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ n.stroke }}" stroke-linecap="round" stroke-linejoin="round" style="width:24px;height:24px" aria-hidden="true"><path d="{{ n.p1 }}"></path><path d="{{ n.p2 }}"></path><path d="{{ n.p3 }}"></path><path d="{{ n.p4 }}"></path><circle cx="{{ n.cx }}" cy="{{ n.cy }}" r="{{ n.r }}"></circle></svg>
+<span style="font-size:10px;font-weight:600;line-height:1;margin-top:4px">{{ n.label }}</span>
+</div>
+</sc-for>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:390,&quot;height&quot;:844},&quot;variant&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;current&quot;,&quot;b&quot;,&quot;c&quot;,&quot;d&quot;],&quot;default&quot;:&quot;b&quot;,&quot;tsType&quot;:&quot;'current'|'b'|'c'|'d'&quot;},&quot;screen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;tonight&quot;,&quot;plans&quot;,&quot;feed&quot;,&quot;groups&quot;,&quot;planform&quot;,&quot;planboard&quot;,&quot;suggest&quot;,&quot;recap&quot;,&quot;share&quot;,&quot;compose&quot;,&quot;destinations&quot;],&quot;default&quot;:&quot;tonight&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;data&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;empty&quot;,&quot;active&quot;],&quot;default&quot;:&quot;empty&quot;,&quot;tsType&quot;:&quot;'empty'|'active'&quot;},&quot;locked&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      screen: ['compose', 'destinations'].includes(props.screen) ? 'share' : (props.screen ?? 'tonight'),
+      data: props.data ?? 'empty',
+      status: props.data === 'active' ? 'going' : null,
+      barId: props.data === 'active' ? 'attaboy' : null,
+      audience: 'friends',
+      recipients: [],
+      pendingBar: null,
+      shortlist: props.screen === 'planboard' ? ['attaboy', 'deathco', 'bar169'] : [],
+      votes: { attaboy: 3, deathco: 2, bar169: 1 },
+      myVote: null,
+      locked: props.locked === true,
+      planMade: props.data === 'active' || props.screen === 'planboard',
+      invited: ['claire', 'dev', 'sasha'],
+      title: props.data === 'active' || props.screen === 'planboard' ? 'Saturday downtown' : '',
+      cover: props.screen === 'planboard',
+      back: props.screen === 'suggest' ? 'planboard' : (props.screen === 'recap' ? 'plans' : 'tonight'),
+      recapIdx: 0,
+      openThread: props.screen === 'feed' && props.data === 'active' ? 'p1' : null,
+      draft: '',
+      threads: {
+        p1: [
+          { by: 'dev', mine: false, age: '1h', body: 'on my way, order me one' },
+          { by: 'sasha', mine: false, age: '48m', body: 'is the line still long?' },
+        ],
+        p2: [],
+      },
+      shareStep: props.screen === 'compose' ? 'compose' : (props.screen === 'destinations' ? 'destinations' : 'capture'),
+      dual: true,
+      undone: false,
+      caption: props.screen === 'destinations' ? 'Round two, and the back bar is open' : '',
+      shotBar: 'attaboy',
+      tagged: ['claire'],
+      dests: props.screen === 'destinations' ? ['feed', 'story'] : [],
+      storyAudience: 'friends',
+      storyIds: [],
+      sheet: null,
+      pickQuery: '',
+      suggestedByMe: [],
+    };
+  }
+
+  BARS = [
+    { id: 'attaboy', name: 'Attaboy', hood: 'LES' },
+    { id: 'mrpurple', name: 'Mr. Purple', hood: 'LES' },
+    { id: 'bar169', name: '169 Bar', hood: 'LES' },
+    { id: 'pianos', name: 'Pianos', hood: 'LES' },
+    { id: 'deathco', name: 'Death & Co', hood: 'East Village' },
+    { id: 'employees', name: 'Employees Only', hood: 'West Village' },
+  ];
+
+  // src/lib/demo/friends.ts verbatim — handle, displayName and initials as the
+  // fixture spells them (Claire R. carries 'MR', not 'CR'). It holds four, so
+  // the pickers show four; the search exists for the real 70-friend circle.
+  PEOPLE = [
+    { id: 'claire', who: 'Claire R.', handle: '@claire', seed: 'claire', initials: 'MR' },
+    { id: 'dev', who: 'Dev P.', handle: '@dev', seed: 'dev', initials: 'DP' },
+    { id: 'sasha', who: 'Sasha L.', handle: '@sasha', seed: 'sasha', initials: 'SL' },
+    { id: 'john', who: 'John K.', handle: '@john', seed: 'john', initials: 'JK' },
+  ];
+
+  /** Filter a picker list the way a 70-friend circle needs. */
+  matches(person, query) {
+    const q = query.trim().toLowerCase();
+    if (q === '') return true;
+    return person.who.toLowerCase().includes(q) || person.handle.toLowerCase().includes(q);
+  }
+
+  set = (patch) => this.setState(patch);
+  goto = (screen) => this.setState((s) => ({ screen, back: s.screen === screen ? s.back : (this.isPushed(s.screen) ? s.back : s.screen) }));
+  isPushed = (screen) => ['pinbar', 'pinaud', 'status', 'groups', 'followers', 'following', 'planform', 'planboard', 'suggest', 'recap', 'share'].includes(screen);
+
+  // src/components/Avatar.tsx — the warm TONES palette, its seed hash, and the
+  // sm/md/lg sizes (w-9/w-12/w-20 with text-xs/text-sm/text-2xl).
+  TONES = [
+    { bg: '#ff5b3a', fg: '#0a0a0a' },
+    { bg: '#e0a52e', fg: '#0a0a0a' },
+    { bg: '#c54328', fg: '#f5f5f0' },
+    { bg: '#7a5cff', fg: '#f5f5f0' },
+    { bg: '#2eb6a5', fg: '#0a0a0a' },
+    { bg: '#d6566f', fg: '#f5f5f0' },
+  ];
+
+  SIZES = { sm: [36, 12], md: [48, 14], lg: [80, 24] };
+
+  toneFor(seed) {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+    return this.TONES[Math.abs(hash) % this.TONES.length];
+  }
+
+  avatar(seed, size) {
+    const [d, f] = this.SIZES[size ?? 'sm'];
+    const tone = this.toneFor(seed);
+    return 'flex:none;width:' + d + 'px;height:' + d + 'px;border-radius:999px;background:' + tone.bg + ';color:' + tone.fg + ';font-weight:700;font-size:' + f + 'px;display:flex;align-items:center;justify-content:center';
+  }
+
+  renderVals() {
+    const s = this.state;
+    const active = s.data === 'active';
+    const bar = this.BARS.find((b) => b.id === s.barId) ?? null;
+    const pending = this.BARS.find((b) => b.id === s.pendingBar) ?? null;
+    const variant = this.props.variant ?? 'b';
+    const main = ['tonight', 'plans', 'feed'].includes(s.screen);
+
+    const tabStyle = (on) => 'flex:1;min-height:44px;border:0;border-radius:12px;font-family:inherit;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.14em;cursor:pointer;background:' + (on ? '#ff5b3a' : 'transparent') + ';color:' + (on ? '#0a0a0a' : '#8a8a85');
+    const tabs = [
+      { id: 'tonight', label: 'Tonight' },
+      { id: 'plans', label: 'Plans' },
+      { id: 'feed', label: 'Feed' },
+    ].map((t) => ({ label: t.label, style: tabStyle(s.screen === t.id), go: () => this.set({ screen: t.id }) }));
+
+    const STATUS = [
+      { id: 'going', label: 'Going out', short: 'Going out' },
+      { id: 'maybe', label: 'Maybe later', short: 'Maybe later' },
+      { id: 'not', label: 'Not going out', short: 'Not going out' },
+    ];
+    const segStyle = (on) => 'flex:1;min-height:44px;border-radius:12px;border:1px solid ' + (on ? '#ff5b3a' : '#2a2a2a') + ';background:' + (on ? 'rgba(255,91,58,0.14)' : 'transparent') + ';color:' + (on ? '#ff5b3a' : '#8a8a85') + ';font-family:inherit;font-weight:600;font-size:12px;line-height:1.2;padding:0 6px;cursor:pointer';
+    const rowStyle = (on) => 'display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;min-height:60px;padding:0 18px;margin-bottom:10px;border-radius:20px;border:1px solid ' + (on ? '#ff5b3a' : '#2a2a2a') + ';background:' + (on ? 'rgba(255,91,58,0.10)' : '#141414') + ';color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer';
+    const check = (on) => (on ? 'color:#ff5b3a;font-weight:700;flex:none' : 'display:none');
+
+    const friendRows = active
+      ? [
+          { p: this.PEOPLE[0], bar: 'Mr. Purple', note: 'Going out', when: '10:12 PM', ring: true },
+          { p: this.PEOPLE[1], bar: 'Death & Co', note: 'Going out', when: '9:48 PM', ring: true },
+          { p: this.PEOPLE[2], bar: null, note: 'Maybe later', when: '9:30 PM', ring: false },
+        ]
+      : [];
+
+    const friends = friendRows.map((r) => ({
+      initials: r.p.initials,
+      avatar: this.avatar(r.p.seed, 'sm'),
+      avatarRing: 'flex:none;padding:2px;border-radius:999px;border:2px solid ' + (r.ring ? '#ff5b3a' : 'transparent'),
+      lead: r.bar ?? r.p.who,
+      sub: r.bar ? r.p.who + ' · ' + r.note : r.note,
+      rosterSub: r.bar ? r.p.who + ' · since ' + r.when : r.p.who + ' · ' + r.note,
+      when: r.when,
+    }));
+
+    const pinBlocked = s.audience === 'people' && s.recipients.length === 0;
+    const statusObj = STATUS.find((x) => x.id === s.status) ?? null;
+    const pinned = s.status === 'going' && bar !== null;
+    // lib/presence/index.ts AUDIENCE_LABELS.
+    const audLabels = { friends: 'Friends', close: 'Close friends', people: 'Only some people' };
+
+    const navDefs = [
+      { label: 'Map', p1: 'M12 21s-6-5.2-6-10.5a6 6 0 0 1 12 0C18 15.8 12 21 12 21Z', cx: 12, cy: 10.5, r: 2.2 },
+      { label: 'Rankings', p1: 'M4 20V11', p2: 'M12 20V4', p3: 'M20 20v-6' },
+      { label: 'Next Bar?', p1: 'm15.5 8.5-2 5-5 2 2-5 5-2Z', cx: 12, cy: 12, r: 9 },
+      { label: 'Social', p1: 'M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6', p2: 'M16 5.2a3.2 3.2 0 0 1 0 5.6', p3: 'M17.5 14.3c2.1.7 3.5 2.7 3.5 5.7', cx: 9, cy: 8, r: 3.2, on: true },
+      { label: 'Account', p1: 'M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7', cx: 12, cy: 8.5, r: 3.5 },
+    ];
+    const navTabs = navDefs.map((n) => ({
+      label: n.label,
+      p1: n.p1 ?? '', p2: n.p2 ?? '', p3: n.p3 ?? '', p4: n.p4 ?? '',
+      cx: n.cx ?? -99, cy: n.cy ?? -99, r: n.r ?? 0,
+      stroke: n.on ? 2.2 : 1.7,
+      style: 'flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:' + (n.on ? '#ff5b3a' : '#8a8a85'),
+    }));
+
+    const voteFor = (id) => () => this.setState((st) => {
+      if (st.locked) return st;
+      const votes = { ...st.votes };
+      if (st.myVote === id) { votes[id] = Math.max(0, votes[id] - 1); return { votes, myVote: null }; }
+      if (st.myVote) votes[st.myVote] = Math.max(0, votes[st.myVote] - 1);
+      votes[id] = (votes[id] ?? 0) + 1;
+      return { votes, myVote: id };
+    });
+
+    const boardIds = s.shortlist.length > 0 ? s.shortlist : ['attaboy', 'deathco', 'bar169'];
+    const ranked = boardIds
+      .map((id) => ({ id, b: this.BARS.find((x) => x.id === id) }))
+      .filter((x) => x.b)
+      .sort((a, b) => (s.votes[b.id] ?? 0) - (s.votes[a.id] ?? 0));
+    const leader = ranked[0] ?? null;
+
+    const board = ranked.map((x, i) => {
+      const mine = s.myVote === x.id;
+      const isLeader = i === 0;
+      return {
+        name: x.b.name,
+        meta: x.b.hood + ' · suggested by ' + ((s.suggestedByMe ?? []).includes(x.id) || x.id === 'attaboy' ? 'you' : this.PEOPLE[(i + 1) % 3].who),
+        count: String(s.votes[x.id] ?? 0),
+        row: 'display:flex;align-items:center;gap:14px;padding:12px 14px;margin-bottom:8px;border-radius:20px;border:1px solid ' + (isLeader && !s.locked ? '#ff5b3a' : '#2a2a2a') + ';background:#141414',
+        voteBtn: 'flex:none;width:46px;min-height:46px;border-radius:14px;border:1px solid ' + (mine ? '#ff5b3a' : '#2a2a2a') + ';background:' + (mine ? 'rgba(255,91,58,0.16)' : 'transparent') + ';color:' + (mine ? '#ff5b3a' : '#8a8a85') + ';font-family:inherit;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer',
+        vote: voteFor(x.id),
+        tag: isLeader
+          ? 'flex:none;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;color:#ff5b3a'
+          : 'display:none',
+        tagLabel: isLeader ? (s.locked ? 'Picked' : 'Leading') : '',
+      };
+    });
+
+    const members = [
+      { p: { who: 'You', initials: 'CD', seed: 'you' }, role: 'Host', state: 'Going' },
+      { p: this.PEOPLE[0], role: 'Invited via Friends', state: 'Going' },
+      { p: this.PEOPLE[1], role: 'Invited via Friends', state: 'Going' },
+      { p: this.PEOPLE[2], role: 'Invited via Friends', state: 'No reply' },
+    ].map((m) => ({
+      initials: m.p.initials,
+      avatar: this.avatar(m.p.seed, 'sm'),
+      who: m.p.who,
+      role: m.role,
+      state: m.state,
+      tag: 'flex:none;font-size:11px;font-weight:600;color:' + (m.state === 'Going' ? '#f5f5f0' : '#8a8a85'),
+    }));
+
+    const inviteChips = this.PEOPLE.map((p) => {
+      const on = s.invited.includes(p.id);
+      return {
+        label: p.who,
+        style: 'min-height:44px;padding:0 16px;border-radius:999px;border:1px solid ' + (on ? '#ff5b3a' : '#2a2a2a') + ';background:' + (on ? 'rgba(255,91,58,0.12)' : 'transparent') + ';color:' + (on ? '#ff5b3a' : '#8a8a85') + ';font-family:inherit;font-weight:600;font-size:14px;cursor:pointer',
+        go: () => this.setState((st) => ({ invited: st.invited.includes(p.id) ? st.invited.filter((x) => x !== p.id) : [...st.invited, p.id] })),
+      };
+    });
+
+    const shortlistPicks = this.BARS.slice(0, 4).map((b) => {
+      const on = s.shortlist.includes(b.id);
+      return {
+        name: b.name,
+        hood: b.hood,
+        style: 'display:flex;width:100%;align-items:center;justify-content:space-between;gap:12px;padding:13px 16px;margin-bottom:8px;border-radius:18px;border:1px solid ' + (on ? '#ff5b3a' : '#2a2a2a') + ';background:' + (on ? 'rgba(255,91,58,0.10)' : '#141414') + ';color:#f5f5f0;font-family:inherit;text-align:left;cursor:pointer',
+        mark: 'flex:none;font-weight:700;font-size:13px;color:' + (on ? '#ff5b3a' : '#8a8a85'),
+        markLabel: on ? '✓' : '+',
+        go: () => this.setState((st) => ({
+          shortlist: st.shortlist.includes(b.id)
+            ? st.shortlist.filter((x) => x !== b.id)
+            : (st.shortlist.length >= 3 ? st.shortlist : [...st.shortlist, b.id]),
+        })),
+      };
+    });
+
+    const listMode = s.screen === 'followers' ? 'followers' : 'following';
+    const people = active
+      ? this.PEOPLE.map((p) => ({
+          initials: p.initials,
+          avatar: this.avatar(p.seed, 'sm'),
+          who: p.who,
+          handle: p.handle,
+          action: listMode === 'followers' ? 'Follow back' : 'Following',
+          btn: 'flex:none;min-height:38px;display:flex;align-items:center;padding:0 14px;border-radius:999px;border:1px solid ' + (listMode === 'followers' ? '#ff5b3a' : '#2a2a2a') + ';color:' + (listMode === 'followers' ? '#ff5b3a' : '#8a8a85') + ';font-size:12px;font-weight:700',
+        }))
+      : [];
+
+    const stories = (active
+      ? [{ who: 'You', initials: 'CD', seed: 'you', ring: false }].concat(
+          this.PEOPLE.map((p) => ({ who: p.who.split(' ')[0], initials: p.initials, seed: p.seed, ring: true })),
+        )
+      : [{ who: 'You', initials: 'CD', seed: 'you', ring: false }]
+    ).map((x) => ({
+      label: x.who,
+      initials: x.initials,
+      avatar: this.avatar(x.seed, 'md'),
+      ring: 'width:56px;height:56px;border-radius:999px;display:flex;align-items:center;justify-content:center;border:2px solid ' + (x.ring ? '#ff5b3a' : 'transparent'),
+      isYou: x.who === 'You',
+      avatarSm: this.avatar(x.seed, 'md'),
+      go: x.who === 'You' ? () => this.goto('share') : () => {},
+      cellStyle: 'flex:none;width:64px;display:flex;flex-direction:column;align-items:center;gap:6px;border:0;background:transparent;padding:0;color:#f5f5f0;font-family:inherit;cursor:pointer',
+      ringSm: 'width:54px;height:54px;border-radius:999px;display:flex;align-items:center;justify-content:center;border:2px solid ' + (x.ring ? '#ff5b3a' : 'transparent'),
+    }));
+
+    // FeedComments.tsx: a thread has three states (unread / empty / rows), the
+    // composer clears only on a confirmed write, MAX_FEED_COMMENT_LENGTH is the
+    // ceiling, FEED_COMMENTS_PER_POST bounds the read, and delete renders only
+    // for the commenter or the post author.
+    // feed.server.ts: MAX_FEED_COMMENT_LENGTH = 2000, FEED_COMMENTS_PER_POST = 200.
+    const MAX_COMMENT = 2000;
+    const PER_POST = 200;
+    const feed = active
+      ? [
+          { id: 'p1', p: this.PEOPLE[0], place: 'Attaboy · Lower East Side', age: '2h', caption: 'The back room is empty, come now.' },
+          { id: 'p2', p: this.PEOPLE[1], place: 'Death & Co · East Village', age: '5h', caption: 'Round two.' },
+        ].map((x) => {
+          const open = s.openThread === x.id;
+          const rows = (s.threads[x.id] ?? []).map((c) => {
+            const author = c.mine ? { who: 'You', initials: 'CD', seed: 'you' } : this.PEOPLE.find((p) => p.id === c.by);
+            const canDelete = c.mine || x.p.id === 'me';
+            return {
+              initials: author.initials,
+              avatar: this.avatar(author.seed, 'sm'),
+              who: author.who,
+              age: c.age,
+              body: c.body,
+              deleteBtn: canDelete
+                ? 'flex:none;min-width:28px;min-height:28px;border:0;background:transparent;color:#8a8a85;font-family:inherit;font-size:17px;line-height:1;cursor:pointer'
+                : 'display:none',
+              remove: () => this.setState((st) => ({
+                threads: { ...st.threads, [x.id]: (st.threads[x.id] ?? []).filter((r) => r !== c) },
+              })),
+            };
+          });
+          return {
+            id: x.id,
+            initials: x.p.initials,
+            avatar: this.avatar(x.p.seed, 'sm'),
+            who: x.p.who,
+            place: x.place,
+            age: x.age,
+            caption: x.caption,
+            threadOpen: open,
+            thread: open ? rows : [],
+            threadUnread: open && s.threads[x.id] === undefined,
+            threadEmpty: open && rows.length === 0 && s.threads[x.id] !== undefined,
+            threadTruncated: open && rows.length >= PER_POST,
+            replyLabel: rows.length > 0 ? 'Replies · ' + rows.length : 'Reply',
+            replyBtn: 'flex:1;min-height:44px;border-radius:16px;font-family:inherit;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;cursor:pointer;border:1px solid ' + (open ? '#ff5b3a' : '#2a2a2a') + ';background:' + (open ? 'rgba(255,91,58,0.10)' : 'transparent') + ';color:' + (open ? '#ff5b3a' : '#f5f5f0'),
+            toggleThread: () => this.setState((st) => ({ openThread: st.openThread === x.id ? null : x.id, draft: '' })),
+            send: () => this.setState((st) => {
+              const body = st.draft.trim();
+              if (body === '') return st;
+              const next = [...(st.threads[x.id] ?? []), { by: 'me', mine: true, age: 'now', body }];
+              return { threads: { ...st.threads, [x.id]: next }, draft: '' };
+            }),
+          };
+        })
+      : [];
+    const draftLen = s.draft.trim().length;
+
+    // barVisual() values for the stops, computed from bars.core.ts tags +
+    // priceTier (cocktail → hue 138, dive → hue 0, tier 3 → 26% / tier 1 → 32%).
+    const RECAPS = [
+      {
+        title: 'Saturday downtown',
+        summary: 'Saturday, September 6 · 2 bars · 4 photos',
+        headline: '2 stops · you loved Attaboy',
+        unrated: false,
+        photos: ['Photo', 'Photo', 'Photo', 'Photo'],
+        stops: [
+          { name: 'Attaboy', glyph: '🍸', bg: 'hsl(138, 42%, 26%)', fg: 'hsl(138, 70%, 88%)', loved: true, rating: 'loved' },
+          { name: '169 Bar', glyph: '🍺', bg: 'hsl(0, 42%, 32%)', fg: 'hsl(0, 70%, 88%)', loved: false, rating: 'liked' },
+        ],
+      },
+      {
+        title: "Claire's Saturday",
+        summary: 'Saturday, August 30 · 1 bar · 2 photos',
+        headline: 'One stop · you loved Death & Co',
+        unrated: true,
+        photos: ['Photo', 'Photo'],
+        stops: [
+          { name: 'Death & Co', glyph: '🍸', bg: 'hsl(138, 42%, 26%)', fg: 'hsl(138, 70%, 88%)', loved: true, rating: 'loved' },
+        ],
+      },
+    ];
+    const recap = RECAPS[s.recapIdx === 1 ? 1 : 0];
+
+    // DestinationsStep.tsx — exactly four destinations and no fifth, with the
+    // Story row's audience subrow joined to it.
+    const DESTS = [
+      { key: 'feed', label: 'Feed', hint: 'Stays until you delete it · friends can comment' },
+      { key: 'story', label: 'Story', hint: 'Visible for 24 hours' },
+      { key: 'night_out', label: 'Night Out', hint: 'Saturday downtown · 24 hours from the start' },
+      { key: 'group', label: 'Group', hint: 'Saturday crew' },
+    ];
+    const shotBar = this.BARS.find((b) => b.id === s.shotBar) ?? null;
+
+    const pushTitles = {
+      pinbar: 'Where are you?',
+      pinaud: 'Pin your spot',
+      status: 'You tonight',
+      groups: 'Groups & people',
+      followers: 'Followers',
+      following: 'Following',
+      planform: 'Start a night out',
+      planboard: 'Night out',
+      suggest: 'Suggest a bar',
+      recap: 'Saved night',
+      share: s.shareStep === 'capture'
+        ? 'Add to your story'
+        : (s.shareStep === 'review' ? 'Review your capture' : (s.shareStep === 'destinations' ? 'Choose where to share' : (s.shareStep === 'shared' ? '' : 'Share a moment'))),
+    };
+
+    return {
+      isCurrent: variant === 'current',
+      isB: variant === 'b',
+      isC: variant === 'c',
+      isD: variant === 'd',
+      showMain: main,
+      showPushed: !main,
+      showPushHeader: !main && !(s.screen === 'share' && s.shareStep === 'capture'),
+      onTonight: s.screen === 'tonight',
+      onPlans: s.screen === 'plans',
+      onFeed: s.screen === 'feed',
+      onPinBar: s.screen === 'pinbar',
+      onPinAud: s.screen === 'pinaud',
+      onStatus: s.screen === 'status',
+      onGroups: s.screen === 'groups',
+      onList: s.screen === 'followers' || s.screen === 'following',
+      onPlanForm: s.screen === 'planform',
+      onPlanBoard: s.screen === 'planboard',
+      onSuggest: s.screen === 'suggest',
+      onRecap: s.screen === 'recap',
+      showPeopleIcon: variant === 'b' || variant === 'c',
+      peopleIconStyle: 'flex:none;display:flex;align-items:center;gap:4px;min-width:44px;min-height:44px;padding:0 8px;border-radius:16px;cursor:pointer;font-family:inherit;border:1px solid #2a2a2a;background:#141414;color:#f5f5f0',
+      pinIconStyle: 'flex:none;display:flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;border-radius:16px;cursor:pointer;font-family:inherit;border:1px solid ' + (pinned ? '#ff5b3a' : '#2a2a2a') + ';background:' + (pinned ? 'rgba(255,91,58,0.12)' : '#141414') + ';color:' + (pinned ? '#ff5b3a' : (s.status ? '#f5f5f0' : '#8a8a85')),
+      pinAria: pinned ? 'Pinned at ' + bar.name + ' — change your night' : 'Set whether you are going out and where',
+      pinChip: 'flex:none;width:40px;height:40px;border-radius:999px;display:flex;align-items:center;justify-content:center;border:1px solid ' + (pinned ? '#ff5b3a' : '#2a2a2a') + ';background:' + (pinned ? 'rgba(255,91,58,0.14)' : 'transparent') + ';color:' + (pinned ? '#ff5b3a' : '#8a8a85'),
+      goSuggest: () => this.goto('suggest'),
+      suggestBtn: 'display:flex;width:100%;align-items:center;justify-content:center;gap:8px;min-height:48px;margin-top:12px;border-radius:16px;cursor:pointer;font-family:inherit;border:1px dashed ' + (s.locked ? '#2a2a2a' : '#3a3a3a') + ';background:transparent;color:' + (s.locked ? '#4a4a48' : '#8a8a85'),
+      suggestLabel: s.locked ? 'Voting closed' : 'Suggest a bar',
+      suggestable: this.BARS.filter((b) => !boardIds.includes(b.id)).map((b) => ({
+        name: b.name,
+        hood: b.hood,
+        go: () => this.setState((st) => {
+          const list = (st.shortlist.length > 0 ? st.shortlist : ['attaboy', 'deathco', 'bar169']);
+          return {
+            shortlist: [...list, b.id],
+            votes: { ...st.votes, [b.id]: 0 },
+            suggestedByMe: [...(st.suggestedByMe ?? []), b.id],
+            screen: 'planboard',
+          };
+        }),
+      })),
+      suggestFull: this.BARS.filter((b) => !boardIds.includes(b.id)).length === 0,
+      // /nights/[id] + RecapCard: name, the savedNightSummary metadata line,
+      // the stops in order with BarVisualTile + RatingBadge, one primary action.
+      recapTitle: recap.title,
+      recapSummary: recap.summary,
+      recapHeadline: recap.headline,
+      recapRankLabel: recap.unrated ? 'Rank last night →' : 'See your rankings →',
+      recapPhotos: recap.photos.map((label) => ({ label })),
+      recapStops: recap.stops.map((st, i) => ({
+        index: String(i + 1),
+        glyph: st.glyph,
+        name: st.name,
+        tile: 'flex:none;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;background:' + st.bg + ';color:' + st.fg,
+        heart: st.loved ? 'color:#ff5b3a' : 'display:none',
+        badge: st.rating === null
+          ? 'display:none'
+          : 'flex:none;display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;' + (st.rating === 'loved'
+            ? 'background:#ff5b3a;color:#0a0a0a'
+            : (st.rating === 'liked' ? 'background:#141414;border:1px solid #ff5b3a;color:#ff5b3a' : 'background:#141414;border:1px solid #2a2a2a;color:#8a8a85;text-decoration:line-through')),
+        badgeLabel: st.rating === 'loved' ? 'Loved' : (st.rating === 'liked' ? 'Liked' : (st.rating === 'pass' ? 'Pass' : '')),
+      })),
+      pushTitle: pushTitles[s.screen] ?? '',
+      tabs,
+      navTabs,
+      dataLabel: active ? 'Active night' : 'New user',
+      toggleData: () => this.setState((st) => {
+        const next = st.data === 'active' ? 'empty' : 'active';
+        return {
+          data: next,
+          status: next === 'active' ? 'going' : null,
+          barId: next === 'active' ? 'attaboy' : null,
+          planMade: next === 'active',
+        };
+      }),
+      friends,
+      noFriends: friends.length === 0,
+      outCount: active ? '3 of 9' : '',
+      outNumber: active ? '3' : '0',
+      outHeadline: active ? 'friends out right now' : 'nobody out yet',
+      rosterYouLead: pinned ? bar.name : (statusObj ? statusObj.short : 'Set your night'),
+      followerCount: active ? 12 : 0,
+      followingCount: active ? 9 : 0,
+      graphLine: active ? '12 followers · 9 following · 2 groups' : 'Followers, groups and invites',
+      statusLine: pinned ? statusObj.short + ' · ' + bar.name : (statusObj ? statusObj.short : 'Nothing set — pick one below'),
+      statusShort: statusObj ? statusObj.short : 'nothing set',
+      audienceLine: pinned
+        ? bar.name + ' · ' + (s.audience === 'people' ? s.recipients.length + (s.recipients.length === 1 ? ' person' : ' people') + ' can see it' : audLabels[s.audience] + ' can see it')
+        : 'Only you can see this until you set it',
+      going: s.status === 'going',
+      pinTitle: pinned ? bar.name : 'Pin my spot',
+      pinSub: pinned ? bar.hood + ' · ' + audLabels[s.audience] + ' can see it' : 'Optional — a status without a place is fine',
+      statusOptions: STATUS.map((x) => ({ label: x.label, style: segStyle(s.status === x.id), go: () => this.set({ status: x.id, barId: x.id === 'going' ? s.barId : null }) })),
+      statusRows: STATUS.map((x) => ({ label: x.label, style: rowStyle(s.status === x.id), check: check(s.status === x.id), go: () => this.set({ status: x.id, barId: x.id === 'going' ? s.barId : null }) })),
+      barList: this.BARS.map((b) => ({ name: b.name, hood: b.hood, go: () => this.set({ pendingBar: b.id, screen: 'pinaud' }) })),
+      pendingBarName: pending ? pending.name : '',
+      // AUDIENCE_LABELS carries labels only — no hints invented here. Picking
+      // 'people' opens the mutuals picker, states the count in words, and holds
+      // the confirm until someone is chosen (TonightPresence's pin-confirm rule).
+      audienceOptions: ['friends', 'close', 'people'].map((id) => ({
+        label: audLabels[id],
+        style: rowStyle(s.audience === id),
+        check: check(s.audience === id),
+        go: () => this.set({ audience: id }),
+      })),
+      pinNeedsPeople: s.audience === 'people',
+      pinPickList: this.PEOPLE.filter((p) => this.matches(p, s.pickQuery)).map((p) => {
+        const on = s.recipients.includes(p.id);
+        return {
+          who: p.who,
+          initials: p.initials,
+          avatar: this.avatar(p.seed, 'sm'),
+          row: 'display:flex;width:100%;align-items:center;gap:12px;min-height:52px;padding:0 14px;margin-bottom:8px;border-radius:16px;text-align:left;font-family:inherit;cursor:pointer;border:1px solid ' + (on ? '#ff5b3a' : '#2a2a2a') + ';background:' + (on ? 'rgba(255,91,58,0.10)' : 'transparent') + ';color:#f5f5f0',
+          check: check(on),
+          go: () => this.setState((st) => ({
+            recipients: st.recipients.includes(p.id) ? st.recipients.filter((x) => x !== p.id) : [...st.recipients, p.id],
+          })),
+        };
+      }),
+      pickEmpty: this.PEOPLE.filter((p) => this.matches(p, s.pickQuery)).length === 0,
+      pickEmptyLine: 'Nobody matches “' + s.pickQuery.trim() + '”.',
+      friendTotalLine: this.PEOPLE.length + (this.PEOPLE.length === 1 ? ' friend' : ' friends'),
+      pinCountLine: s.recipients.length + (s.recipients.length === 1 ? ' person' : ' people') + ' will see this pin tonight.',
+      pinConfirmBtn: 'display:flex;width:100%;align-items:center;justify-content:center;min-height:52px;margin-top:22px;border-radius:999px;border:0;font-family:inherit;font-weight:700;font-size:16px;cursor:pointer;background:' + (pinBlocked ? '#1c1c1c' : '#ff5b3a') + ';color:' + (pinBlocked ? '#8a8a85' : '#0a0a0a'),
+      confirmPin: () => {
+        if (pinBlocked) return;
+        this.setState((st) => ({ barId: st.pendingBar, status: 'going', pendingBar: null, screen: st.back === 'status' ? 'tonight' : st.back }));
+      },
+      goBack: () => this.setState((st) => ({ screen: st.screen === 'pinaud' ? 'pinbar' : st.back, pendingBar: null })),
+      goPinBar: () => this.setState({ screen: 'pinbar', pickQuery: '', back: 'tonight' }),
+      goStatus: () => this.goto('status'),
+      goGroups: () => this.goto('groups'),
+      goFollowers: () => this.goto('followers'),
+      goFollowing: () => this.goto('following'),
+      goPlanForm: () => this.goto('planform'),
+      goPlanBoard: () => this.goto('planboard'),
+      goShare: () => this.goto('share'),
+      hasInvites: active,
+      pastNights: active
+        ? [
+            { title: 'Saturday downtown', sub: 'Saturday, September 6 · 2 bars · 4 photos', idx: 0, grad: 'linear-gradient(140deg, #c54328, #7a5cff)' },
+            { title: "Claire's Saturday", sub: 'Saturday, August 30 · 1 bar · 2 photos', idx: 1, grad: 'linear-gradient(140deg, #2eb6a5, #c54328)' },
+          ].map((n) => ({
+            title: n.title,
+            sub: n.sub,
+            thumb: 'flex:none;width:48px;height:48px;border-radius:14px;background:' + n.grad,
+            go: () => this.setState({ recapIdx: n.idx, screen: 'recap', back: 'plans' }),
+          }))
+        : [],
+      hasPlan: s.planMade,
+      noPlan: !s.planMade,
+      planStatusTitle: s.locked ? 'Attaboy · locked in' : 'Open for votes',
+      planStatusSub: s.locked ? 'Saturday 9:00 PM · 3 going' : 'Saturday 9:00 PM · 4 invited · 3 votes in',
+      areaValue: pinned ? bar.hood : 'Anywhere',
+      inviteChips,
+      shortlistCount: s.shortlist.length,
+      shortlistPicks,
+      createLabel: s.invited.length > 0 ? 'Create the night out · ' + s.invited.length + ' invited' : 'Create the night out',
+      createPlan: () => this.setState({ planMade: true, screen: 'planboard', back: 'plans' }),
+      title: s.title,
+      setTitle: (e) => this.set({ title: e.target.value }),
+      hasCover: s.cover,
+      toggleCover: () => this.setState((st) => ({ cover: !st.cover })),
+      coverTile: 'display:flex;width:100%;height:150px;align-items:center;justify-content:center;border-radius:24px;cursor:pointer;font-family:inherit;' + (s.cover
+        ? 'border:0;background:linear-gradient(140deg, #ff5b3a 0%, #c54328 45%, #2a1c2e 100%);align-items:flex-end;padding:16px;justify-content:flex-start'
+        : 'border:1px dashed #3a3a3a;background:#141414'),
+      coverHint: 'white-space:nowrap;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.16em;' + (s.cover
+        ? 'color:#0a0a0a;background:rgba(245,245,240,0.85);border-radius:8px;padding:4px 8px'
+        : 'color:#8a8a85'),
+      coverLabel: s.cover ? 'Change cover' : '+ Add a cover photo',
+      graphBadgeCount: active ? '2' : '',
+      graphBadge: active
+        ? 'min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#ff5b3a;color:#0a0a0a;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center'
+        : 'display:none',
+      boardTitle: s.title.trim() !== '' ? s.title : (s.locked ? 'Tonight is set' : 'Where are we going?'),
+      boardMeta: 'Saturday, September 13 · 9:00 PM · hosted by you',
+      board,
+      members,
+      locked: s.locked,
+      notLocked: !s.locked,
+      lockedBar: leader ? leader.b.name + ' · ' + leader.b.hood : '',
+      leaderName: leader ? leader.b.name : '',
+      votingLine: s.locked ? 'Voting closed' : 'Closes 11:00 PM',
+      lockIn: () => this.set({ locked: true }),
+      people,
+      noPeople: people.length === 0,
+      emptyListLine: listMode === 'followers' ? 'Nobody follows you yet. Share your link and your ranked list travels with it.' : "You're not following anyone yet. Following someone shows you their spot for the night.",
+      groupList: active ? [{ name: 'Saturday crew', unread: '3', badge: 'flex:none;min-width:22px;height:22px;padding:0 7px;border-radius:999px;background:#ff5b3a;color:#0a0a0a;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center' }, { name: 'Work people', unread: '', badge: 'display:none' }] : [],
+      noGroups: !active,
+      onShare: s.screen === 'share',
+      stepCapture: s.screen === 'share' && s.shareStep === 'capture',
+      stepReview: s.screen === 'share' && s.shareStep === 'review',
+      captureModes: [
+        {
+          label: 'Take one photo', hint: 'One fresh shot — rear or front camera.', dual: false,
+          p1: 'M3 8.5A1.5 1.5 0 0 1 4.5 7h2.2l1.1-2h8.4l1.1 2h2.2A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-9Z',
+          cx: 12, cy: 13, r: 3.4,
+        },
+        {
+          label: 'Front + back', hint: 'Two shots, paired: the room and you.', dual: true,
+          p1: 'M8 4h9.5A2.5 2.5 0 0 1 20 6.5V16',
+          p2: 'M16 20H6.5A2.5 2.5 0 0 1 4 17.5V8',
+          cx: 12, cy: 12.2, r: 2.6,
+        },
+        {
+          label: 'Choose from library', hint: 'Use a photo you already have.', dual: false,
+          p1: 'M4 6.5A1.5 1.5 0 0 1 5.5 5h13A1.5 1.5 0 0 1 20 6.5v11A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5v-11Z',
+          p2: 'm5 16 4.2-4.2a1.5 1.5 0 0 1 2.1 0L19 19',
+          cx: 15.2, cy: 9.3, r: 1.5,
+        },
+      ].map((m) => ({
+        label: m.label, hint: m.hint,
+        p1: m.p1 ?? '', p2: m.p2 ?? '',
+        cx: m.cx ?? -99, cy: m.cy ?? -99, r: m.r ?? 0,
+        go: () => this.set({ shareStep: 'review', dual: m.dual }),
+      })),
+      isDual: s.dual,
+      kindLabel: s.dual ? 'Front + back' : 'One photo',
+      approveLabel: s.dual ? 'Use photos' : 'Use photo',
+      compositionButtons: ['Swap main photo', 'Keep only one', 'Rotate main', 'Rotate inset'].map((label) => ({
+        label,
+        go: () => { if (label === 'Keep only one') this.set({ dual: false }); },
+      })),
+      retakeCapture: () => this.set({ shareStep: 'capture' }),
+      approveCapture: () => this.set({ shareStep: 'compose' }),
+      stepCompose: s.screen === 'share' && s.shareStep === 'compose',
+      stepDest: s.screen === 'share' && s.shareStep === 'destinations',
+      stepShared: s.screen === 'share' && s.shareStep === 'shared',
+      retake: () => this.set({ shareStep: 'capture' }),
+      toDestinations: () => this.set({ shareStep: 'destinations' }),
+      caption: s.caption,
+      setCaption: (e) => this.set({ caption: e.target.value.slice(0, 140) }),
+      capCount: s.caption.length > 100 ? 140 - s.caption.length + ' left' : '',
+      capCountStyle: s.caption.length > 100 ? 'color:#8a8a85;font-size:11px;text-align:right;margin-top:6px' : 'display:none',
+      shotBarName: shotBar ? shotBar.name : 'Optional',
+      taggedLabel: s.tagged.length === 0 ? 'Optional' : (s.tagged.length === 1 ? this.PEOPLE.find((p) => p.id === s.tagged[0]).who : s.tagged.length + ' tagged'),
+      destRows: DESTS.map((d) => {
+        const on = s.dests.includes(d.key);
+        const blocked = d.key === 'night_out' && !s.planMade && !on;
+        return {
+          label: d.label,
+          hint: blocked ? 'No night out tonight' : d.hint,
+          state: on ? 'On' : 'Off',
+          indicator: 'flex:none;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;color:' + (on ? '#ff5b3a' : '#8a8a85'),
+          wrap: 'margin-bottom:8px',
+          row: 'display:flex;width:100%;align-items:center;gap:12px;min-height:64px;padding:0 16px;text-align:left;font-family:inherit;cursor:' + (blocked ? 'default' : 'pointer') + ';border:1px solid ' + (on ? '#ff5b3a' : '#2a2a2a') + ';background:' + (on ? 'rgba(255,91,58,0.08)' : '#141414') + ';color:' + (blocked ? '#8a8a85' : '#f5f5f0') + ';border-radius:' + (on && d.key === 'story' ? '16px 16px 0 0' : '16px'),
+          showSub: on && d.key === 'story',
+          go: blocked ? () => {} : () => this.setState((st) => ({
+            dests: st.dests.includes(d.key) ? st.dests.filter((x) => x !== d.key) : [...st.dests, d.key],
+          })),
+        };
+      }),
+      // storyStore.ts: StoryAudience is 'friends' | 'custom' — two, not three.
+      // StorySheets' own labels and hints, and its "Custom needs a list" rule.
+      storyAudienceLabel: s.storyAudience === 'custom'
+        ? (s.storyIds.length === 0 ? 'Pick people' : 'Custom · ' + s.storyIds.length)
+        : 'Friends',
+      openAudienceSheet: () => this.set({ sheet: 'audience', pickQuery: '' }),
+      openPeopleSheet: () => this.set({ sheet: 'tag', pickQuery: '' }),
+      closeSheet: () => this.setState((st) => ({
+        sheet: null,
+        pickQuery: '',
+        storyAudience: st.storyAudience === 'custom' && st.storyIds.length === 0 ? 'friends' : st.storyAudience,
+      })),
+      sheetOpen: s.sheet !== null,
+      sheetIsAudience: s.sheet === 'audience',
+      sheetIsTag: s.sheet === 'tag',
+      sheetTitle: s.sheet === 'tag' ? 'Tag friends' : 'Who sees this story',
+      sheetSub: s.sheet === 'tag'
+        ? 'Friends are people you follow who follow you back.'
+        : 'Two choices. Custom needs at least one person.',
+      audienceChoices: [
+        { id: 'friends', label: 'Friends', hint: 'All accepted friends · your Account default' },
+        { id: 'custom', label: 'Custom', hint: 'Pick people one by one' },
+      ].map((a) => ({
+        label: a.label,
+        hint: a.hint,
+        style: rowStyle(s.storyAudience === a.id),
+        check: check(s.storyAudience === a.id),
+        go: () => this.set({ storyAudience: a.id }),
+      })),
+      needsPeople: s.storyAudience === 'custom',
+      pickQuery: s.pickQuery,
+      setPickQuery: (e) => this.set({ pickQuery: e.target.value }),
+      pickList: this.PEOPLE.filter((p) => this.matches(p, s.pickQuery)).map((p) => {
+        const on = s.storyIds.includes(p.id);
+        return {
+          who: p.who,
+          initials: p.initials,
+          avatar: this.avatar(p.seed, 'sm'),
+          row: 'display:flex;width:100%;align-items:center;gap:12px;min-height:52px;padding:0 14px;margin-bottom:8px;border-radius:16px;text-align:left;font-family:inherit;cursor:pointer;border:1px solid ' + (on ? '#ff5b3a' : '#2a2a2a') + ';background:' + (on ? 'rgba(255,91,58,0.10)' : 'transparent') + ';color:#f5f5f0',
+          check: check(on),
+          go: () => this.setState((st) => ({
+            storyIds: st.storyIds.includes(p.id) ? st.storyIds.filter((x) => x !== p.id) : [...st.storyIds, p.id],
+          })),
+        };
+      }),
+      sheetDoneLabel: s.storyAudience === 'custom' && s.storyIds.length === 0 ? 'Pick at least one person' : 'Done',
+      sheetDoneBtn: 'display:flex;width:100%;align-items:center;justify-content:center;min-height:50px;margin-top:14px;border-radius:999px;border:0;font-family:inherit;font-weight:700;font-size:15px;cursor:pointer;background:' + (s.storyAudience === 'custom' && s.storyIds.length === 0 ? '#1c1c1c' : '#ff5b3a') + ';color:' + (s.storyAudience === 'custom' && s.storyIds.length === 0 ? '#8a8a85' : '#0a0a0a'),
+      tagList: this.PEOPLE.filter((p) => this.matches(p, s.pickQuery)).map((p) => {
+        const on = s.tagged.includes(p.id);
+        return {
+          who: p.who,
+          initials: p.initials,
+          avatar: this.avatar(p.seed, 'sm'),
+          row: 'display:flex;width:100%;align-items:center;gap:12px;min-height:52px;padding:0 14px;margin-bottom:8px;border-radius:16px;text-align:left;font-family:inherit;cursor:pointer;border:1px solid ' + (on ? '#ff5b3a' : '#2a2a2a') + ';background:' + (on ? 'rgba(255,91,58,0.10)' : 'transparent') + ';color:#f5f5f0',
+          check: check(on),
+          go: () => this.setState((st) => ({
+            tagged: st.tagged.includes(p.id) ? st.tagged.filter((x) => x !== p.id) : [...st.tagged, p.id],
+          })),
+        };
+      }),
+      publishLabel: s.dests.length === 0
+        ? 'Pick a destination'
+        : 'Share to ' + s.dests.map((k) => DESTS.find((d) => d.key === k).label).join(' and '),
+      publishBtn: 'display:flex;width:100%;align-items:center;justify-content:center;min-height:54px;margin-top:18px;border-radius:999px;border:0;font-family:inherit;font-weight:700;font-size:16px;cursor:pointer;background:' + (s.dests.length === 0 ? '#1c1c1c' : '#ff5b3a') + ';color:' + (s.dests.length === 0 ? '#8a8a85' : '#0a0a0a'),
+      publish: () => { if (s.dests.length > 0) this.set({ shareStep: 'shared' }); },
+      sharedTitle: 'Shared.',
+      sharedSub: s.dests.includes('story')
+        ? 'Live for 24 hours' + (s.dests.length > 1 ? ', and on your feed until you delete it.' : '. ' + (s.storyAudience === 'custom' ? s.storyIds.length + ' people' : 'Friends') + ' can see it.')
+        : 'On your feed until you delete it.',
+      // AddStoryFlow's receipt Undo is an author DELETE, not a route back to
+      // Compose: the post is removed and the flow is over.
+      undoShare: () => this.setState((st) => ({
+        screen: 'feed',
+        shareStep: 'capture',
+        caption: '',
+        dests: [],
+        undone: true,
+      })),
+      goFeed: () => this.setState({ screen: 'feed', shareStep: 'capture', openThread: null }),
+      stories,
+      feed,
+      draft: s.draft,
+      setDraft: (e) => this.set({ draft: e.target.value.slice(0, MAX_COMMENT) }),
+      sendBtn: 'flex:none;min-height:44px;min-width:44px;padding:0 16px;border-radius:16px;font-family:inherit;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;cursor:pointer;border:1px solid ' + (draftLen > 0 ? '#ff5b3a' : '#2a2a2a') + ';background:transparent;color:' + (draftLen > 0 ? '#ff5b3a' : '#8a8a85'),
+      draftCount: draftLen > MAX_COMMENT - 200 ? MAX_COMMENT - draftLen + ' left' : '',
+      draftCountStyle: draftLen > MAX_COMMENT - 200 ? 'color:#8a8a85;font-size:11px;text-align:right;margin-top:6px' : 'display:none',
+      perPost: PER_POST,
+    };
+  }
+}
+</script>
+</body>
+</html>
