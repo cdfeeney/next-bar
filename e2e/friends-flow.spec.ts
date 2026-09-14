@@ -34,17 +34,34 @@ test.describe('Social — the approved surface', () => {
     // The canvas header: wordmark + night line, not an h1 reading "Friends".
     await expect(page.getByRole('heading', { name: /^Next Bar$/i })).toBeVisible();
 
-    // Tonight lands first and leads with presence. The people graph left
-    // Tonight on 2026-09-13 (Social redesign S-01): it is /friends/people now,
-    // behind the header's people icon, so it must NOT be a Tonight heading.
-    await expect(page.getByTestId('social-panel-tonight')).toBeVisible();
-    const tonightHeadings = page
-      .getByTestId('social-panel-tonight')
-      .getByRole('heading', { name: /^(Stories|Out tonight|Groups & people)$/i });
-    await expect(tonightHeadings.nth(0)).toHaveText(/Stories/i);
-    await expect(tonightHeadings.nth(1)).toHaveText(/Out tonight/i);
-    await expect(tonightHeadings).toHaveCount(2);
+    // Tonight is PLAN-LED (Social redesign 2026-09-13, S-02): stories → the
+    // plan card → Out tonight, compared by document position. The people graph
+    // left Tonight in S-01 (it is /friends/people now), and the rail carries no
+    // "Stories" heading here — that label belongs to Feed.
+    const tonight = page.getByTestId('social-panel-tonight');
+    await expect(tonight).toBeVisible();
+    // (Signed out the rail is StoriesEmptyState, which keeps its own heading;
+    // the heading-less Tonight rail is asserted with a session in story-rail.)
+    await expect(tonight.getByRole('heading', { name: /^Groups & people$/i })).toHaveCount(0);
+    await expect(tonight.getByRole('heading', { name: /^Out tonight$/i })).toBeVisible();
     await expect(page.getByTestId('follow-stats')).toHaveCount(0);
+    // Signed out: the rail is its honest signed-out state, and the plan card is
+    // the "No plan yet." box whose CTA goes to sign-in.
+    await expect(tonight.getByTestId('stories-signed-out')).toBeVisible();
+    const planCard = tonight.getByTestId('your-plan-none');
+    await expect(planCard).toContainText('No plan yet.');
+    await expect(tonight.getByTestId('start-night-out-tonight')).toHaveAttribute('href', '/auth');
+    const order = await tonight.evaluate((panel) => {
+      const ids = ['stories-signed-out', 'your-plan-none', 'out-tonight'];
+      const nodes = ids.map((id) => panel.querySelector(`[data-testid="${id}"]`));
+      if (nodes.some((n) => n === null)) return 'missing';
+      return nodes.every(
+        (n, i) =>
+          i === 0 ||
+          Boolean(nodes[i - 1]!.compareDocumentPosition(n!) & Node.DOCUMENT_POSITION_FOLLOWING),
+      );
+    });
+    expect(order).toBe(true);
 
     // The header carries two icon buttons and nothing else on the right: the
     // pin (your presence, in words for the reader) and the people icon.

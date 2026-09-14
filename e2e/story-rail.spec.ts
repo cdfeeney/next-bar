@@ -451,9 +451,18 @@ test.describe('Stories — signed in', () => {
     await expect(ring).toHaveAttribute('data-active', 'true');
     // The stroke must actually BE there. Asserting only the gap would stay
     // green if the ring classes were deleted outright, which is the failure
-    // this test is supposed to make impossible.
-    const shadow = await ring.evaluate((el) => getComputedStyle(el).boxShadow);
-    expect(shadow).not.toBe('none');
+    // this test is supposed to make impossible. Since S-02 (Social redesign)
+    // Tonight paints the ring as a 2px BORDER inside the 56px box (README
+    // §1.3) while Feed keeps the outset box-shadow ring; either is a stroke,
+    // and only the outset one needs headroom above the clip edge.
+    const stroke = await ring.evaluate((el) => {
+      const s = getComputedStyle(el);
+      const border = parseFloat(s.borderTopWidth) || 0;
+      const borderPainted =
+        border >= 2 && s.borderTopColor !== 'rgba(0, 0, 0, 0)' && s.borderTopColor !== 'transparent';
+      return { shadow: s.boxShadow !== 'none', border: borderPainted };
+    });
+    expect(stroke.shadow || stroke.border).toBe(true);
 
     const ringBox = await ring.boundingBox();
     const clipTop = await page.locator('[data-carousel]').evaluate(
@@ -462,7 +471,9 @@ test.describe('Stories — signed in', () => {
       (el) => el.getBoundingClientRect().top,
     );
     if (ringBox === null) throw new Error('rail not laid out');
-    expect(ringBox.y - clipTop).toBeGreaterThanOrEqual(RING_OUTSET);
+    // An inset border ring is inside its own box: the box itself must not be
+    // clipped. An outset shadow ring needs its full outset of headroom.
+    expect(ringBox.y - clipTop).toBeGreaterThanOrEqual(stroke.shadow ? RING_OUTSET : 0);
   });
 
   test('the page under an open story dialog is inert', async ({ page }) => {

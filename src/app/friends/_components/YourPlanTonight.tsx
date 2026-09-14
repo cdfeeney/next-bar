@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
+import { getBarById } from '@/lib/catalog';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getNightOut, type NightOut } from '@/lib/nightOuts.server';
 import { nycNightKey } from '@/lib/nightKey';
@@ -20,13 +21,29 @@ import { forgetOwnedNightOut, recallOwnedNightOut } from '@/lib/ownedNightOut';
  * fetches the plan through the same `get_night_out` the plan page uses (RLS
  * decides, not the client), and links to it.
  *
- * States are distinct on purpose: nothing recorded → renders nothing; recorded
- * but the read failed → says so with a retry (never "no plans"); recorded but
- * the plan is gone or cancelled → forgets it and renders nothing.
+ * TWO FACES (Social redesign 2026-09-13, README §1.4 and §2.1):
+ *   - `variant="tonight"` is Tonight's PRIMARY element, the plan card. It always
+ *     renders: a live plan as the accent gradient card, otherwise the "No plan
+ *     yet." box with the Start CTA (signed out, the CTA goes to /auth).
+ *   - `variant="plans"` (default) is the compact row on the Plans sub-tab and
+ *     renders nothing when nothing was started, as before.
+ *
+ * States are distinct on purpose: recorded but the read failed → says so with
+ * a retry (never "no plans"); recorded but the plan is gone or cancelled →
+ * forgets it and renders the no-plan state.
+ *
+ * `get_night_out` carries no member, vote or area counts, so the card names
+ * only what it knows — title, night, status and the decided bar — rather than
+ * inventing "4 going · 3 of 4 voted".
  */
-export default function YourPlanTonight(): JSX.Element | null {
+export default function YourPlanTonight({
+  variant = 'plans',
+}: {
+  variant?: 'tonight' | 'plans';
+} = {}): JSX.Element | null {
   const auth = useAuth();
   const userId = auth.status === 'signed-in' ? auth.user.id : null;
+  const signedOut = auth.status !== 'loading' && auth.status !== 'signed-in';
   const [state, setState] = useState<
     | { kind: 'idle' }
     | { kind: 'loading' }
@@ -88,7 +105,9 @@ export default function YourPlanTonight(): JSX.Element | null {
     };
   }, [load]);
 
-  if (state.kind === 'idle' || state.kind === 'none') return null;
+  if (state.kind === 'idle' || state.kind === 'none') {
+    return variant === 'tonight' ? <NoPlanCard signedOut={signedOut} /> : null;
+  }
 
   if (state.kind === 'loading') {
     return (
@@ -118,6 +137,8 @@ export default function YourPlanTonight(): JSX.Element | null {
   }
 
   const { plan } = state;
+  if (variant === 'tonight') return <PlanCard plan={plan} />;
+
   return (
     <Link
       href={`/night-out/${plan.shareToken}`}
@@ -138,4 +159,80 @@ export default function YourPlanTonight(): JSX.Element | null {
       </span>
     </Link>
   );
+}
+
+/** Tonight's plan card with a live plan (README §1.4, "with a plan"). */
+function PlanCard({ plan }: { plan: NightOut }): JSX.Element {
+  const decidedBar = plan.decidedBarId ? getBarById(plan.decidedBarId) : null;
+  const title = plan.title ?? `${weekdayOf(plan.night)} · Night out`;
+  const meta =
+    plan.status === 'decided'
+      ? decidedBar
+        ? `Decided · ${decidedBar.name}`
+        : 'Decided'
+      : 'Open for votes';
+  const lead =
+    plan.status === 'decided'
+      ? decidedBar
+        ? `${decidedBar.name} is the pick`
+        : 'The bar is picked'
+      : 'Everyone votes on where';
+  return (
+    <Link
+      href={`/night-out/${plan.shareToken}`}
+      data-testid="your-plan-tonight"
+      data-plan-state={plan.status}
+      className="block w-full p-5 rounded-[28px] border border-accent text-text touch-manipulation"
+      style={{ background: 'linear-gradient(180deg, rgba(255,91,58,0.14), #141414)' }}
+    >
+      <span className="block font-label text-[10px] font-bold uppercase tracking-[0.22em] text-accent">
+        Your plan tonight
+      </span>
+      <span className="block font-display text-[26px] font-bold leading-[1.15] mt-2.5 truncate">
+        {title}
+      </span>
+      <span className="block text-[13px] text-muted mt-1.5">{meta}</span>
+      <span
+        className="flex items-center justify-between mt-4 pt-3.5 border-t"
+        style={{ borderColor: 'rgba(255,91,58,0.35)' }}
+      >
+        <span className="text-sm font-semibold">{lead}</span>
+        <span className="font-label text-xs font-bold uppercase tracking-[0.1em] text-accent">
+          Open ›
+        </span>
+      </span>
+    </Link>
+  );
+}
+
+/** Tonight's plan card with no plan (README §1.4, "without"). */
+function NoPlanCard({ signedOut }: { signedOut: boolean }): JSX.Element {
+  return (
+    <div
+      data-testid="your-plan-none"
+      className="w-full px-5 py-[22px] rounded-[28px] border border-border bg-surface"
+    >
+      <p className="font-label text-[10px] font-bold uppercase tracking-[0.22em] text-muted">
+        Tonight
+      </p>
+      <p className="font-display text-2xl font-bold leading-tight mt-2.5">No plan yet.</p>
+      <p className="text-[13px] leading-relaxed text-muted mt-1.5">
+        Pick a time, an area and who&apos;s coming. Everyone votes on where.
+      </p>
+      <Link
+        href={signedOut ? '/auth' : '/friends/consensus'}
+        data-testid="start-night-out-tonight"
+        className="flex items-center justify-center w-full min-h-[50px] mt-4 rounded-full bg-accent text-bg font-display text-[15px] font-bold touch-manipulation"
+      >
+        Start a night out
+      </Link>
+    </div>
+  );
+}
+
+/** "Friday" from a night key; UTC on purpose (see /friends/page.tsx weekdayOf). */
+function weekdayOf(night: string): string {
+  const parsed = new Date(`${night}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return 'Tonight';
+  return parsed.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
 }

@@ -173,7 +173,7 @@ test.describe('/friends — signed in (real graph)', () => {
     page,
   }) => {
     await stubSupabase(page, { following: [] });
-    await page.goto('/friends');
+    await page.goto('/friends/people');
 
     // UX-A: zero-graph account shows 0/0 stats — no wall of empty states.
     await expect(page.getByRole('link', { name: /0\s+Following/i })).toBeVisible();
@@ -193,7 +193,7 @@ test.describe('/friends — signed in (real graph)', () => {
       profileByHandle: [SAM],
       followResult: true,
     });
-    await page.goto('/friends');
+    await page.goto('/friends/people');
 
     const search = page.getByPlaceholder(/search @username/i);
     await search.click();
@@ -212,7 +212,7 @@ test.describe('/friends — signed in (real graph)', () => {
     // navigation here would remount useFollows against the stub's original
     // empty `following` fixture.)
     await expect(page.getByRole('link', { name: /1\s+Following/i })).toBeVisible();
-    await expect(page).toHaveURL(/\/friends$/);
+    await expect(page).toHaveURL(/\/friends\/people$/);
   });
 
   /*

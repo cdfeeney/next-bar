@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import { useAuth } from '@/hooks/useAuth';
 import { getBarById } from '@/lib/catalog';
 import { useBars } from '@/lib/useBars';
@@ -22,6 +21,7 @@ import {
 } from '@/lib/presence/server';
 import { PinAudienceDialog, PinBarDialog } from '@/lib/presence/PinDialogs';
 import { usePinnedHandles, announcePresenceChanged } from './usePinnedHandles';
+import OutTonightList from './OutTonight';
 
 /**
  * Social · Tonight — current awareness (V8-R-SOC-001, V8-R-PRE-001..005).
@@ -63,16 +63,6 @@ const AUDIENCE_ORDER: readonly PresenceAudience[] = [
   'people',
 ];
 
-/** '2026-07-25T02:00:00Z' → '10:00 PM'. Empty string when unparseable. */
-function timeLabel(iso: string): string {
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return '';
-  return new Intl.DateTimeFormat('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: 'America/New_York',
-  }).format(at);
-}
 
 /**
  * WHAT WE KNOW ABOUT THE VIEWER'S OWN PIN, as three states that cannot collapse.
@@ -642,12 +632,12 @@ export default function TonightPresence(): JSX.Element {
         ) : null}
       </section>
 
-      {/* Who else is out. */}
-      <section>
-        <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
+      {/* Who else is out (README §1.6). */}
+      <section data-testid="out-tonight">
+        <h2 className="font-label text-xs font-bold uppercase tracking-[0.25em] text-muted mb-3.5">
           Out tonight
         </h2>
-        <CircleList
+        <OutTonightList
           loading={loading}
           rows={rows}
           signedOut={auth.status !== 'loading' && auth.status !== 'signed-in'}
@@ -701,105 +691,5 @@ export default function TonightPresence(): JSX.Element {
         />
       ) : null}
     </div>
-  );
-}
-
-/**
- * The four states, kept in one place so no caller can accidentally render the
- * empty state for a failed read — or for a visitor who has no circle to read.
- */
-function CircleList({
-  loading,
-  rows,
-  signedOut,
-}: {
-  loading: boolean;
-  rows: ReturnType<typeof usePinnedHandles>['rows'];
-  signedOut: boolean;
-}): JSX.Element {
-  if (loading) {
-    return (
-      <p className="text-muted text-sm" role="status">
-        Checking who&apos;s out…
-      </p>
-    );
-  }
-
-  // SIGNED OUT IS ITS OWN STATE. usePinnedHandles hands back `[]` here, and its
-  // own header says why that is not an empty circle: "there is simply no circle
-  // to ask about". Rendering "No friends out yet tonight" at a visitor is the
-  // same category of lie as rendering it on a failed read — a claim about
-  // friends we never asked about, made to someone who has not told us who they
-  // are (V8-R-OPS-005). The forward path differs too: a visitor cannot invite
-  // anyone until they sign in.
-  if (signedOut) {
-    return (
-      <div data-testid="presence-signed-out">
-        <p className="text-muted text-sm mb-3">
-          Sign in to see who&apos;s out and pin your own spot.
-        </p>
-        <Link
-          href="/auth"
-          className="inline-flex items-center min-h-[44px] px-5 rounded-full border border-border font-display text-sm touch-manipulation hover:border-accent hover:text-accent transition-colors"
-        >
-          Sign in
-        </Link>
-      </div>
-    );
-  }
-
-  // Load FAILURE. Never "nobody is out" — that would be a claim about the
-  // viewer's friends that we have no evidence for (V8-R-OPS-005).
-  if (rows === null) {
-    return (
-      <p className="text-muted text-sm" role="status" data-testid="presence-error">
-        Couldn&apos;t load tonight. Pull again in a moment.
-      </p>
-    );
-  }
-
-  // Genuinely nobody: offer the forward path rather than an empty box, and
-  // show no story ring at all (V8-R-SOC-001, V8-R-OPS-005).
-  if (rows.length === 0) {
-    return (
-      <div data-testid="presence-empty">
-        <p className="text-muted text-sm mb-3">No friends out yet tonight.</p>
-        <Link
-          href="/friends/following"
-          className="inline-flex items-center min-h-[44px] px-5 rounded-full border border-border font-display text-sm touch-manipulation hover:border-accent hover:text-accent transition-colors"
-        >
-          Invite friends
-        </Link>
-      </div>
-    );
-  }
-
-  return (
-    <ul className="space-y-2" data-testid="presence-list">
-      {rows.map((person) => {
-        const { barId, note } = describePresence(person);
-        const bar = barId ? getBarById(barId) : null;
-        const who = person.displayName?.trim()
-          ? person.displayName.trim()
-          : `@${person.handle}`;
-        const when = timeLabel(person.updatedAt);
-        return (
-          <li
-            key={person.handle}
-            className="bg-surface border border-border rounded-2xl px-4 py-3"
-          >
-            {/* Lead with the bar. When there is none, lead with the person —
-                never with a venue nobody claimed. */}
-            <p className="font-display text-sm truncate">
-              {bar ? bar.name : who}
-            </p>
-            <p className="text-muted text-xs truncate">
-              {bar ? `${who} · ${note}` : note}
-              {when ? ` · ${when}` : ''}
-            </p>
-          </li>
-        );
-      })}
-    </ul>
   );
 }

@@ -1189,6 +1189,40 @@ test.describe('Social · Tonight — the pin sequence (V8-R-PRE-002, V8-R-PRE-00
     await dialog.getByRole('button', { name: /^Back$/ }).click();
     await expect(page.getByTestId('pin-bar-dialog')).toHaveCount(0);
     await expect(page.getByTestId('social-tonight')).toBeVisible();
+
+    // S-01/S-02 (Social redesign): the header pin icon reads the same row. A
+    // status without a bar is the `status` state with the neutral label.
+    const pinIcon = page.getByTestId('social-pin-icon');
+    await expect(pinIcon).toHaveAttribute('data-pin-state', 'status');
+    await expect(pinIcon).toHaveAttribute('aria-label', /Set whether you are going out and where/);
+  });
+
+  test('the header pin icon reads a live pin: accent state and the bar named in words', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubTonight(page, [
+      {
+        status: 'going',
+        bar_id: 'attaboy',
+        audience: 'friends',
+        updated_at: '2026-08-20T02:00:00.000Z',
+        recipient_ids: [],
+      },
+    ]);
+
+    await page.goto('/friends');
+    // Never the loading state once the read has landed (S-01 panel, both lanes).
+    const pinIcon = page.getByTestId('social-pin-icon');
+    await expect(pinIcon).toHaveAttribute('data-pin-state', 'pinned');
+    await expect(pinIcon).toHaveAttribute('aria-label', /^Pinned at Attaboy — change your night$/);
+    // And Tonight's own row agrees with it.
+    await expect(page.getByTestId('my-pin')).toContainText(/Attaboy/);
   });
 
   /**

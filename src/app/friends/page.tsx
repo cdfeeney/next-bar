@@ -5,7 +5,8 @@ import Link from 'next/link';
 import TonightPresence from './_components/TonightPresence';
 import PlansSection from './_components/PlansSection';
 import FeedSection from './_components/FeedSection';
-import { usePinnedHandles, useMyPresence } from './_components/usePinnedHandles';
+import YourPlanTonight from './_components/YourPlanTonight';
+import { usePinnedHandles, useMyPresenceRead } from './_components/usePinnedHandles';
 import { getBarById } from '@/lib/catalog';
 import { isValidPin } from '@/lib/presence';
 import { PinGlyph, PeopleGlyph } from './_components/HeaderGlyphs';
@@ -78,17 +79,34 @@ export default function SocialPage(): JSX.Element {
   // `usePinnedHandles` now returns presence state rather than a bare id list, and a "pin"
   // is a presence row that names a bar — a status without a place is not a pin.
   const { rows: presenceRows } = usePinnedHandles();
-  const myPresence = useMyPresence();
-  // The pin icon's three states, in words for the accessible name and in
-  // tint for the eye. `isValidPin` is the same rule Tonight applies: a bar
-  // attached to anything but Going out is not a pin.
+  // `settled` keeps "not read yet" apart from "no pin" (S-01 panel, Fable +
+  // Codex): the icon says nothing about your night until the read answers.
+  const { presence: myPresence, settled: presenceSettled } = useMyPresenceRead();
+  // The pin icon's states, in words for the accessible name and in tint for
+  // the eye. `isValidPin` is the same rule Tonight applies: a bar attached to
+  // anything but Going out is not a pin.
   const pinnedBarId =
     myPresence !== null && isValidPin(myPresence.status, myPresence.barId)
       ? myPresence.barId
       : null;
-  const pinState: 'none' | 'status' | 'pinned' =
-    pinnedBarId !== null ? 'pinned' : myPresence !== null ? 'status' : 'none';
+  const pinState: 'loading' | 'none' | 'status' | 'pinned' = !presenceSettled
+    ? 'loading'
+    : pinnedBarId !== null
+      ? 'pinned'
+      : myPresence !== null
+        ? 'status'
+        : 'none';
+  // `night_presence.bar_id` has no catalog foreign key, so a stored id can miss
+  // the local catalog; the label then names the fact (pinned), never "a bar".
   const pinnedBarName = pinnedBarId !== null ? getBarById(pinnedBarId)?.name ?? null : null;
+  const pinLabel =
+    pinState === 'pinned'
+      ? pinnedBarName !== null
+        ? `Pinned at ${pinnedBarName} — change your night`
+        : 'Pinned — change your night'
+      : pinState === 'loading'
+        ? 'Your night — checking'
+        : 'Set whether you are going out and where';
   // YOUR OWN PIN IS UNIONED IN HERE, and it has to be. `get_circle_presence` answers
   // "who ELSE is out" — its SQL carries `np.user_id <> auth.uid()` on purpose, because
   // Social - Tonight lists other people. Deriving the rail's badges from it alone made the
@@ -121,16 +139,18 @@ export default function SocialPage(): JSX.Element {
   // The rail is only a rail when there is a real session behind it. Signed out,
   // unreachable, or genuinely empty each get their OWN honest state — an empty
   // feed and an unreachable backend must never look the same.
-  const rail = stories.status === 'ready' ? (
-    <StoriesRail
-      groups={stories.groups}
-      pinnedIds={pinnedIds}
-      onOpen={openStories}
-      onAddStory={() => setAddingStory(true)}
-    />
-  ) : (
-    <StoriesEmptyState status={stories.status} onRetry={stories.refresh} />
-  );
+  const railFor = (size: 'tonight' | 'feed'): JSX.Element =>
+    stories.status === 'ready' ? (
+      <StoriesRail
+        groups={stories.groups}
+        pinnedIds={pinnedIds}
+        onOpen={openStories}
+        onAddStory={() => setAddingStory(true)}
+        size={size}
+      />
+    ) : (
+      <StoriesEmptyState status={stories.status} onRetry={stories.refresh} />
+    );
 
   return (
     <main className="min-h-screen pb-28">
@@ -149,11 +169,7 @@ export default function SocialPage(): JSX.Element {
             type="button"
             data-testid="social-pin-icon"
             data-pin-state={pinState}
-            aria-label={
-              pinState === 'pinned'
-                ? `Pinned at ${pinnedBarName ?? 'a bar'} — change your night`
-                : 'Set whether you are going out and where'
-            }
+            aria-label={pinLabel}
             onClick={() => {
               setTab('tonight');
               requestAnimationFrame(() => {
@@ -214,10 +230,12 @@ export default function SocialPage(): JSX.Element {
               disabled={!mounted}
               onClick={() => setTab(entry.id)}
               className={[
-                'flex-1 min-h-[44px] rounded-xl font-label text-xs uppercase tracking-widest touch-manipulation transition-colors',
+                // README §1.2: 44px, 12px radius, 12px/700 uppercase 0.14em;
+                // active = accent fill + bg text, inactive = transparent + muted.
+                'flex-1 min-h-[44px] rounded-xl font-label text-xs font-bold uppercase tracking-[0.14em] touch-manipulation transition-colors',
                 tab === entry.id
                   ? 'bg-accent text-bg'
-                  : 'text-muted hover:text-text',
+                  : 'bg-transparent text-muted hover:text-text',
               ].join(' ')}
             >
               {entry.label}
@@ -226,14 +244,17 @@ export default function SocialPage(): JSX.Element {
         </div>
       </div>
 
-      <div className="max-w-md mx-auto px-6 mt-6 space-y-10">
+      <div className="max-w-md mx-auto px-6 mt-[18px] space-y-8">
         {tab === 'tonight' ? (
           <Panel id="tonight">
-            {rail}
-            {/* V8-R-SOC-003 (the Next Bar? card) was retired by the owner on
-                2026-09-09 — docs/V10-DECISIONS-2026-09-10.md. Groups & people
-                moved to /friends/people on 2026-09-13 (Social redesign S-01).
-                Tonight is the rail and presence; S-02 makes it plan-led. */}
+            {/* PLAN-LED TONIGHT (Social redesign 2026-09-13, README §1):
+                stories rail → the plan card → Out tonight. V8-R-SOC-003 (the
+                Next Bar? card) was retired 2026-09-09; Groups & people moved to
+                /friends/people in S-01. The "You tonight" controls inside
+                TonightPresence are INTERIM: S-05 rehomes them to /friends/tonight
+                behind the header pin icon, and Tonight keeps only Out tonight. */}
+            {railFor('tonight')}
+            <YourPlanTonight variant="tonight" />
             <TonightPresence />
           </Panel>
         ) : null}
@@ -246,7 +267,7 @@ export default function SocialPage(): JSX.Element {
 
         {tab === 'feed' ? (
           <Panel id="feed">
-            {rail}
+            {railFor('feed')}
             {/* READY-AND-EMPTY IS ITS OWN STATE. Rendering nothing here made a
                 signed-in account with no friends' stories look identical to a
                 surface that had not finished loading — the exact collapse

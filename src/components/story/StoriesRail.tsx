@@ -23,11 +23,20 @@ import type { StoryGroup } from './storyStore';
 
 export const RAIL_ADD_LABEL = 'Add to your story';
 
+/**
+ * Two sizes (Social redesign 2026-09-13, README §1.3 and §3): Tonight draws the
+ * rail without a heading at 58px cells / 54px ring / 48px avatar, gap 14px;
+ * Feed keeps the "STORIES" heading at 64px cells / 56px ring, gap 16px. Every
+ * hit-test box stays 56px so the add-target geometry below is unchanged.
+ */
+export type RailSize = 'tonight' | 'feed';
+
 export default function StoriesRail({
   groups,
   pinnedIds,
   onOpen,
   onAddStory,
+  size = 'feed',
 }: {
   /** Rail order — your group first. This is also the story-queue order. */
   groups: readonly StoryGroup[];
@@ -39,18 +48,26 @@ export default function StoriesRail({
   pinnedIds: readonly string[];
   onOpen: (authorId: string) => void;
   onAddStory: () => void;
+  size?: RailSize;
 }): JSX.Element {
   const you = groups.find((group) => group.isYou);
   const friends = groups.filter((group) => !group.isYou && group.items.length > 0);
 
   return (
-    <section aria-labelledby="stories-heading" data-testid="stories-rail">
-      <h2
-        id="stories-heading"
-        className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3"
-      >
-        Stories
-      </h2>
+    <section
+      aria-label={size === 'tonight' ? 'Stories' : undefined}
+      aria-labelledby={size === 'feed' ? 'stories-heading' : undefined}
+      data-testid="stories-rail"
+      data-size={size}
+    >
+      {size === 'feed' ? (
+        <h2
+          id="stories-heading"
+          className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3"
+        >
+          Stories
+        </h2>
+      ) : null}
       {/* data-carousel: the rail is the deliberate sideways strip the native
           interaction contract allows, and it must announce itself rather than
           read as an accidental horizontal scroller (native-shell-contract).
@@ -66,7 +83,10 @@ export default function StoriesRail({
         // bottom 4px survived and the top 4px was cut, which is the cropped
         // circle the operator reported. Overflow clips at the padding box, so
         // the padding is the room the stroke paints into.
-        className="flex gap-4 overflow-x-auto pt-1 pb-1 -mx-6 px-6"
+        className={[
+          'flex overflow-x-auto pt-1 pb-1 -mx-6 px-6',
+          size === 'tonight' ? 'gap-3.5' : 'gap-4',
+        ].join(' ')}
       >
         {you ? (
           <YourCell
@@ -74,6 +94,7 @@ export default function StoriesRail({
             pinned={pinnedIds.includes(you.id)}
             onOpen={() => onOpen(you.id)}
             onAddStory={onAddStory}
+            size={size}
           />
         ) : null}
         {friends.map((group) => (
@@ -82,6 +103,7 @@ export default function StoriesRail({
             group={group}
             pinned={pinnedIds.includes(group.id)}
             onOpen={() => onOpen(group.id)}
+            size={size}
           />
         ))}
       </ul>
@@ -93,6 +115,7 @@ function Cell({
   children,
   label,
   wide = false,
+  size,
 }: {
   children: React.ReactNode;
   label: string;
@@ -100,11 +123,16 @@ function Cell({
       avatar, so it needs the room. The label stays centred on the AVATAR
       rather than on the widened cell. */
   wide?: boolean;
+  size: RailSize;
 }): JSX.Element {
   return (
     <li
       className={`shrink-0 flex flex-col gap-1.5 ${
-        wide ? 'w-[6.25rem] items-start' : 'w-16 items-center'
+        wide
+          ? 'w-[6.25rem] items-start'
+          : size === 'tonight'
+            ? 'w-[58px] items-center'
+            : 'w-16 items-center'
       }`}
     >
       {children}
@@ -130,15 +158,17 @@ function YourCell({
   pinned,
   onOpen,
   onAddStory,
+  size,
 }: {
   group: StoryGroup;
   pinned: boolean;
   onOpen: () => void;
   onAddStory: () => void;
+  size: RailSize;
 }): JSX.Element {
   const hasStory = group.items.length > 0;
   return (
-    <Cell label="You" wide={hasStory}>
+    <Cell label="You" wide={hasStory} size={size}>
       {/* Two 44px targets cannot both fit on one 56px avatar. The original
           shape put the add button at `left-3 top-3 w-11 h-11`, i.e. over
           (12,12)-(56,56) of the 56px cell — which contains the avatar's own
@@ -171,7 +201,7 @@ function YourCell({
             className="block w-14 h-14 touch-manipulation"
             aria-label={hasStory ? 'Your story' : RAIL_ADD_LABEL}
           >
-            <Ring active={hasStory}>
+            <Ring active={hasStory} size={size}>
               <Avatar initials={group.initials} seed={group.id} size="md" />
             </Ring>
           </button>
@@ -226,13 +256,15 @@ function FriendCell({
   group,
   pinned,
   onOpen,
+  size,
 }: {
   group: StoryGroup;
   pinned: boolean;
   onOpen: () => void;
+  size: RailSize;
 }): JSX.Element {
   return (
-    <Cell label={group.name.split(/\s+/)[0]}>
+    <Cell label={group.name.split(/\s+/)[0]} size={size}>
       <span className="relative block w-14 h-14">
         <button
           type="button"
@@ -248,7 +280,7 @@ function FriendCell({
               : `${group.name} — story, already seen`
           }
         >
-          <Ring active={group.hasUnseen}>
+          <Ring active={group.hasUnseen} size={size}>
             <Avatar initials={group.initials} seed={group.id} size="md" />
           </Ring>
         </button>
@@ -258,14 +290,34 @@ function FriendCell({
   );
 }
 
-/** The unseen ring. Absent, not merely dimmer, once the story is watched. */
+/**
+ * The unseen ring. Absent, not merely dimmer, once the story is watched.
+ * Tonight paints it as a 54px 2px stroke inside the 56px box (README §1.3);
+ * Feed keeps the outset ring around the 56px box.
+ */
 function Ring({
   active,
+  size,
   children,
 }: {
   active: boolean;
+  size: RailSize;
   children: React.ReactNode;
 }): JSX.Element {
+  if (size === 'tonight') {
+    return (
+      <span
+        data-testid="story-ring"
+        data-active={active ? 'true' : 'false'}
+        className={[
+          'm-px w-[54px] h-[54px] rounded-full border-2 flex items-center justify-center',
+          active ? 'border-accent' : 'border-transparent',
+        ].join(' ')}
+      >
+        {children}
+      </span>
+    );
+  }
   return (
     <span
       data-testid="story-ring"
