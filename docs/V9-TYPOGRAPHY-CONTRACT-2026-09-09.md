@@ -1,9 +1,14 @@
 # V9-11 — typography contract (Playfair Display + Nunito Sans)
 
-> **SUPERSEDED 2026-09-11 (V10-07).** The owner rejected the Playfair + Nunito Sans pair on the phone (TestFlight
-> builds 10–12) and asked for the V8 look back. The app now loads ONE face, **Poppins 400/500/600/700**, and the
-> four tokens (`font-display`, `font-sans`, `font-label`, `font-nav`) all resolve to it — display/label/nav at 700,
-> body at 400. `e2e/typography-contract.spec.ts` asserts that. The role table below is kept for history only.
+> **SUPERSEDED 2026-09-11 (V10-07), nav revised 2026-09-11 (V10-08).** The owner rejected the Playfair + Nunito
+> Sans pair on the phone (TestFlight builds 10–12) and asked for the V8 look back. The app now loads ONE face,
+> **Poppins 400/500/600/700** (`src/app/layout.tsx`, CSS variable `--font-poppins`), and the four Tailwind tokens
+> (`font-display`, `font-sans`, `font-label`, `font-nav`, `tailwind.config.ts`) all resolve to it. Weights per role
+> live in `src/app/globals.css` `@layer base`: **display 700, label 700, nav 600, body 400**. The bottom nav is the
+> iOS HIG tab bar (V10-08): 49pt bar, glyph over a 10px sentence-case label, tint-only active state, no pill, no
+> uppercase, no tracking. `e2e/typography-contract.spec.ts` asserts exactly that (nav = `font-nav`, weight 600,
+> `text-transform: none`). The role table below is kept for history only; where it disagrees with this banner, the
+> banner and the spec win. Change this file and the spec together.
 
 Owner decision 2026-09-08: the approved pair is **Playfair Display** for display/headings and **Nunito Sans** for
 body. Artifact `ee5913e` (release/v8, 2026-09-03), cherry-picked onto this candidate. This file is the contract the
@@ -28,7 +33,7 @@ Tailwind: `font-display` → `var(--font-display)`, `font-sans` → `var(--font-
 | Body, captions, form controls, helper copy | (inherited) | Nunito Sans | 400 | |
 | Body emphasis | `font-semibold` | Nunito Sans | 600 | |
 | Body strong | `font-bold` | Nunito Sans | 700 | |
-| **Nav** (V10-06, owner on build 11): the bottom nav tabs and pill only | `font-nav` | Poppins | **700** (`--font-nav`, loaded at 700 only; `@layer base .font-nav`) | The V8 nav look the owner asked back. Tabs `clamp(9px, 2.9vw, 11px)`, pill `clamp(11px, 3.4vw, 13px)` with 12 px side padding, `tracking-wide` (Poppins Bold is wide: with `tracking-wider` and padded labels the row overflowed at every width); the active highlight is on the label span (2 px side padding), so it hugs the label and never runs into the screen edge. |
+| **Nav** (V10-06, owner on build 11; **superseded by V10-08** — now `font-nav` Poppins **600**, 10px sentence-case, glyph + label, tint-only active, no pill: see the banner) | `font-nav` | Poppins | ~~700~~ → 600 | History of V10-06 follows. The V8 nav look the owner asked back. Tabs `clamp(9px, 2.9vw, 11px)`, pill `clamp(11px, 3.4vw, 13px)` with 12 px side padding, `tracking-wide` (Poppins Bold is wide: with `tracking-wider` and padded labels the row overflowed at every width); the active highlight is on the label span (2 px side padding), so it hugs the label and never runs into the screen edge. |
 | **Label** (V10-01): section labels ("Group Favorites", "Plan details", "Who's going"), form-field labels, chips/badges, and any uppercase button or link at 12 px or under | `font-label` | Nunito Sans | **600** (`@layer base .font-label { font-weight: 600 }`; family from `tailwind.config.ts` `fontFamily.label`, the same stack as `sans`) | Owner, 2026-09-09, build 10: "swap them back on the bottom part, they look gross" — the serif at 9–13 px uppercase with tracking reads wrong. **Rule: uppercase text at `text-xs` / 12 px or smaller is a label, not a heading, and takes the body face.** Uppercase at `text-sm` (14 px) and above — eyebrows, primary/secondary buttons, `h1` page titles — stays `font-display`. Tracking and colour stay per site. |
 
 The app uses no other weight utilities (`font-medium`, `font-light`, `font-extrabold`, `font-black` do not occur in

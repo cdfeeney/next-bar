@@ -12,10 +12,11 @@ import PendingInviteRedirect from '@/components/PendingInviteRedirect';
 
 // V10-07 (owner, 2026-09-11, on staging): the V8 Poppins kit is back for the
 // whole app. The 2026-09-08 Playfair + Nunito Sans pair (V9-11) was rejected
-// on the phone. One face, four tokens: --font-display/--font-sans/--font-label/
-// --font-nav all resolve to Poppins so no component had to change; the
-// weights per role live in globals.css. Self-hosted by next/font at build
-// time (no runtime request; PWA-safe).
+// on the phone. One face, one CSS variable (--font-poppins); the four Tailwind
+// tokens font-display/font-sans/font-label/font-nav (tailwind.config.ts) all
+// resolve to it so no component had to change; the weights per role live in
+// globals.css (display 700, label 700, nav 600, body 400). Self-hosted by
+// next/font at build time (no runtime request; PWA-safe).
 const poppins = Poppins({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700'],
