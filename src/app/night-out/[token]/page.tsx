@@ -5,23 +5,12 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
-import { getBarById } from '@/lib/catalog';
 import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/lib/pendingInvite';
 import { forgetStartedNightOut } from '@/components/StartNightOutButton';
-import { remainingLabel } from '@/lib/nightOutPlan';
 import NightOutMedia from './NightOutMedia';
-import PlanCover from '@/components/PlanCover';
 import InvitePreview from './InvitePreview';
+import { fetchAnonRsvpCounts, fetchNightOutVoting } from './planActions';
 import {
-  fetchAnonRsvpCounts,
-  fetchNightOutVoting,
-  lockNightOut,
-  removeNightOutSuggestion,
-  type AnonRsvpCounts,
-  type NightOutVoting,
-} from './planActions';
-import {
-  cancelNightOut,
   declineNightOutByToken,
   getNightOut,
   getNightOutBoard,
@@ -31,13 +20,21 @@ import {
   previewNightOut,
   resolveNightOutByToken,
   respondNightOut,
-  suggestNightOutBar,
-  voteNightOutBar,
-  type NightOut,
-  type NightOutBoardEntry,
-  type NightOutMember,
-  type NightOutPreview,
 } from '@/lib/nightOuts.server';
+import PlanHeader from './_components/PlanHeader';
+import RsvpRow from './_components/RsvpRow';
+import MemberBoard from './_components/MemberBoard';
+import PlanShortlist from './_components/PlanShortlist';
+import {
+  DEADLINE_GRACE_MS,
+  MAX_REARM_MS,
+  MIN_RECHECK_MS,
+  SKEW_TOLERANCE_MS,
+  clampRecheck,
+  isSettled,
+  type MemberLoad,
+  type PageState,
+} from './_components/planPage';
 
 /**
  * /night-out/[token] — the canonical Night Out plan (V8-3).
@@ -51,249 +48,6 @@ import {
  * suggestions and votes, with "Not tonight" (= declined, the PRD's locked
  * state) always available. The owner can decide a bar or cancel the plan.
  */
-
-type PageState =
-  | { kind: 'loading' }
-  | { kind: 'gone' }
-  | { kind: 'preview'; preview: NightOutPreview }
-  | {
-      kind: 'member';
-      plan: NightOut;
-      members: NightOutMember[];
-      board: NightOutBoardEntry[];
-      /**
-       * V8-R-NO-005. Null when the read failed — which is NOT "voting is
-       * closed", and is why this is not folded into a boolean.
-       */
-      voting: NightOutVoting | null;
-      /** V8-R-INV-003. Null when the read failed; zeroes mean nobody replied. */
-      anonRsvps: AnonRsvpCounts | null;
-    };
-
-/**
- * Has the page reached a TERMINAL state — i.e. has the invite handoff finished
- * its job, whatever the outcome?
- *
- * This predicate is the root of a bug that has now been "fixed" three times,
- * each time by approximating the same invariant slightly differently:
- *
- *   round 1: consume in PendingInviteRedirect  -> it navigated away before
- *            arriving, so an interrupted trip lost the plan
- *   round 2: consume on MOUNT                  -> mount is not arrival;
- *            OnboardingGate redirected first and the token was already gone
- *   round 3: consume on state.kind==='member'  -> membership is not the only
- *            arrival; a signed-in non-member settling in 'preview' or 'gone'
- *            never spent the token, so PendingInviteRedirect replayed the
- *            navigation on EVERY route change for the rest of the session
- *
- * The invariant was always: the handoff is spent once the destination SETTLES,
- * regardless of which terminal state it settles into. Stating it once, here,
- * is what stops a fourth variant appearing.
- *
- * The exhaustive switch is deliberate. Adding a fifth PageState will fail to
- * compile until someone classifies it as settled or not — the next person
- * cannot silently inherit the wrong answer.
- */
-function isSettled(kind: PageState['kind']): boolean {
-  switch (kind) {
-    case 'member':
-    case 'preview':
-    case 'gone':
-      return true;
-    case 'loading':
-      return false;
-    default: {
-      const exhaustive: never = kind;
-      return exhaustive;
-    }
-  }
-}
-
-/**
- * V8-R-SOC-008's overflow control and its one action.
- *
- * "Ownership and removal are carried by the control and its menu, never by a
- * paragraph" — so the affordance IS the control, and the row says nothing about
- * who may act on it. 44px, as the requirement's accessibility clause states.
- *
- * The parent decides whether this renders at all, using the same predicate the
- * RPC enforces; this component decides nothing about authorization.
- */
-function ShortlistOverflow({
-  barName,
-  open,
-  onToggle,
-  onRemove,
-}: {
-  barName: string;
-  open: boolean;
-  onToggle: () => void;
-  onRemove: () => void;
-}): JSX.Element {
-  return (
-    <span className="relative">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-haspopup="menu"
-        aria-label={`More for ${barName}`}
-        onClick={onToggle}
-        data-testid="shortlist-overflow"
-        className="inline-flex min-h-[44px] min-w-[44px] touch-manipulation items-center justify-center rounded-full border text-sm"
-      >
-        ⋯
-      </button>
-      {open ? (
-        <span
-          role="menu"
-          className="absolute right-0 top-full z-10 mt-1 min-w-[10rem] rounded-lg border bg-black p-1 shadow-lg"
-        >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={onRemove}
-            data-testid="shortlist-remove"
-            className="block w-full rounded-md px-3 py-2 text-left text-sm"
-          >
-            Remove from the shortlist
-          </button>
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
-/**
- * "Friday at 11:00 PM" for a voting deadline, in the contract's zone.
- *
- * America/New_York rather than the device's: the deadline is a fact about the
- * plan, and every other instant this surface states — the scheduled start, the
- * media window — is stated the same way. The empty string for an unparseable
- * instant lets the caller render the sentence without a hole in it.
- */
-function deadlineLabel(instant: string): string {
-  const at = new Date(instant);
-  if (Number.isNaN(at.getTime())) return '';
-  return new Intl.DateTimeFormat('en-US', {
-    weekday: 'long',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: 'America/New_York',
-  }).format(at);
-}
-
-/**
- * A second past the deadline, so the server has crossed it by its own clock
- * when we ask; the floor for a deadline this device thinks is ALREADY BEHIND
- * IT, which is what such a deadline waits instead of never arming at all; and
- * the longest single wait before the timer re-arms, because `setTimeout`
- * silently fires immediately past ~24.8 days.
- */
-/**
- * What a member load actually did — three outcomes, never a boolean.
- *
- * Round-10 round 9, Claude gate, and the round-4 comment in the Join handler
- * had already written down why: `false` meant BOTH "the read failed" and "the
- * view moved on and I refused to paint", and only the first is something to
- * report. Every caller carried its own hand-patch that re-checked `viewEpoch`
- * to tell them apart. Round 8 added a SECOND reason to refuse — a newer load of
- * the same view had already painted — and those hand-patches, which knew only
- * about the epoch, silently started reporting it as a failure: a double-tapped
- * Join painted "You're in — but this page couldn't load" over a member board
- * that had loaded correctly, and the resolve effect would paint the bearer
- * PREVIEW over it.
- *
- * Patching each caller a second time would leave the same trap set for the
- * third reason. The ambiguity is in the return type, so that is what changed.
- */
-type MemberLoad = 'painted' | 'superseded' | 'failed';
-
-const DEADLINE_GRACE_MS = 1_000;
-const MIN_RECHECK_MS = 60_000;
-const MAX_REARM_MS = 6 * 60 * 60 * 1_000;
-/**
- * How much CLOCK SKEW the approach tolerates — and, therefore, how long before
- * a deadline this device believes is still ahead we start asking every minute.
- *
- * Waiting an "ahead" deadline exactly is only right if the two clocks agree. On
- * a device running ten minutes SLOW the server closes voting first while
- * Suggest, Vote and Remove stay editable here for the whole skew, and the first
- * tap in that window is refused instead of the surface having gone read-only
- * (round-10 round 7, Codex). The behind case already had a floor for the
- * disagreement; this is the same tolerance on the other side.
- *
- * IT IS A WINDOW, NOT A CAP (round-10 round 8, both lanes). Round 7 wrote
- * `Math.min(delay, 60_000)`, which does not mean "notice the deadline a minute
- * late" — it means "ask again every minute, forever". A plan opened hours
- * before its deadline re-ran `loadMemberView`'s FIVE RPCs every sixty seconds
- * for the whole wait. Ten minutes is the tolerance, the figure round 7's own
- * trigger named: inside the window, a read a minute.
- *
- * OUTSIDE IT WE HALVE, RATHER THAN SLEEP THROUGH (round-10 round 9, Codex).
- * Round 8 waited to the window's edge in one go, which made the tolerance a
- * CONSTANT: a device thirty minutes slow kept Suggest, Vote and Remove editable
- * for twenty minutes past a deadline the server was already enforcing, and
- * every tap in that window is refused. Halving makes the lag at the true
- * crossing at most half the remaining wait, so it scales with the error, at a
- * logarithmic number of reads. See `NightOutMedia`'s copy for the full
- * reasoning and for the residual gap, which is reported rather than closed.
- */
-const SKEW_TOLERANCE_MS = 10 * 60_000;
-
-/**
- * When to ask the server again about a deadline only the server enforces.
- *
- * THE FLOOR IS FOR THE DISAGREEMENT CASE ONLY (round-9 panel). It used to be
- * `Math.max(delay, MIN_RECHECK_MS)`, which reads as "never poll faster than
- * once a minute" and behaves as "never notice a deadline sooner than a minute":
- * a deadline five seconds away was re-read after sixty, so Suggest, Vote and
- * Remove stayed editable for most of a minute past an expiry the server was
- * already enforcing, and the first tap in that window was refused instead of
- * the page having gone read-only. A deadline still AHEAD is waited for
- * exactly. One already behind cannot change its answer until the server's own
- * clock crosses, so there the floor is right.
- *
- * `NightOutMedia` carries the same rule for its media window, and round 8 fixed
- * one copy while leaving the other. A shared module in `src/lib/` would be the
- * repair and is another lane's write scope, so the duplication is recorded here
- * rather than hidden.
- *
- * AND A DEADLINE AHEAD IS NOT WAITED INDEFINITELY EITHER (round-10 round 7,
- * Codex). "Waited exactly" is correct only when the clocks agree; on a slow
- * device the server closes first and this surface stays editable for the whole
- * skew. The approach therefore opens `SKEW_TOLERANCE_MS` before the deadline
- * and asks every minute inside it, which makes the tolerance symmetric without
- * turning the timer into a permanent poll (round-10 round 8 — see that
- * constant; the previous shape polled for the entire ahead period).
- */
-function clampRecheck(delayMs: number): number {
-  if (delayMs <= 0) return MIN_RECHECK_MS;
-  const wait =
-    delayMs > SKEW_TOLERANCE_MS
-      ? // Outside the approach window: HALVE the remaining wait rather than
-        // sleeping through it, so the detection lag scales with the skew. See
-        // `SKEW_TOLERANCE_MS`.
-        Math.min(delayMs - SKEW_TOLERANCE_MS, Math.ceil(delayMs / 2))
-      : // Inside it: a minute, or the exact remaining time when that is sooner,
-        // so a deadline five seconds away is still not re-read after sixty.
-        Math.min(delayMs, MIN_RECHECK_MS);
-  return Math.min(wait, MAX_REARM_MS);
-}
-
-function nightDateLabel(nightKey: string): string {
-  const [y, m, d] = nightKey.split('-').map(Number);
-  if (!y || !m || !d) return nightKey;
-  return new Intl.DateTimeFormat('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    timeZone: 'UTC',
-  }).format(new Date(Date.UTC(y, m - 1, d)));
-}
-
-function barLabel(barId: string): string {
-  return getBarById(barId)?.name ?? barId;
-}
 
 export default function NightOutPage({
   params,
@@ -943,44 +697,8 @@ export default function NightOutPage({
       ? (members.find((m) => m.userId === auth.user.id)?.handle ?? null)
       : null;
 
-  return (
-    // pb-28 CLEARS THE BOTTOM NAV. This page carried only `py-8` and got away
-    // with it while the suggestion form was the last thing on it — nothing at
-    // the bottom was interactive enough to notice. Adding the photo section
-    // below made it a real bug: the fixed `z-[1000]` nav sits over the last
-    // ~7rem of every scrollable page, so Save and Add a photo were visible,
-    // enabled, and un-tappable. Every other surface (/friends, /nights) already
-    // reserves this.
-    <main className="min-h-screen px-6 py-8 pb-28">
-      <header className="text-center">
-        {/* S-06b: the cover, when the plan has one; nothing otherwise. */}
-        <PlanCover nightOutId={plan.id} className="mb-4 h-[150px] w-full rounded-3xl" />
-        <h1 className="text-2xl font-semibold">
-          {plan.title ?? 'Night out'}
-        </h1>
-        <p className="mt-1 opacity-80">{nightDateLabel(plan.night)}</p>
-        <p className="mt-1 text-sm opacity-60">
-          Hosted by {plan.ownerDisplayName ?? plan.ownerHandle ?? 'a friend'}
-        </p>
-        {isCancelled ? (
-          <p className="mt-3 font-semibold text-red-400">
-            This night out was cancelled.
-          </p>
-        ) : plan.status === 'decided' && plan.decidedBarId !== null ? (
-          <p className="mt-3 font-semibold">
-            It&apos;s decided: {barLabel(plan.decidedBarId)}
-          </p>
-        ) : null}
-
-        {/* Round-2 review (Codex, high): creating a plan produced a link the
-            app gave you no way to send. The consensus page's "Invite friends"
-            still shares /join, and this page had no share control at all, so
-            the canonical invitation lifecycle had no reachable invite step. */}
-        {!isCancelled ? (
-          <button
-            type="button"
-            onClick={() => {
-              void (async () => {
+  const copyInviteLink = (): void => {
+    void (async () => {
                 // The clipboard write is an await like any other, so its
                 // continuation belongs to the view that started it (round-6
                 // panel, Codex). A late rejection otherwise printed plan A's
@@ -998,295 +716,60 @@ export default function NightOutPage({
                   if (startedAt !== viewEpoch.current) return;
                   setShareNotice(url);
                 }
-              })();
-            }}
-            className="mt-4 rounded-full border px-5 py-2 text-sm"
-          >
-            Copy invite link
-          </button>
-        ) : null}
-        {shareNotice !== null ? (
-          <p className="mt-2 break-all text-xs opacity-70" role="status">
-            {shareNotice}
-          </p>
-        ) : null}
-      </header>
+    })();
+  };
+
+  return (
+    // pb-28 CLEARS THE BOTTOM NAV. This page carried only `py-8` and got away
+    // with it while the suggestion form was the last thing on it — nothing at
+    // the bottom was interactive enough to notice. Adding the photo section
+    // below made it a real bug: the fixed `z-[1000]` nav sits over the last
+    // ~7rem of every scrollable page, so Save and Add a photo were visible,
+    // enabled, and un-tappable. Every other surface (/friends, /nights) already
+    // reserves this.
+    <main className="min-h-screen px-6 py-8 pb-28">
+      <PlanHeader
+        plan={plan}
+        isCancelled={isCancelled}
+        shareNotice={shareNotice}
+        onCopyInvite={copyInviteLink}
+      />
 
       {actionError !== null ? (
         <p className="mt-4 text-center text-sm text-red-400">{actionError}</p>
       ) : null}
 
-      {!isCancelled ? (
-        <section className="mt-6 flex justify-center gap-3">
-          {plan.callerStatus === 'pending' ? (
-            // An invited member accepts EXPLICITLY (viewing never mutates).
-            <button
-              type="button"
-              onClick={withRefresh(respondAs(true))}
-              className="rounded-full bg-white px-5 py-2 font-semibold text-black"
-            >
-              I&apos;m in
-            </button>
-          ) : null}
-          {isDeclined ? (
-            <button
-              type="button"
-              onClick={withRefresh(respondAs(true), true)}
-              className="rounded-full border px-5 py-2"
-            >
-              Count me back in
-            </button>
-          ) : !isOwner ? (
-            <button
-              type="button"
-              onClick={withRefresh(respondAs(false))}
-              className="rounded-full border px-5 py-2"
-            >
-              Not tonight
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={withRefresh(() => {
-                const supabase = getBrowserSupabase();
-                return supabase
-                  ? cancelNightOut(supabase, plan.id)
-                  : Promise.resolve(false);
-              })}
-              className="rounded-full border border-red-400 px-5 py-2 text-red-400"
-            >
-              Cancel night out
-            </button>
-          )}
-        </section>
-      ) : null}
+      <RsvpRow
+        plan={plan}
+        isCancelled={isCancelled}
+        isDeclined={isDeclined}
+        isOwner={isOwner}
+        respondAs={respondAs}
+        withRefresh={withRefresh}
+      />
 
-      {/* `data-testid`, not the heading text, is what "the member board" means
-          now: the bearer surface has its own "Who's in" — the accepted COUNT,
-          which 0044's preview has always made public — so a test asserting the
-          member board is absent cannot key on those words any more. The two
-          lists are different data with different audiences: this one names
-          every member and their invite status, and only accepted members' own
-          display identities reach the bearer one. */}
-      <section className="mt-8" data-testid="member-board">
-        <h2 className="font-semibold">Who&apos;s in ({accepted.length})</h2>
-        <ul className="mt-2 space-y-1">
-          {members.map((m) => (
-            <li key={m.userId} className="flex items-center gap-2 text-sm">
-              <span>{m.displayName ?? m.handle ?? 'Someone'}</span>
-              <span className="opacity-50">
-                {m.role === 'owner'
-                  ? 'host'
-                  : m.inviteStatus === 'accepted'
-                    ? 'in'
-                    : m.inviteStatus === 'declined'
-                      ? 'not tonight'
-                      : 'invited'}
-              </span>
-            </li>
-          ))}
-        </ul>
-        {/* V8-R-INV-003's audience is "plan members", and until round 5 an
-            answer sent from the invitation link reached nobody: the only reader
-            of the anon RSVPs needed the recipient's own secret key. Counts, not
-            names — a token-scoped recipient has no account and gave none, and
-            inventing one would be worse than the silence this replaces. A
-            failed read says nothing rather than reporting zero replies. */}
-        {anonRsvps !== null &&
-        anonRsvps.going + anonRsvps.maybe + anonRsvps.declined > 0 ? (
-          <p className="mt-3 text-sm opacity-70" data-testid="night-out-link-replies">
-            From the invite link: {anonRsvps.going} going, {anonRsvps.maybe}{' '}
-            maybe, {anonRsvps.declined} can&apos;t make it.
-          </p>
-        ) : null}
-      </section>
+      <MemberBoard members={members} accepted={accepted} anonRsvps={anonRsvps} />
 
-      {!isCancelled ? (
-        <section className="mt-8">
-          <h2 className="font-semibold">Where should we go?</h2>
-          {/* V8-R-NO-005. "Participants see it and cannot change it" — so it is
-              stated on the plan, on both sides of the deadline.
-
-              AND IN REMAINING MINUTES, NOT ONLY AS A CLOCK TIME (round-10 round
-              8, Codex). NO-005's accessibility line is "expressed in time and
-              remaining minutes in words, never by colour alone", and the owner's
-              own form has said both since it was written — but this page, the
-              only surface a participant ever sees, stated the absolute New York
-              time alone. "Voting closes Friday at 11:00 PM" leaves the reader to
-              do the arithmetic against a zone that may not be theirs, which is
-              the half the rule exists to remove. Same sentence, one shared
-              `remainingLabel`.
-
-              Only while voting is OPEN: once it has closed there is nothing
-              remaining to state, and "in about 0 minutes" would be a countdown
-              to an event that has already happened.
-
-              IT HAS ITS OWN CLOCK (round-10 round 9, Codex). Round 8 tied this
-              to `deadlineTick`, which only fires inside the ten-minute approach
-              window, and claimed the coarse wording made the long wait outside
-              it harmless. It does not: a page opened six hours early still said
-              "in about 6 hours" four hours later. Coarse is not the same as
-              stale, and this is the one sentence on the surface whose whole job
-              is to say how long is left. `wordsTick` re-renders it every minute
-              and costs no round trip — the server is asked on the boundary
-              schedule, exactly as before; only the arithmetic is redone. */}
-          {voting?.votingClosesAt != null ? (
-            <p className="mt-1 text-xs opacity-60" data-testid="night-out-deadline">
-              {voting.votingOpen
-                ? `Voting closes ${deadlineLabel(voting.votingClosesAt)} — ${remainingLabel(voting.votingClosesAt, wordsNow)}.`
-                : `Voting closed ${deadlineLabel(voting.votingClosesAt)}.`}
-            </p>
-          ) : null}
-          <ul className="mt-2 space-y-2" data-testid="night-out-board">
-            {rankedBoard.map((entry) => (
-              <li
-                key={entry.barId}
-                className="flex items-center justify-between rounded-lg border px-3 py-2"
-              >
-                <div>
-                  <p>{barLabel(entry.barId)}</p>
-                  <p className="text-xs opacity-50">
-                    suggested by {entry.suggestedByHandle ?? 'someone'}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm opacity-70">
-                    {entry.votes} {entry.votes === 1 ? 'vote' : 'votes'}
-                  </span>
-                  {entry.callerVoted ? (
-                    <span className="text-sm opacity-50">voted</span>
-                  ) : canParticipate ? (
-                    <button
-                      type="button"
-                      onClick={withRefresh(() => {
-                        const supabase = getBrowserSupabase();
-                        return supabase
-                          ? voteNightOutBar(supabase, plan.id, entry.barId)
-                          : Promise.resolve(false);
-                      })}
-                      className="rounded-full border px-3 py-1 text-sm"
-                    >
-                      Vote
-                    </button>
-                  ) : null}
-                  {/* V8-R-SOC-008. "The overflow renders only on a row the
-                      viewer may act on — their own suggestion as a participant,
-                      every row as the owner", and the same predicate the RPC
-                      enforces decides it. A menu on a row whose removal the
-                      server would refuse is a control that only produces an
-                      error. */}
-                  {/* `canParticipate`, not `isPlanOpen` (round-5 panel,
-                      Codex): `remove_night_out_suggestion` asks
-                      `night_out_voting_open`, so past the deadline the menu
-                      offered an action the server necessarily refuses — the
-                      exact drift this page's own rule forbids. */}
-                  {canParticipate &&
-                  (isOwner ||
-                    (myHandle !== null &&
-                      entry.suggestedByHandle === myHandle)) ? (
-                    <ShortlistOverflow
-                      barName={barLabel(entry.barId)}
-                      open={overflowBarId === entry.barId}
-                      onToggle={() =>
-                        setOverflowBarId((current) =>
-                          current === entry.barId ? null : entry.barId,
-                        )
-                      }
-                      onRemove={() => {
-                        setOverflowBarId(null);
-                        void withRefresh(() => {
-                          const supabase = getBrowserSupabase();
-                          return supabase
-                            ? removeNightOutSuggestion(
-                                supabase,
-                                plan.id,
-                                entry.barId,
-                              )
-                            : Promise.resolve(false);
-                        })();
-                      }}
-                    />
-                  ) : null}
-                </div>
-              </li>
-            ))}
-            {board.length === 0 ? (
-              <li className="text-sm opacity-60">No suggestions yet.</li>
-            ) : null}
-          </ul>
-
-          {/* V8-R-SOC-007. ONE action with a fixed object, not a Pick-this on
-              every row (round-3 panel, Codex, HIGH). "Closes voting
-              immediately, takes the top bar, and tells everyone" — and the top
-              bar is chosen by `lock_night_out` inside the same serialized
-              section that takes it, so a vote landing mid-tap cannot leave the
-              plan locked to a bar that was not the leader. "The primary action
-              on the open plan", available whether or not a deadline is set. */}
-          {isOwner && isPlanOpen ? (
-            <button
-              type="button"
-              disabled={board.length === 0}
-              onClick={withRefresh(async () => {
-                const supabase = getBrowserSupabase();
-                if (!supabase) return false;
-                return (await lockNightOut(supabase, plan.id)) !== null;
-              })}
-              data-testid="night-out-lock"
-              className="mt-4 inline-flex min-h-[44px] w-full touch-manipulation items-center justify-center rounded-full bg-white px-6 font-semibold text-black disabled:opacity-60"
-            >
-              Lock the plan
-            </button>
-          ) : null}
-          {isOwner && isPlanOpen && board.length === 0 ? (
-            <p className="mt-2 text-sm opacity-60">
-              Nothing to lock yet — the shortlist is empty.
-            </p>
-          ) : null}
-          {!canParticipate ? (
-            <p className="mt-3 text-sm opacity-60" data-testid="night-out-voting-closed">
-              {!isPlanOpen
-                ? 'The plan is settled — suggestions are closed.'
-                : !votingOpen
-                  ? // V8-R-NO-005's read-only state, said in words rather than
-                    // left as controls that quietly stopped working.
-                    'Voting has closed for this plan.'
-                  : isDeclined
-                    ? "You're out for this one. Count yourself back in to suggest a bar."
-                    : "Say you're in to suggest a bar."}
-            </p>
-          ) : (
-          <form
-            className="mt-3 flex gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const barId = suggestInput.trim().toLowerCase();
-              if (getBarById(barId) === undefined) {
-                setActionError('Pick a bar from the catalog (its id).');
-                return;
-              }
-              setSuggestInput('');
-              void withRefresh(() => {
-                const supabase = getBrowserSupabase();
-                return supabase
-                  ? suggestNightOutBar(supabase, plan.id, barId)
-                  : Promise.resolve(false);
-              })();
-            }}
-          >
-            <input
-              value={suggestInput}
-              onChange={(event) => setSuggestInput(event.target.value)}
-              placeholder="Suggest a bar (id)"
-              aria-label="Suggest a bar"
-              className="flex-1 rounded-lg border bg-transparent px-3 py-2"
-            />
-            <button type="submit" className="rounded-lg border px-4 py-2">
-              Suggest
-            </button>
-          </form>
-          )}
-        </section>
-      ) : null}
+      <PlanShortlist
+        plan={plan}
+        board={board}
+        rankedBoard={rankedBoard}
+        voting={voting}
+        wordsNow={wordsNow}
+        isCancelled={isCancelled}
+        isOwner={isOwner}
+        isPlanOpen={isPlanOpen}
+        votingOpen={votingOpen}
+        isDeclined={isDeclined}
+        canParticipate={canParticipate}
+        myHandle={myHandle}
+        overflowBarId={overflowBarId}
+        setOverflowBarId={setOverflowBarId}
+        suggestInput={suggestInput}
+        setSuggestInput={setSuggestInput}
+        setActionError={setActionError}
+        withRefresh={withRefresh}
+      />
 
       {/* V8-R-NO-008 / V8-R-NO-009. Rendered for a CANCELLED plan too: the
           night still happened, its photos are still inside their window, and
