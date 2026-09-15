@@ -1,60 +1,43 @@
 'use client';
 
-/** S-07 split (pure move): the plan header — cover, title, date, host, state, invite link. */
+/**
+ * README §7 — the plan header: cover (when set), the plan's name falling back
+ * to "Where are we going?", then "Saturday, September 13 · hosted by you".
+ *
+ * The start time the README draws ("· 9:00 PM") is not on the member read
+ * (`get_night_out` carries no starts_at; only the bearer preview does), so the
+ * meta line states the night and the host — disclosed in S-07's packet rather
+ * than invented from the 9:00 PM default.
+ */
 import PlanCover from '@/components/PlanCover';
 import type { NightOut } from '@/lib/nightOuts.server';
-import { barLabel, nightDateLabel } from './planPage';
+import { nightDateLabel } from './planPage';
+
+export const UNNAMED_PLAN_TITLE = 'Where are we going?';
 
 export default function PlanHeader({
   plan,
+  isOwner,
   isCancelled,
-  shareNotice,
-  onCopyInvite,
 }: {
   plan: NightOut;
+  isOwner: boolean;
   isCancelled: boolean;
-  shareNotice: string | null;
-  onCopyInvite: () => void;
 }): JSX.Element {
+  const host = isOwner ? 'you' : (plan.ownerDisplayName ?? plan.ownerHandle ?? 'a friend');
   return (
-        <header className="text-center">
-          {/* S-06b: the cover, when the plan has one; nothing otherwise. */}
-          <PlanCover nightOutId={plan.id} className="mb-4 h-[150px] w-full rounded-3xl" />
-          <h1 className="text-2xl font-semibold">
-            {plan.title ?? 'Night out'}
-          </h1>
-          <p className="mt-1 opacity-80">{nightDateLabel(plan.night)}</p>
-          <p className="mt-1 text-sm opacity-60">
-            Hosted by {plan.ownerDisplayName ?? plan.ownerHandle ?? 'a friend'}
-          </p>
-          {isCancelled ? (
-            <p className="mt-3 font-semibold text-red-400">
-              This night out was cancelled.
-            </p>
-          ) : plan.status === 'decided' && plan.decidedBarId !== null ? (
-            <p className="mt-3 font-semibold">
-              It&apos;s decided: {barLabel(plan.decidedBarId)}
-            </p>
-          ) : null}
-
-          {/* Round-2 review (Codex, high): creating a plan produced a link the
-              app gave you no way to send. The consensus page's "Invite friends"
-              still shares /join, and this page had no share control at all, so
-              the canonical invitation lifecycle had no reachable invite step. */}
-          {!isCancelled ? (
-            <button
-              type="button"
-              onClick={onCopyInvite}
-              className="mt-4 rounded-full border px-5 py-2 text-sm"
-            >
-              Copy invite link
-            </button>
-          ) : null}
-          {shareNotice !== null ? (
-            <p className="mt-2 break-all text-xs opacity-70" role="status">
-              {shareNotice}
-            </p>
-          ) : null}
-        </header>
+    <header className="text-left" data-testid="plan-header">
+      {/* S-06b: the cover, when the plan has one; nothing otherwise. */}
+      <PlanCover nightOutId={plan.id} className="mb-4 h-[150px] w-full rounded-3xl" />
+      <h1 className="font-display text-[28px] font-bold leading-tight" data-testid="plan-title">
+        {plan.title ?? UNNAMED_PLAN_TITLE}
+      </h1>
+      <p className="mt-1 text-[13px] text-muted" data-testid="plan-meta">
+        {nightDateLabel(plan.night)} · hosted by {host}
+      </p>
+      {isCancelled ? (
+        <p className="mt-3 font-semibold text-red-400">This night out was cancelled.</p>
+      ) : null}
+    </header>
   );
 }

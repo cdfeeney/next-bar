@@ -3167,3 +3167,167 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
   });
 
 });
+
+/**
+ * S-07 — the plan board as drawn (README §7). Acceptance 1 (the split changes
+ * no behaviour) is the unedited run of everything above this block on the
+ * split commit. Acceptance 4 (single-transfer voting) is NOT asserted: the
+ * server's vote writer is insert-only and nothing clears a vote, so the goal's
+ * own instruction applies — surface it, no migration — and the last case here
+ * states what the board does today instead.
+ */
+test.describe('S-07: the plan board as drawn', () => {
+  const PDT = 'please-dont-tell';
+
+  /** The owner's view with a get_night_out override layered on top of stubOwnerRpcs. */
+  async function openOwnerBoard(
+    page: Page,
+    context: BrowserContext,
+    baseURL: string | undefined,
+    planPatch: Record<string, unknown> = {},
+    opts: { boardFails?: boolean; board?: unknown[] } = {},
+  ): Promise<void> {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubOwnerRpcs(page);
+    await page.route('**/rest/v1/rpc/get_night_out*', async (route) => {
+      const url = route.request().url();
+      if (opts.boardFails && url.includes('get_night_out_board')) {
+        return fulfillJson(500, { message: 'boom' })(route);
+      }
+      if (opts.board && url.includes('get_night_out_board')) {
+        return fulfillJson(200, opts.board)(route);
+      }
+      if (!/\/rpc\/get_night_out(?:\?|$)/.test(url)) return route.fallback();
+      await fulfillJson(200, [{ ...PLAN_ROW, caller_role: 'owner', ...planPatch }])(route);
+    });
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByTestId('plan-header')).toBeVisible();
+  }
+
+  test('2: a plan with a name shows it; one without says "Where are we going?"', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    await openOwnerBoard(page, context, baseURL);
+    await expect(page.getByTestId('plan-title')).toHaveText(PLAN_ROW.title);
+    await expect(page.getByTestId('plan-meta')).toContainText(/hosted by you/);
+    await page.goto('/friends');
+    await page.route('**/rest/v1/rpc/get_night_out*', async (route) => {
+      const url = route.request().url();
+      if (!/\/rpc\/get_night_out(?:\?|$)/.test(url)) return route.fallback();
+      await fulfillJson(200, [{ ...PLAN_ROW, caller_role: 'owner', title: null }])(route);
+    });
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByTestId('plan-title')).toHaveText('Where are we going?');
+  });
+
+  test('3+5+6: LEADING on exactly one row while open, a zero-vote suggestion shows 0, and the host locks the TOP bar', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    await openOwnerBoard(page, context, baseURL, {}, {
+      board: [
+        { bar_id: 'attaboy', suggested_by_handle: 'conor', votes: 1, caller_voted: false },
+        { bar_id: PDT, suggested_by_handle: 'sam', votes: 5, caller_voted: false },
+        { bar_id: 'mood-ring', suggested_by_handle: 'conor', votes: 0, caller_voted: false },
+      ],
+    });
+    const rows = page.getByTestId('shortlist-row');
+    await expect(rows).toHaveCount(3);
+    await expect(rows.first()).toHaveAttribute('data-bar-id', PDT);
+    await expect(page.getByTestId('shortlist-leading')).toHaveCount(1);
+    await expect(rows.first().getByTestId('shortlist-leading')).toBeVisible();
+    await expect(page.getByTestId('shortlist-picked')).toHaveCount(0);
+    await expect(page.getByTestId('shortlist-state')).toHaveCount(0);
+    // A suggestion lands with zero votes, including the suggester's own.
+    await expect(rows.nth(2)).toHaveAttribute('data-bar-id', 'mood-ring');
+    await expect(rows.nth(2)).toContainText(/suggested by you/);
+    await expect(rows.nth(2).getByRole('button', { name: /^Vote for Mood Ring/ })).toContainText('0');
+    // The vote control is 46px and the host's lock names the leader.
+    const vote = await rows.first().getByRole('button', { name: /^Vote for/ }).boundingBox();
+    expect(vote!.width).toBeGreaterThanOrEqual(46);
+    expect(vote!.height).toBeGreaterThanOrEqual(46);
+    const lock = page.getByTestId('night-out-lock');
+    await expect(lock).toHaveText(`Lock in ${PDT}`);
+    expect((await lock.boundingBox())!.height).toBeGreaterThanOrEqual(52);
+    await expect(page.getByText(/You.re the host, so you decide/)).toBeVisible();
+  });
+
+  test('6: a member never sees Lock in', async ({ page, context, baseURL }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page);
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByTestId('plan-shortlist')).toBeVisible();
+    await expect(page.getByTestId('night-out-lock')).toHaveCount(0);
+    await expect(page.getByTestId('member-board')).toContainText(/Going/);
+  });
+
+  test('7: decided — the banner renders, the shortlist reads VOTING CLOSED, PICKED marks the bar, nothing votes', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    let votes = 0;
+    await openOwnerBoard(page, context, baseURL, { status: 'decided', decided_bar_id: PDT });
+    await page.route('**/rest/v1/rpc/vote_night_out_bar*', async (route) => {
+      votes += 1;
+      await fulfillJson(200, true)(route);
+    });
+    const banner = page.getByTestId('decided-banner');
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText(/Decided/i);
+    await expect(banner.getByRole('link', { name: 'Directions' })).toHaveCount(0); // PDT is not in the catalog fixture
+    await expect(banner.getByRole('button', { name: 'Share' })).toBeVisible();
+    await expect(page.getByTestId('shortlist-state')).toHaveText(/Voting closed/i);
+    await expect(page.getByTestId('shortlist-picked')).toHaveCount(1);
+    await expect(page.getByTestId('shortlist-row').first().getByTestId('shortlist-picked')).toBeVisible();
+    await expect(page.getByTestId('shortlist-leading')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Vote for/ })).toHaveCount(0);
+    await expect(page.getByTestId('night-out-lock')).toHaveCount(0);
+    expect(votes).toBe(0);
+  });
+
+  test('8: a failed board read says so and never renders an empty shortlist', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    await openOwnerBoard(page, context, baseURL, {}, { boardFails: true });
+    await expect(page.getByTestId('night-out-board-failed')).toBeVisible();
+    await expect(page.getByTestId('night-out-board')).toHaveCount(0);
+    await expect(page.getByText(/No suggestions yet/)).toHaveCount(0);
+    await expect(page.getByTestId('night-out-lock')).toBeDisabled();
+  });
+
+  test('4 (as it stands): a vote writes once; a row that holds your vote is held and writes nothing — single-transfer needs a migration', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    const calls: unknown[] = [];
+    await openOwnerBoard(page, context, baseURL, {}, {
+      board: [
+        { bar_id: PDT, suggested_by_handle: 'sam', votes: 5, caller_voted: true },
+        { bar_id: 'attaboy', suggested_by_handle: 'conor', votes: 1, caller_voted: false },
+      ],
+    });
+    await page.route('**/rest/v1/rpc/vote_night_out_bar*', async (route) => {
+      calls.push(route.request().postDataJSON());
+      await fulfillJson(200, true)(route);
+    });
+    const rows = page.getByTestId('shortlist-row');
+    await expect(rows.first().getByTestId('shortlist-voted')).toBeVisible();
+    await expect(rows.first().getByRole('button', { name: /^Vote for/ })).toHaveCount(0);
+    await rows.nth(1).getByRole('button', { name: /^Vote for Attaboy/ }).click();
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]).toEqual({ p_night_out: PLAN_ID, p_bar: 'attaboy' });
+  });
+});

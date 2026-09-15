@@ -24,6 +24,8 @@ import {
 import PlanHeader from './_components/PlanHeader';
 import RsvpRow from './_components/RsvpRow';
 import MemberBoard from './_components/MemberBoard';
+import DecidedBanner from './_components/DecidedBanner';
+import PlanFooter from './_components/PlanFooter';
 import PlanShortlist from './_components/PlanShortlist';
 import {
   DEADLINE_GRACE_MS,
@@ -227,7 +229,7 @@ export default function NightOutPage({
         kind: 'member',
         plan,
         members: members ?? [],
-        board: board ?? [],
+        board,
         voting,
         anonRsvps,
       });
@@ -684,7 +686,7 @@ export default function NightOutPage({
    * A COPY, not a sort in place: `board` is state, and `Array.prototype.sort`
    * mutates its receiver.
    */
-  const rankedBoard = [...board].sort((a, b) => b.votes - a.votes);
+  const rankedBoard = [...(board ?? [])].sort((a, b) => b.votes - a.votes);
 
   /**
    * The viewer's own handle, for deciding which rows get an overflow control.
@@ -728,27 +730,16 @@ export default function NightOutPage({
     // enabled, and un-tappable. Every other surface (/friends, /nights) already
     // reserves this.
     <main className="min-h-screen px-6 py-8 pb-28">
-      <PlanHeader
-        plan={plan}
-        isCancelled={isCancelled}
-        shareNotice={shareNotice}
-        onCopyInvite={copyInviteLink}
-      />
+      <PlanHeader plan={plan} isOwner={isOwner} isCancelled={isCancelled} />
+
+      {/* README §7: the decided banner, locked plans only. */}
+      {!isCancelled && plan.status === 'decided' && plan.decidedBarId !== null ? (
+        <DecidedBanner barId={plan.decidedBarId} onShare={copyInviteLink} />
+      ) : null}
 
       {actionError !== null ? (
         <p className="mt-4 text-center text-sm text-red-400">{actionError}</p>
       ) : null}
-
-      <RsvpRow
-        plan={plan}
-        isCancelled={isCancelled}
-        isDeclined={isDeclined}
-        isOwner={isOwner}
-        respondAs={respondAs}
-        withRefresh={withRefresh}
-      />
-
-      <MemberBoard members={members} accepted={accepted} anonRsvps={anonRsvps} />
 
       <PlanShortlist
         plan={plan}
@@ -770,6 +761,19 @@ export default function NightOutPage({
         setActionError={setActionError}
         withRefresh={withRefresh}
       />
+
+      <MemberBoard members={members} accepted={accepted} anonRsvps={anonRsvps} />
+
+      <RsvpRow
+        plan={plan}
+        isCancelled={isCancelled}
+        isDeclined={isDeclined}
+        isOwner={isOwner}
+        respondAs={respondAs}
+        withRefresh={withRefresh}
+      />
+
+      {!isCancelled ? <PlanFooter shareNotice={shareNotice} onCopyInvite={copyInviteLink} /> : null}
 
       {/* V8-R-NO-008 / V8-R-NO-009. Rendered for a CANCELLED plan too: the
           night still happened, its photos are still inside their window, and

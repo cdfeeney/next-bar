@@ -21,7 +21,8 @@ export type PageState =
       kind: 'member';
       plan: NightOut;
       members: NightOutMember[];
-      board: NightOutBoardEntry[];
+      /** Null = the board READ failed (S-07 acceptance 8) — never drawn as an empty shortlist. */
+      board: NightOutBoardEntry[] | null;
       /**
        * V8-R-NO-005. Null when the read failed — which is NOT "voting is
        * closed", and is why this is not folded into a boolean.
