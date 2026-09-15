@@ -129,6 +129,8 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
   }
 
   await page.route('**/rest/v1/rpc/get_following**', fulfillJson(200, opts.following ?? []));
+  // S-06: /friends/consensus offers MUTUAL follows, so the fixture circle follows back.
+  await page.route('**/rest/v1/rpc/get_followers**', fulfillJson(200, opts.following ?? []));
   await page.route(
     '**/rest/v1/rpc/get_friend_ratings**',
     fulfillJson(200, opts.friendRatings ?? []),

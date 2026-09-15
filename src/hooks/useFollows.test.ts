@@ -472,7 +472,12 @@ describe('useFollows — followers + mutuals (B3c)', () => {
     expect(result.current.circle).toEqual([MAYA, DEV]);
   });
 
-  it('pre-0010 (followers RPC missing → null) keeps followers empty, mutuals empty', async () => {
+  it('a failed followers read keeps followers and mutuals empty AND reports the circle as failed, not ready', async () => {
+    // S-06 round-1 panel (Fable + Codex HIGH): the create form now invites
+    // MUTUALS, and mutuals are `following ∩ followers`. A null followers read
+    // used to leave `circleFailed` false and `circleReady` true — so the form
+    // enabled its CTA over an empty guest list with nothing on screen saying
+    // why. The friends list is unknown until BOTH halves have answered.
     fetchFollowsMock.mockResolvedValue([MAYA]);
     fetchFollowersMock.mockResolvedValue(null);
 
@@ -481,6 +486,8 @@ describe('useFollows — followers + mutuals (B3c)', () => {
 
     expect(result.current.followers).toEqual([]);
     expect(result.current.mutuals).toEqual([]);
+    expect(result.current.circleFailed).toBe(true);
+    expect(result.current.circleReady).toBe(false);
   });
 
   it('followers and mutuals are [] in local mode', async () => {

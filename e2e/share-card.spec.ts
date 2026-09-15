@@ -67,13 +67,10 @@ test.describe('Shareable pick cards', () => {
     expect(response?.status()).toBe(404);
   });
 
-  test('the top Group Favorite offers the share button (UX-B: vote flow deleted)', async ({ page }) => {
-    await page.goto('/friends/consensus');
-    await expect(page.getByText(/Group Favorites/i)).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: /Share the pick/i }),
-    ).toBeVisible();
-  });
+  // S-06: signed out, /friends/consensus is /auth, so the demo-curator Group
+  // Favorites no longer render here. The share moment on the top pick is
+  // asserted signed in by night-out.spec.ts ("Group Favorites are offered
+  // first ... the top pick is shareable").
 });
 
 /**

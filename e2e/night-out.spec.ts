@@ -2800,6 +2800,9 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       expect(geometry!.overlaps, geometry!.overlaps.join('\n')).toEqual([]);
       expect(geometry!.height).toBeGreaterThanOrEqual(44);
       expect(geometry!.width).toBeLessThanOrEqual(geometry!.vw);
+      // The tappable control itself, not only its wrapper (round-1 Fable MEDIUM).
+      const input = await page.locator('#night-out-when').boundingBox();
+      expect(input!.height).toBeGreaterThanOrEqual(44);
     });
 
     test('3: a name and two friends make the CTA read “Create the night out · 2 invited”', async ({
@@ -2918,6 +2921,73 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       expect(createCalls).toBe(1);
       expect(invites, 'no plan, so nobody to invite').toBe(0);
       expect(suggests, 'no plan, so nothing to suggest').toBe(0);
+    });
+
+    test('6b: one named submission carries the title, both invitees and the shortlist, then opens the plan', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      await openDrawnForm(page, context, baseURL);
+      await stubOwnerRpcs(page);
+      const creates: unknown[] = [];
+      const invited: string[] = [];
+      const suggested: string[] = [];
+      await page.route('**/rest/v1/rpc/create_night_out*', async (route) => {
+        creates.push(route.request().postDataJSON());
+        await fulfillJson(200, PLAN_ID)(route);
+      });
+      await page.route('**/rest/v1/rpc/invite_one_to_night_out*', async (route) => {
+        const body = route.request().postDataJSON() as { p_night_out: string; p_user: string; p_group: string | null };
+        expect(body.p_night_out).toBe(PLAN_ID);
+        expect(body.p_group).toBeNull();
+        invited.push(body.p_user);
+        await fulfillJson(200, true)(route);
+      });
+      await page.route('**/rest/v1/rpc/suggest_night_out_bar*', async (route) => {
+        const body = route.request().postDataJSON() as { p_night_out: string; p_bar: string };
+        expect(body.p_night_out).toBe(PLAN_ID);
+        suggested.push(body.p_bar);
+        await fulfillJson(200, true)(route);
+      });
+      await page.route('**/rest/v1/rpc/get_my_night_outs*', fulfillJson(200, []));
+      await page.getByLabel('Name the night').fill('Sam’s birthday');
+      await page.getByLabel('Add a bar to the shortlist').fill('attaboy');
+      await page.getByRole('button', { name: /^Add Attaboy to the shortlist/ }).click();
+      await page.getByTestId('create-night-out').click();
+      await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
+      expect(creates).toEqual([
+        { p_night: '2026-07-24', p_title: 'Sam’s birthday', p_idempotency_key: expect.any(String) },
+      ]);
+      expect(invited.sort()).toEqual([FRIEND_ID, ALEX_ID].sort());
+      expect(suggested).toEqual(['attaboy']);
+    });
+
+    test('8: a failed followers read holds the CTA and says the circle could not load (round-1 HIGH)', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+      await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
+      await context.addCookies([
+        { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+      ]);
+      await stubNightOutRest(page);
+      await stubSocialShellRest(page);
+      for (const rpc of ['get_my_night_outs', 'get_circle_rsvps', 'get_circle_suggestions', 'get_circle_vibe_votes']) {
+        await page.route(`**/rest/v1/rpc/${rpc}*`, fulfillJson(200, []));
+      }
+      await page.route('**/auth/v1/**', fulfillJson(200, {}));
+      await page.route('**/rest/v1/rpc/get_following*', fulfillJson(200, [SAM, ALEX]));
+      await page.route('**/rest/v1/rpc/get_followers*', fulfillJson(500, { message: 'boom' }));
+      await page.goto('/friends/consensus');
+      await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
+      await expect(page.getByText(/Couldn.t load your circle/)).toBeVisible();
+      await expect(page.getByTestId('create-night-out')).toBeDisabled();
+      // Nobody is offered, and nobody is counted.
+      await expect(page.getByRole('button', { name: /^Sam Ruiz/ })).toHaveCount(0);
+      await expect(page.getByTestId('create-night-out')).toHaveText('Create the night out');
     });
 
     test('7: signed out, the screen is /auth', async ({ page }) => {

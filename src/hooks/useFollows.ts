@@ -375,15 +375,18 @@ export function useFollows(): UseFollowsReturn {
       }
 
       setLoading(false);
-      setFetchFailed(server === null);
+      // BOTH halves, not just the following read (S-06 round-1 panel, Fable +
+      // Codex HIGH). `mutuals` is following ∩ followers, and the create form
+      // invites mutuals — so a failed followers read left `circleReady` true
+      // over an EMPTY guest list with nothing on screen saying why: the exact
+      // "real plan with no guests, one error away" defect, on the other half.
+      setFetchFailed(server === null || followerList === null);
 
       // null = fetch FAILED (not "zero friends") — keep prior state rather
       // than blanking a circle on a transient failure. Never fall back to
       // the demo seed here: demo handles aren't real accounts.
-      if (server !== null) {
-        setCircle(server);
-        setReadyGeneration(fetchGeneration);
-      }
+      if (server !== null) setCircle(server);
+      if (server !== null && followerList !== null) setReadyGeneration(fetchGeneration);
       // Pre-0008 the outgoing RPC doesn't exist yet → null → keep [] (no
       // requests can exist before the migration lands either).
       if (outgoing !== null) setRequested(outgoing);

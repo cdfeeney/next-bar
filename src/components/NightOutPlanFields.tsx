@@ -466,13 +466,13 @@ export function useNightOutPlanFields({
             was the datetime-local control's own date and time halves. */}
         <div
           data-testid="when-field"
-          className="flex min-h-[44px] w-full items-center gap-2 rounded-2xl border border-border bg-surface px-4 py-2 text-text"
+          className="flex min-h-[44px] w-full items-center gap-2 rounded-2xl border border-border bg-surface px-4 py-1 text-text"
         >
           <span className="shrink-0">Tonight,</span>
           <input
             id="night-out-when"
             type="time"
-            className="min-h-[36px] min-w-0 flex-1 bg-transparent text-text touch-manipulation"
+            className="min-h-[44px] min-w-0 flex-1 bg-transparent text-text touch-manipulation"
             value={startEdit ?? DEFAULT_START_TIME}
             disabled={disabled}
             onChange={(e) => setStartEdit(e.target.value)}

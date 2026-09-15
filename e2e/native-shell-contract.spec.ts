@@ -30,7 +30,8 @@ const SECONDARY_ROUTES = [
   '/discover',
   '/lists',
   '/tried',
-  '/friends/consensus',
+  // '/friends/consensus' is /auth signed out since S-06 (already listed below);
+  // the signed-in create form's width contract is night-out.spec.ts V9-02.
   '/u/claire',
   '/auth',
   '/join',
