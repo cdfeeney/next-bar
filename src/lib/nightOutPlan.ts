@@ -83,6 +83,42 @@ export function setNightOutArea(
   return setOne(supabase, 'set_night_out_area', nightOutId, { p_area: area });
 }
 
+/** S-06b. `cover` is `template:<key>` (see nightOutCovers.ts), or null to clear it. */
+export function setNightOutCover(
+  supabase: SupabaseClient,
+  nightOutId: string,
+  cover: string | null,
+): Promise<boolean> {
+  return setOne(supabase, 'set_night_out_cover', nightOutId, { p_cover: cover });
+}
+
+/**
+ * S-06b. The covers of the plans the caller can see (owner or member, via the
+ * `night_outs_select_member` policy), keyed by plan id. Null = the READ failed —
+ * distinct from a plan with no cover, which maps to null inside the record.
+ */
+export async function fetchNightOutCovers(
+  supabase: SupabaseClient,
+  nightOutIds: readonly string[],
+): Promise<Record<string, string | null> | null> {
+  const ids = nightOutIds.filter((id) => UUID_RE.test(id));
+  if (ids.length === 0) return {};
+  try {
+    const { data, error } = await supabase
+      .from('night_outs')
+      .select('id, cover')
+      .in('id', ids);
+    if (error || !Array.isArray(data)) return null;
+    const out: Record<string, string | null> = {};
+    for (const row of data as Array<{ id: string; cover: string | null }>) {
+      out[row.id] = typeof row.cover === 'string' ? row.cover : null;
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 /** V8-R-NO-005. `closesAt` is an ISO instant, or null for "No deadline". */
 export function setNightOutVotingDeadline(
   supabase: SupabaseClient,

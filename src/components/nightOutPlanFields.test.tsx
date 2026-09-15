@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 const setNightOutStart = vi.fn();
 const setNightOutArea = vi.fn();
 const setNightOutVotingDeadline = vi.fn();
+const setNightOutCover = vi.fn();
 let presence: { barId: string | null } | null = null;
 /** Whether that read has RETURNED — the distinction round 9 added. */
 let presenceSettled = true;
@@ -31,6 +32,7 @@ vi.mock('@/lib/nightOutPlan', async (importOriginal) => ({
   setNightOutStart: (...a: unknown[]) => setNightOutStart(...a),
   setNightOutArea: (...a: unknown[]) => setNightOutArea(...a),
   setNightOutVotingDeadline: (...a: unknown[]) => setNightOutVotingDeadline(...a),
+  setNightOutCover: (...a: unknown[]) => setNightOutCover(...a),
 }));
 vi.mock('@/lib/catalog', () => ({
   getBarById: (id: string) =>
@@ -162,6 +164,7 @@ beforeEach(() => {
   setNightOutStart.mockResolvedValue(true);
   setNightOutArea.mockResolvedValue(true);
   setNightOutVotingDeadline.mockResolvedValue(true);
+  setNightOutCover.mockResolvedValue(true);
 });
 
 describe('the When row (V8-R-NO-002)', () => {
@@ -624,6 +627,48 @@ describe('the drafts belong to an account', () => {
     expect(setNightOutStart).not.toHaveBeenCalled();
     expect(setNightOutArea).not.toHaveBeenCalled();
     expect(setNightOutVotingDeadline).not.toHaveBeenCalled();
+  });
+});
+
+describe('the cover tile (S-06b)', () => {
+  test('no cover means no write — NULL is the column’s own default', async () => {
+    render(<Harness />);
+    expect(screen.getByTestId('cover-tile').textContent).toMatch(/add a cover photo/i);
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('none'));
+    expect(setNightOutCover).not.toHaveBeenCalled();
+  });
+
+  test('a picked template fills the tile and is written to the plan once it exists', async () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByTestId('cover-tile'));
+    expect(screen.getByTestId('cover-picker')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('cover-template-rooftop'));
+    expect(screen.queryByTestId('cover-picker')).toBeNull();
+    expect(screen.getByTestId('cover-tile').getAttribute('data-cover')).toBe('template:rooftop');
+    expect(screen.getByTestId('cover-tile-image').textContent).toMatch(/rooftop/i);
+
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(setNightOutCover).toHaveBeenCalledTimes(1));
+    expect(setNightOutCover).toHaveBeenCalledWith(supabase, PLAN, 'template:rooftop');
+  });
+
+  test('a refused cover is named, and the plan is still real', async () => {
+    setNightOutCover.mockResolvedValue(false);
+    render(<Harness />);
+    fireEvent.click(screen.getByTestId('cover-tile'));
+    fireEvent.click(screen.getByTestId('cover-template-last-call'));
+    screen.getByTestId('create').click();
+    await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('the cover'));
+  });
+
+  test('an in-place identity change drops the cover with the other drafts', () => {
+    const view = render(<Harness identity="user-a" />);
+    fireEvent.click(screen.getByTestId('cover-tile'));
+    fireEvent.click(screen.getByTestId('cover-template-birthday'));
+    expect(screen.getByTestId('cover-tile').getAttribute('data-cover')).toBe('template:birthday');
+    view.rerender(<Harness identity="user-b" />);
+    expect(screen.getByTestId('cover-tile').getAttribute('data-cover')).toBe('');
   });
 });
 

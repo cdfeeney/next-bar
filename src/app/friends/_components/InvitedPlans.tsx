@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import PlanCover from '@/components/PlanCover';
 import {
   fetchNightOutInvitationNotifications,
   markInvitationNotificationRead,
@@ -151,6 +152,12 @@ export default function InvitedPlans({
               data-testid="group-invite-notification"
               className="rounded-3xl border border-border bg-surface p-4"
             >
+              {/* S-06b: the plan's cover, when it has one. */}
+              <PlanCover
+                nightOutId={invite.nightOutId}
+                className="mb-3 h-[96px] w-full rounded-2xl"
+                testId="invite-cover"
+              />
               <p className="text-[15px] font-semibold truncate">
                 You are invited to {invite.title ?? 'a night out'}
               </p>

@@ -201,6 +201,12 @@ async function stubNightOutRest(page: Page): Promise<void> {
     if (route.request().method() !== 'GET') return route.fallback();
     await fulfillJson(200, [])(route);
   });
+  // S-06b: PlanCover reads `night_outs.cover` under the member policy. No rows
+  // = no cover, which is how every pre-cover surface must keep rendering.
+  await page.route('**/rest/v1/night_outs?*', async route => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    await fulfillJson(200, [])(route);
+  });
 }
 
 /**
@@ -2988,6 +2994,132 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       // Nobody is offered, and nobody is counted.
       await expect(page.getByRole('button', { name: /^Sam Ruiz/ })).toHaveCount(0);
       await expect(page.getByTestId('create-night-out')).toHaveText('Create the night out');
+    });
+
+    /** S-06b — the cover: tile → picker → template → the created plan carries it → the board shows it. */
+    test('S-06b 2+4: the tile opens the picker, a template fills it, the plan carries it and the board header shows it', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      await openDrawnForm(page, context, baseURL);
+      await stubOwnerRpcs(page);
+      await page.route('**/rest/v1/rpc/create_night_out*', fulfillJson(200, PLAN_ID));
+      await page.route('**/rest/v1/rpc/invite_one_to_night_out*', fulfillJson(200, true));
+      await page.route('**/rest/v1/rpc/get_my_night_outs*', fulfillJson(200, []));
+      const coverWrites: unknown[] = [];
+      await page.route('**/rest/v1/rpc/set_night_out_cover*', async (route) => {
+        coverWrites.push(route.request().postDataJSON());
+        await fulfillJson(200, true)(route);
+      });
+      // What the board will read back once the plan exists.
+      await page.route('**/rest/v1/night_outs?*', async (route) => {
+        if (route.request().method() !== 'GET') return route.fallback();
+        await fulfillJson(200, [{ id: PLAN_ID, cover: 'template:rooftop' }])(route);
+      });
+
+      const tile = page.getByTestId('cover-tile');
+      await expect(tile).toContainText(/add a cover photo/i);
+      await tile.click();
+      const picker = page.getByTestId('cover-picker');
+      await expect(picker).toBeVisible();
+      await expect(picker.getByRole('button', { name: /cover$/ })).toHaveCount(6);
+      await picker.getByTestId('cover-template-rooftop').click();
+      await expect(picker).toHaveCount(0);
+      await expect(tile).toHaveAttribute('data-cover', 'template:rooftop');
+      await expect(page.getByTestId('cover-tile-image')).toContainText(/rooftop/i);
+      await expect(page.getByTestId('cover-tile-image')).toHaveAttribute('data-cover-state', 'ok');
+
+      await page.getByTestId('create-night-out').click();
+      await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
+      expect(coverWrites).toEqual([{ p_night_out: PLAN_ID, p_cover: 'template:rooftop' }]);
+
+      // The board header: cover on top, title still legible under it.
+      const boardCover = page.getByTestId('plan-cover');
+      await expect(boardCover).toBeVisible();
+      await expect(boardCover).toHaveAttribute('data-cover', 'rooftop');
+      await expect(boardCover).toHaveAttribute('data-cover-state', 'ok');
+      const title = page.getByRole('heading', { level: 1 });
+      await expect(title).toBeVisible();
+      expect((await title.boundingBox())!.y).toBeGreaterThan((await boardCover.boundingBox())!.y);
+    });
+
+    test('S-06b 3: a plan created without a cover writes none and renders as before on the board', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      await openDrawnForm(page, context, baseURL);
+      await stubOwnerRpcs(page);
+      await page.route('**/rest/v1/rpc/create_night_out*', fulfillJson(200, PLAN_ID));
+      await page.route('**/rest/v1/rpc/invite_one_to_night_out*', fulfillJson(200, true));
+      await page.route('**/rest/v1/rpc/get_my_night_outs*', fulfillJson(200, []));
+      let coverWrites = 0;
+      await page.route('**/rest/v1/rpc/set_night_out_cover*', async (route) => {
+        coverWrites += 1;
+        await fulfillJson(200, true)(route);
+      });
+      await page.route('**/rest/v1/night_outs?*', async (route) => {
+        if (route.request().method() !== 'GET') return route.fallback();
+        await fulfillJson(200, [{ id: PLAN_ID, cover: null }])(route);
+      });
+      await page.getByTestId('create-night-out').click();
+      await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+      await expect(page.getByTestId('plan-cover-state')).toHaveAttribute('data-plan-cover-state', 'none');
+      await expect(page.getByTestId('plan-cover')).toHaveCount(0);
+      expect(coverWrites, 'NULL is the default; no write for no cover').toBe(0);
+    });
+
+    test('S-06b 3+4 (invitation): the Plans card shows the cover only when the plan has one', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+      await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
+      await context.addCookies([
+        { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+      ]);
+      const WITH_COVER = '723e4567-e89b-42d3-a456-426614174000';
+      const NO_COVER = '823e4567-e89b-42d3-a456-426614174000';
+      const notification = (id: number, nightOutId: string, title: string) => ({
+        id,
+        night_out_id: nightOutId,
+        night: '2026-07-24',
+        title,
+        group_name: null,
+        invited_by: 'sam',
+        created_at: '2026-07-24T20:00:00.000Z',
+        read_at: null,
+      });
+      await stubNightOutRest(page);
+      await stubSocialShellRest(page);
+      for (const rpc of ['get_my_night_outs', 'get_circle_rsvps', 'get_circle_suggestions', 'get_circle_vibe_votes']) {
+        await page.route(`**/rest/v1/rpc/${rpc}*`, fulfillJson(200, []));
+      }
+      await page.route('**/auth/v1/**', fulfillJson(200, {}));
+      await page.route(
+        '**/rest/v1/rpc/get_my_night_out_invitation_notifications*',
+        fulfillJson(200, [notification(1, WITH_COVER, 'Birthday drinks'), notification(2, NO_COVER, 'Quiet one')]),
+      );
+      await page.route('**/rest/v1/night_outs?*', async (route) => {
+        if (route.request().method() !== 'GET') return route.fallback();
+        const url = route.request().url();
+        await fulfillJson(200, url.includes(WITH_COVER) ? [{ id: WITH_COVER, cover: 'template:birthday' }] : [{ id: NO_COVER, cover: null }])(route);
+      });
+      await page.goto('/friends');
+      const plans = page.getByRole('tab', { name: 'Plans' });
+      await expect(plans).toBeEnabled({ timeout: 15_000 });
+      await plans.click();
+      const cards = page.getByTestId('group-invite-notification');
+      await expect(cards).toHaveCount(2);
+      const withCover = cards.filter({ hasText: 'Birthday drinks' });
+      await expect(withCover.getByTestId('invite-cover')).toBeVisible();
+      await expect(withCover.getByTestId('invite-cover')).toHaveAttribute('data-cover', 'birthday');
+      const noCover = cards.filter({ hasText: 'Quiet one' });
+      await expect(noCover.getByTestId('invite-cover')).toHaveCount(0);
+      await expect(noCover.getByTestId('invite-cover-state')).toHaveAttribute('data-plan-cover-state', 'none');
     });
 
     test('7: signed out, the screen is /auth', async ({ page }) => {

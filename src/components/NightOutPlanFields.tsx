@@ -8,9 +8,12 @@ import { useMyPresenceRead } from '@/app/friends/_components/usePinnedHandles';
 import {
   remainingLabel,
   setNightOutArea,
+  setNightOutCover,
   setNightOutStart,
   setNightOutVotingDeadline,
 } from '@/lib/nightOutPlan';
+import CoverImage from './CoverImage';
+import CoverPicker from './CoverPicker';
 
 /**
  * The three editable rows of the Start a Night Out form — When, Area and
@@ -75,6 +78,8 @@ export type NightOutPlanFields = {
    * plan's identity, not an edit to a plan that already exists.
    */
   title: string;
+  /** S-06b: the chosen cover's stored value (`template:<key>`), or null. */
+  cover: string | null;
   /**
    * Apply the three edits to a plan that now exists, and RETURN the ones the
    * server declined. Never throws and never reports a failure as a success.
@@ -251,6 +256,14 @@ export function useNightOutPlanFields({
   /** S-06: "Name the night" — `night_outs.title`, sent with the one create call. */
   const [title, setTitle] = useState('');
   /**
+   * S-06b: the cover, as its stored value (`template:<key>`) or null. Applied
+   * to the plan right after it exists, like the three rows — the create RPC
+   * has no cover argument and the column is nullable, so a refused cover is a
+   * plan without one, reported as "the cover" like any other refused edit.
+   */
+  const [cover, setCover] = useState<string | null>(null);
+  const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+  /**
    * NO-003: "reuses the area already known from Tonight." That is the
    * neighbourhood of the bar this account pinned tonight — the one area the app
    * already knows — and it is a SEED, not a lock: the field is editable and
@@ -272,6 +285,8 @@ export function useNightOutPlanFields({
   if (identity !== draftOwner) {
     setDraftOwner(identity);
     setTitle('');
+    setCover(null);
+    setCoverPickerOpen(false);
     setStartEdit(null);
     setAreaEdit(null);
     setDeadlineMode('none');
@@ -323,8 +338,8 @@ export function useNightOutPlanFields({
    * and still skipped writing it. Each write reads this instead, so what is
    * sent is what the form shows when the write goes out.
    */
-  const live = useRef({ startEdit, start, startIso, area, areaEdit, presenceSettled, deadlineIso });
-  live.current = { startEdit, start, startIso, area, areaEdit, presenceSettled, deadlineIso };
+  const live = useRef({ startEdit, start, startIso, area, areaEdit, presenceSettled, deadlineIso, cover });
+  live.current = { startEdit, start, startIso, area, areaEdit, presenceSettled, deadlineIso, cover };
 
   const apply = useCallback(
     async (
@@ -415,6 +430,12 @@ export function useNightOutPlanFields({
           failed.push('the voting deadline');
         }
       }
+      // S-06b: NULL is the column's default, so "no cover" needs no write.
+      const coverNow = live.current.cover;
+      if (coverNow !== null) {
+        if (stopped()) failed.push('the cover');
+        else if (!(await setNightOutCover(supabase, planId, coverNow))) failed.push('the cover');
+      }
       return { refused: failed, nightMoved };
     },
     // Every field is read through `live` and the guest list now arrives as an
@@ -425,17 +446,40 @@ export function useNightOutPlanFields({
 
   const fields = (
     <div className="mt-4 space-y-5 text-left" data-testid="night-out-plan-fields">
-      {/* S-06: identity first (README §6). The cover tile is EMPTY and inert
-          here — S-06b brings the picker; a tile that opened nothing would be a
-          dead end, so it is not a button yet. */}
-      <div
+      {/* S-06 / S-06b: identity first (README §6). The tile opens the cover
+          sheet; filled, it shows the picture with the name on a chip. */}
+      <button
+        type="button"
         data-testid="cover-tile"
-        className="flex h-[150px] w-full items-center justify-center rounded-3xl border border-dashed border-[#3a3a3a] bg-surface"
+        data-cover={cover ?? ''}
+        aria-label={cover === null ? 'Add a cover photo' : 'Change the cover photo'}
+        disabled={disabled}
+        onClick={() => setCoverPickerOpen(true)}
+        className={[
+          'relative block h-[150px] w-full overflow-hidden rounded-3xl text-left touch-manipulation',
+          cover === null
+            ? 'flex items-center justify-center border border-dashed border-[#3a3a3a] bg-surface'
+            : 'border border-border bg-surface',
+        ].join(' ')}
       >
-        <span className="font-label text-[11px] font-bold uppercase tracking-[0.16em] text-muted">
-          + Add a cover photo
-        </span>
-      </div>
+        {cover === null ? (
+          <span className="font-label text-[11px] font-bold uppercase tracking-[0.16em] text-muted">
+            + Add a cover photo
+          </span>
+        ) : (
+          <CoverImage cover={cover} className="h-full w-full" testId="cover-tile-image" />
+        )}
+      </button>
+      {coverPickerOpen ? (
+        <CoverPicker
+          value={cover}
+          onPick={(next) => {
+            setCover(next);
+            setCoverPickerOpen(false);
+          }}
+          onClose={() => setCoverPickerOpen(false)}
+        />
+      ) : null}
 
       <div>
         <input
@@ -553,5 +597,5 @@ export function useNightOutPlanFields({
     </div>
   );
 
-  return { fields, apply, title: title.trim() };
+  return { fields, apply, title: title.trim(), cover };
 }

@@ -10,6 +10,7 @@ import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/l
 import { forgetStartedNightOut } from '@/components/StartNightOutButton';
 import { remainingLabel } from '@/lib/nightOutPlan';
 import NightOutMedia from './NightOutMedia';
+import PlanCover from '@/components/PlanCover';
 import InvitePreview from './InvitePreview';
 import {
   fetchAnonRsvpCounts,
@@ -952,6 +953,8 @@ export default function NightOutPage({
     // reserves this.
     <main className="min-h-screen px-6 py-8 pb-28">
       <header className="text-center">
+        {/* S-06b: the cover, when the plan has one; nothing otherwise. */}
+        <PlanCover nightOutId={plan.id} className="mb-4 h-[150px] w-full rounded-3xl" />
         <h1 className="text-2xl font-semibold">
           {plan.title ?? 'Night out'}
         </h1>
