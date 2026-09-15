@@ -133,7 +133,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     readFails = true;
     const user = userEvent.setup();
     render(<StartNightOutButton />);
-    const button = screen.getByRole('button');
+    const button = screen.getByRole('button', { name: /create the night out|creating/i });
 
     await user.click(button);
     await waitFor(() => expect(createCalls).toBe(1));
@@ -153,7 +153,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     createResult = null;
     const user = userEvent.setup();
     render(<StartNightOutButton />);
-    const button = screen.getByRole('button') as HTMLButtonElement;
+    const button = screen.getByRole('button', { name: /create the night out|creating/i }) as HTMLButtonElement;
 
     await user.click(button);
     await waitFor(() => expect(createCalls).toBe(1));
@@ -164,7 +164,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
   test('the happy path routes to the new plan', async () => {
     const user = userEvent.setup();
     render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
   });
 
@@ -172,7 +172,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     readFails = true;
     const user = userEvent.setup();
     const first = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
     expect(await screen.findByText(/created/i)).toBeTruthy();
 
@@ -196,7 +196,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
   test('a plan that was opened successfully does NOT come back as unfinished', async () => {
     const user = userEvent.setup();
     const first = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
     // The PLAN PAGE spends the record now, not the push (round 9, Codex): a
     // fire-and-forget navigation that never commits must not drop it. This line
@@ -211,7 +211,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
       'an opened plan was re-offered as unfinished',
     ).toBeNull();
     expect(
-      (screen.getByRole('button') as HTMLButtonElement).disabled,
+      (screen.getByRole('button', { name: /create the night out|creating/i }) as HTMLButtonElement).disabled,
       'Start stayed disabled after the plan was successfully opened',
     ).toBe(false);
   });
@@ -258,7 +258,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     readFails = true;
     const user = userEvent.setup();
     const first = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
     expect(await screen.findByText(/created/i)).toBeTruthy();
     first.unmount();
@@ -290,7 +290,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     readFails = true;
     const user = userEvent.setup();
     const first = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
     first.unmount();
 
@@ -318,7 +318,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     readFails = true;
     const user = userEvent.setup();
     const a = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
     a.unmount();
 
@@ -348,7 +348,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     readFails = true;
     const user = userEvent.setup();
     const a = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
     a.unmount();
 
@@ -383,7 +383,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     readFails = true;
     const user = userEvent.setup();
     const view = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
     expect(await screen.findByText(/created/i)).toBeTruthy();
 
@@ -425,7 +425,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
 
     const user = userEvent.setup();
     const view = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
 
     // A's session blips out and back — same account, create still in flight.
@@ -436,7 +436,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
 
     // While a create is in flight the control reads "Starting…", so select the
     // control itself rather than the idle label.
-    const start = screen.getByRole('button') as HTMLButtonElement;
+    const start = screen.getByRole('button', { name: /create the night out|creating/i }) as HTMLButtonElement;
     expect(
       start.disabled,
       'Start was re-armed while the account’s own create was still in flight',
@@ -464,7 +464,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
 
     const user = userEvent.setup();
     const view = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
 
     // A different account takes over the tab mid-create.
@@ -507,14 +507,14 @@ describe('StartNightOutButton — a created plan is never lost', () => {
 
     const user = userEvent.setup();
     const view = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
 
     // Navigate away while create_night_out is still in flight, then come back.
     view.unmount();
     render(<StartNightOutButton />);
 
-    const start = screen.getByRole('button') as HTMLButtonElement;
+    const start = screen.getByRole('button', { name: /create the night out|creating/i }) as HTMLButtonElement;
     expect(
       start.disabled,
       'Start was armed while this account already had a create in flight',
@@ -561,7 +561,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
 
     const user = userEvent.setup();
     const view = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
 
     view.unmount();
@@ -590,7 +590,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
 
     const user = userEvent.setup();
     render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -608,7 +608,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     createResult = null;
     const user = userEvent.setup();
     const view = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     expect(await screen.findByText(/Couldn't start it/i)).toBeTruthy();
 
     currentUser = USER_B;
@@ -775,7 +775,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     readFails = true;
     const user = userEvent.setup();
     const first = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
     await screen.findByRole('button', { name: /open it/i });
     first.unmount();
@@ -809,7 +809,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     // dispatches the `storage` event the browser fires in every OTHER tab.
     render(<StartNightOutButton />);
     expect(
-      (screen.getByRole('button') as HTMLButtonElement).disabled,
+      (screen.getByRole('button', { name: /create the night out|creating/i }) as HTMLButtonElement).disabled,
       'Start began disabled with nothing parked',
     ).toBe(false);
 
@@ -1046,7 +1046,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     readFails = true;
     const user = userEvent.setup();
     const first = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
     first.unmount();
 
@@ -1058,7 +1058,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
       "yesterday's unopened plan was re-offered as today's",
     ).toBeNull();
     expect(
-      (screen.getByRole('button') as HTMLButtonElement).disabled,
+      (screen.getByRole('button', { name: /create the night out|creating/i }) as HTMLButtonElement).disabled,
       'Start stayed disabled for a plan from a previous night',
     ).toBe(false);
   });
@@ -1067,7 +1067,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
     readFails = true;
     const user = userEvent.setup();
     render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
 
     // The plan is genuinely gone, so the retry cannot succeed.
@@ -1087,7 +1087,7 @@ describe('StartNightOutButton — a created plan is never lost', () => {
 
     const user = userEvent.setup();
     const view = render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
 
     // The user navigates away while the follow-up read is still in flight.
@@ -1109,7 +1109,7 @@ describe('StartNightOutButton — account invitations (criterion 2, invited-acco
   test('invites exactly the selected accounts, after the plan exists', async () => {
     const user = userEvent.setup();
     render(<StartNightOutButton inviteeIds={[FRIEND_A, FRIEND_B]} />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
     expect(invited).toEqual([
       [PLAN_ID, FRIEND_A],
@@ -1126,7 +1126,7 @@ describe('StartNightOutButton — account invitations (criterion 2, invited-acco
     render(
       <StartNightOutButton inviteeIds={['you', 'devbar', FRIEND_A, 'priya']} />,
     );
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
     expect(invited, 'a non-account id was sent to the invite RPC').toEqual([
       [PLAN_ID, FRIEND_A],
@@ -1154,7 +1154,7 @@ describe('StartNightOutButton — account invitations (criterion 2, invited-acco
     inviteFails = true;
     const user = userEvent.setup();
     render(<StartNightOutButton inviteeIds={[FRIEND_A, FRIEND_B]} />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
 
     // The owner is told, on a screen no route change has taken away.
     expect(await screen.findByText(/2 invites didn't send/)).toBeTruthy();
@@ -1178,7 +1178,7 @@ describe('StartNightOutButton — account invitations (criterion 2, invited-acco
     inviteFails = true;
     const user = userEvent.setup();
     render(<StartNightOutButton inviteeIds={[FRIEND_A, FRIEND_B]} />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     expect(await screen.findByText(/2 invites didn't send/)).toBeTruthy();
 
     // Another tab of the same origin creates or opens a night out. The store is
@@ -1206,7 +1206,7 @@ describe('StartNightOutButton — account invitations (criterion 2, invited-acco
   test('creating with nobody selected invites nobody and still works', async () => {
     const user = userEvent.setup();
     render(<StartNightOutButton />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(pushed).toEqual(['/night-out/tok-1']));
     expect(invited).toEqual([]);
   });
@@ -1215,7 +1215,7 @@ describe('StartNightOutButton — account invitations (criterion 2, invited-acco
     createResult = null;
     const user = userEvent.setup();
     render(<StartNightOutButton inviteeIds={[FRIEND_A]} />);
-    await user.click(screen.getByRole('button'));
+    await user.click(screen.getByRole('button', { name: /create the night out|creating/i }));
     await waitFor(() => expect(createCalls).toBe(1));
     expect(invited).toEqual([]);
   });
