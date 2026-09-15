@@ -23,9 +23,13 @@ export default function CoverImage({
   showLabel?: boolean;
   testId?: string;
 }): JSX.Element | null {
-  const [failed, setFailed] = useState(false);
+  // Keyed on the VALUE that failed, not a bare boolean (round-1 panel, Codex
+  // MEDIUM): the same instance is reused when the owner picks another
+  // template, and a boolean would keep the new picture gated off forever.
+  const [failedFor, setFailedFor] = useState<string | null>(null);
   const template = coverTemplateOf(cover);
   if (template === null) return null;
+  const failed = failedFor === cover;
   return (
     <div
       data-testid={testId}
@@ -41,7 +45,7 @@ export default function CoverImage({
           src={template.src}
           alt={`${template.label} cover`}
           className="absolute inset-0 h-full w-full object-cover"
-          onError={() => setFailed(true)}
+          onError={() => setFailedFor(cover ?? null)}
         />
       ) : null}
       {showLabel ? (

@@ -38,6 +38,7 @@ import { getBrowserSupabase } from '@/lib/supabase/client';
 import { nycNightKey } from '@/lib/nightKey';
 import { getMyNightOuts, respondNightOut, type MyNightOut } from '@/lib/nightOuts.server';
 import Avatar from '@/components/Avatar';
+import PlanCover from '@/components/PlanCover';
 import { formatNightDate } from '@/lib/nightOutMedia';
 
 function nightLabel(plan: MyNightOut): string {
@@ -303,6 +304,13 @@ export default function PlanInvites({
                 data-testid="invite-pending"
                 className="bg-surface border border-border rounded-3xl p-4"
               >
+                {/* S-06b: the plan's cover, when it has one — this is the
+                    invitation card people actually see (round-1 Codex HIGH). */}
+                <PlanCover
+                  nightOutId={plan.nightOutId}
+                  className="mb-3 h-[96px] w-full rounded-2xl"
+                  testId="invite-cover"
+                />
                 <div className="flex items-center gap-3">
                   <Avatar initials={initialsOf(host)} seed={plan.ownerHandle ?? plan.nightOutId} size="sm" />
                   <div className="min-w-0 flex-1">

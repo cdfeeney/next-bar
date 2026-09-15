@@ -27,6 +27,15 @@ alter table public.night_outs
 comment on column public.night_outs.cover is
   'S-06b. NULL = no cover. `template:<key>` = a bundled cover under public/covers/. Reserved for a later, separately authorised migration: `media:<uuid>` (a library upload, once the media boundary knows about covers).';
 
+-- 0047 revoked the table-level SELECT on night_outs and re-granted an explicit
+-- column list, precisely so that a new column stays unreadable until someone
+-- grants it on purpose. This is that on-purpose grant (round-1 panel, Fable
+-- HIGH): without it every client read of `cover` is refused with 42501 before
+-- RLS is even consulted, and the write side — a SECURITY DEFINER function —
+-- would keep succeeding, so a chosen cover would be stored and never shown.
+-- RLS (night_outs_select_member) still scopes the read to owner and members.
+grant select (cover) on table public.night_outs to authenticated;
+
 -- set_night_out_cover — the owner picks (or clears) the cover.
 --
 -- Same contract as set_night_out_area (0068): owner only, while the plan is

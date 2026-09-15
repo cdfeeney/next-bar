@@ -3108,10 +3108,44 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
         const url = route.request().url();
         await fulfillJson(200, url.includes(WITH_COVER) ? [{ id: WITH_COVER, cover: 'template:birthday' }] : [{ id: NO_COVER, cover: null }])(route);
       });
+      // The card people actually see (round-1 Codex HIGH): a membership-backed
+      // pending invitation renders through PlanInvites, and PlansSection hides
+      // the matching notification. So a THIRD plan comes through get_my_night_outs.
+      const PENDING = '923e4567-e89b-42d3-a456-426614174000';
+      await page.route('**/rest/v1/rpc/get_my_night_outs*', fulfillJson(200, [{
+        night_out_id: PENDING,
+        night: '2026-07-24',
+        title: 'Rooftop first',
+        status: 'open',
+        owner_handle: 'sam',
+        owner_display_name: 'Sam Ruiz',
+        my_status: 'pending',
+        responded_at: null,
+        accepted_count: 1,
+        share_token: null,
+        plan_updated: false,
+        is_past: false,
+        my_revision: 1,
+      }]));
+      await page.route('**/rest/v1/night_outs?*', async (route) => {
+        if (route.request().method() !== 'GET') return route.fallback();
+        const url = route.request().url();
+        const body = url.includes(WITH_COVER)
+          ? [{ id: WITH_COVER, cover: 'template:birthday' }]
+          : url.includes(PENDING)
+            ? [{ id: PENDING, cover: 'template:rooftop' }]
+            : [{ id: NO_COVER, cover: null }];
+        await fulfillJson(200, body)(route);
+      });
       await page.goto('/friends');
       const plans = page.getByRole('tab', { name: 'Plans' });
       await expect(plans).toBeEnabled({ timeout: 15_000 });
       await plans.click();
+      const pending = page.getByTestId('invite-pending');
+      await expect(pending).toHaveCount(1);
+      await expect(pending.getByTestId('invite-cover')).toBeVisible();
+      await expect(pending.getByTestId('invite-cover')).toHaveAttribute('data-cover', 'rooftop');
+      await expect(pending).toContainText('Rooftop first');
       const cards = page.getByTestId('group-invite-notification');
       await expect(cards).toHaveCount(2);
       const withCover = cards.filter({ hasText: 'Birthday drinks' });
