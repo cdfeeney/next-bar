@@ -585,7 +585,8 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     await expect(
       page.getByRole('heading', { name: /birthday crawl/i }),
     ).toBeVisible();
-    await expect(page.getByText(/who's in/i)).toBeVisible();
+    // S-07: the member board is headed GOING (README §7); key on the section, not the words.
+    await expect(page.getByTestId('member-board')).toContainText(/going/i);
     await expect(page.getByText('Conor', { exact: true })).toBeVisible();
     await expect(page.getByText(/2 votes/i)).toBeVisible();
 
