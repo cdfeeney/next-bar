@@ -21,4 +21,12 @@ Wave 2 (plan flows: create form + cover, board, recap, follower lists) and wave 
 - **2026-09-13 — cover photo is in scope (wave 2, S-06b):** bundled template covers plus "choose from library"; one
   additive `night_outs.cover` column on staging.
 - **2026-09-13 — pushed screens are routes** (`/friends/people`, `/friends/tonight`), not in-page sheets.
+- **2026-09-14 — accepted, updated and expired invitations STAY under INVITED on Plans.** README §2 shows pending
+  invitations only; the owner wants to see accepted plans there too. The current `PlanInvites` behaviour is the
+  spec — no change.
+- **2026-09-14 — the third presence audience is labelled "Custom"** (was "Only some people"), matching the story
+  audience sheet. Landed in S-05b.
+- **2026-09-14 — create form (S-06):** WHO'S GOING lists mutual follows only (the pin sequence's Custom list); the
+  WHEN row is a time on tonight, never a date (the plan's night is the only night the server accepts); signed out,
+  `/friends/consensus` is `/auth`, which retires the demo-curator consensus page as a surface.
 - The README's "no group thread screen" gap is wrong: `friends/_components/GroupThread.tsx` exists; unread badges route there.

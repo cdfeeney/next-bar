@@ -53,6 +53,8 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/hooks/useFollows', () => ({
   useFollows: () => ({
     ...follows,
+    // S-06: the page reads mutuals; this harness's circle IS its mutuals.
+    mutuals: follows.circle,
     requested: [],
     followers: [],
     friends: [],

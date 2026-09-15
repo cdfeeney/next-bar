@@ -116,6 +116,8 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
     await page.route('**/rest/v1/ratings**', fulfillJson(200, opts.youRatings));
   }
   await page.route('**/rest/v1/rpc/get_following**', fulfillJson(200, [FRIEND]));
+  // S-06: /friends/consensus offers MUTUAL follows, so the friend follows back.
+  await page.route('**/rest/v1/rpc/get_followers**', fulfillJson(200, [FRIEND]));
   await page.route(
     '**/rest/v1/rpc/get_friend_ratings**',
     fulfillJson(200, opts.friendRatings ?? []),

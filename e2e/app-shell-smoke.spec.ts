@@ -140,11 +140,9 @@ test.describe('App-shell smoke', () => {
     await expectNoConsoleErrors(page, '/friends/people');
   });
 
-  test('/friends/consensus renders the group picker', async ({ page }) => {
+  test('/friends/consensus signed out is /auth, not a form that cannot submit', async ({ page }) => {
     await page.goto('/friends/consensus');
-    await expect(
-      page.getByRole('heading', { name: /Plan Night Out/i }),
-    ).toBeVisible();
+    await expect(page).toHaveURL(/\/auth(\?|$)/);
     await expectNoConsoleErrors(page, '/friends/consensus');
   });
 

@@ -57,6 +57,7 @@ vi.mock('@/hooks/useAuth', () => ({
 }));
 
 vi.mock('@/lib/nightKey', () => ({
+  NIGHT_ROLLOVER_HOUR: 4,
   nycNightKey: () => nightKey,
 }));
 

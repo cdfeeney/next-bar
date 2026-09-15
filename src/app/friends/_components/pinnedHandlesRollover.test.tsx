@@ -33,6 +33,7 @@ let tick: (() => void) | null = null;
 let keyAt: (at: Date) => string = () => nightKey;
 
 vi.mock('@/lib/nightKey', () => ({
+  NIGHT_ROLLOVER_HOUR: 4,
   nycNightKey: (at?: Date) => (at === undefined ? nightKey : keyAt(at)),
 }));
 

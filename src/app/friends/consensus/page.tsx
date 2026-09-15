@@ -2,11 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import ShareButton from '@/components/ShareButton';
+import { useRouter } from 'next/navigation';
 import TonightSuggestions from '@/components/TonightSuggestions';
 import { deriveInviteeIds, mergeSelection } from '@/lib/inviteeSelection';
 import StartNightOutButton from '@/components/StartNightOutButton';
-import { buildPickPath, sharePickText } from '@/lib/share';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
 import { useRatings } from '@/hooks/useRatings';
@@ -32,25 +31,12 @@ import {
 } from '@/lib/demo';
 
 import RecipientPicker, { PersonChip } from './RecipientPicker';
+import { ConsensusCard, EmptyState, type RankedEntry } from './ConsensusCard';
+import ShortlistSection, { SHORTLIST_CAP } from './ShortlistSection';
 import type { GroupMember } from '@/lib/groups.server';
 
 const YOU_ID = 'you';
-
-/**
- * V9-05: how many bars the organizer can put on the plan's board from the
- * planning flow — `suggest_night_out_bar`'s own cap of three live suggestions
- * per member (0044:648), so the form cannot offer what the server refuses.
- */
-const SHORTLIST_CAP = 3;
 const SHORTLIST_MATCHES = 6;
-
-/**
- * A consensus entry plus the partition it came from. Near-misses stay in the
- * one Group Favorites list (the standing UX-B invariant — unanimous picks
- * lead) but must never be *labelled* as Group Favorites, so the flag travels
- * with the entry all the way to the card.
- */
-type RankedEntry = ConsensusEntry & { isGroupFavorite: boolean };
 
 /** A selectable person on the consensus screen — demo or real. */
 type Person = {
@@ -71,8 +57,17 @@ function initialsFor(label: string): string {
     .toUpperCase();
 }
 
-export default function ConsensusPage(): JSX.Element {
+export default function ConsensusPage(): JSX.Element | null {
   const auth = useAuth();
+  const router = useRouter();
+  // S-06 acceptance 7: signed out, this is /auth — not a form that cannot
+  // submit. `router` is deliberately not a dependency: the navigation mock
+  // hands back a fresh object per render and the effect would loop under test.
+  useEffect(() => {
+    if (auth.status === 'signed-out') router.replace('/auth');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.status]);
+  if (auth.status === 'signed-out') return null;
   return <ConsensusContent key={auth.status === 'signed-in' ? auth.user.id : auth.status} />;
 }
 
@@ -89,8 +84,11 @@ function ConsensusContent(): JSX.Element {
   // Codex, HIGH): a fetch that returns null still resolves `loading`, leaving
   // an empty circle that reads as "nobody to invite" rather than "we don't
   // know yet" — a real plan with no guests again, one error away.
+  //
+  // S-06: WHO'S GOING is mutual follows only — the same list the pin
+  // sequence's Custom picker uses — so `circle` here IS `mutuals`.
   const {
-    circle,
+    mutuals: circle,
     mode,
     isFollowing,
     loading: followsLoading,
@@ -349,7 +347,6 @@ function ConsensusContent(): JSX.Element {
       : bars.filter((b) => b.name.toLocaleLowerCase().includes(barTerm)).slice(0, SHORTLIST_MATCHES)),
     [bars, barTerm],
   );
-  const shortlistFull = shortlist.length >= SHORTLIST_CAP;
 
   /**
    * The unanimity DENOMINATOR, so every selected person counts — including
@@ -510,6 +507,21 @@ function ConsensusContent(): JSX.Element {
           </p>
         ) : null}
 
+        {/* S-06 SHORTLIST (README §6): "N of 3", the seed line, rows with a
+            trailing + / ✓ — Group Favorites offered first, then the search.
+            Server mode only: demo curators cannot create plans. */}
+        {isServer ? (
+          <ShortlistSection
+            shortlist={shortlist}
+            favoriteIds={groupFavorites.map((entry) => entry.barId)}
+            matches={barMatches}
+            query={barQuery}
+            onQuery={setBarQuery}
+            onToggle={toggleShortlist}
+            disabled={creating}
+          />
+        ) : null}
+
         <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mt-8 mb-3 text-left">
           Suggested bars
         </h2>
@@ -519,76 +531,6 @@ function ConsensusContent(): JSX.Element {
             the winner seeds them. Real circles only, like People's
             Choice. */}
         {isServer ? <VibeVotePoll {...vibeVotes} /> : null}
-
-        {/* V9-05: the organizer's shortlist for the plan's vote. Picked from
-            the Group Favorites cards below or by name here; put on the board
-            with `suggest_night_out_bar` the moment the plan exists. */}
-        {isServer ? (
-          <div className="mb-6 space-y-3 text-left" role="group" aria-label="Shortlist for the vote">
-            <div>
-              <label htmlFor="shortlist-search" className="block text-sm text-muted mb-1">
-                Add a bar to the shortlist
-              </label>
-              <input
-                id="shortlist-search"
-                type="search"
-                value={barQuery}
-                disabled={creating}
-                placeholder="Search by name"
-                className="w-full rounded-xl border border-border bg-surface px-3 py-2 min-h-[44px] text-text"
-                onChange={(event) => setBarQuery(event.target.value)}
-              />
-              {barTerm !== '' && barMatches.length === 0 ? (
-                <p className="mt-1 text-sm text-muted">No matching bars.</p>
-              ) : null}
-              {barMatches.length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {barMatches.map((bar) => {
-                    const on = shortlist.includes(bar.id);
-                    return (
-                      <button
-                        type="button"
-                        key={bar.id}
-                        aria-pressed={on}
-                        disabled={creating || (!on && shortlistFull)}
-                        className={[
-                          'rounded-full border px-3 py-2 text-sm min-h-[44px] touch-manipulation',
-                          on ? 'border-accent bg-accent/10 text-text' : 'border-border bg-surface text-muted',
-                        ].join(' ')}
-                        onClick={() => toggleShortlist(bar.id)}
-                      >
-                        {bar.name} <span aria-hidden="true">{on ? '✓' : '+'}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-            <p className="font-display text-sm" aria-live="polite">
-              Shortlist · {shortlist.length} of {SHORTLIST_CAP} bars
-            </p>
-            {shortlist.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {shortlist.map((id) => (
-                  <button
-                    type="button"
-                    key={id}
-                    aria-label={`Remove ${barById(id)?.name ?? id} from the shortlist`}
-                    disabled={creating}
-                    className="rounded-full border border-border bg-surface px-3 py-2 text-sm min-h-[44px] touch-manipulation"
-                    onClick={() => toggleShortlist(id)}
-                  >
-                    {barById(id)?.name ?? id} <span aria-hidden="true">×</span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted">
-                Nothing yet — the group votes on whatever you and they suggest.
-              </p>
-            )}
-          </div>
-        ) : null}
 
         {/* Part 1 — GROUP FAVORITES: the algorithm's picks for whoever's
             selected (operator structure 2026-07-26). One list; the top
@@ -647,13 +589,6 @@ function ConsensusContent(): JSX.Element {
                          picks, so this is false for every card whenever
                          `overlap` is empty. */
                       highlight={i === 0 && entry.isGroupFavorite}
-                      shortlisted={shortlist.includes(entry.barId)}
-                      onShortlist={
-                        isServer
-                          ? () => toggleShortlist(entry.barId)
-                          : undefined
-                      }
-                      shortlistDisabled={creating || (shortlistFull && !shortlist.includes(entry.barId))}
                     />
                   ))}
                 </div>
@@ -670,140 +605,5 @@ function ConsensusContent(): JSX.Element {
         </StartNightOutButton>
       </section>
     </main>
-  );
-}
-
-/**
- * Compact tile (operator 2026-07-26: "the tiles need to be smaller") —
- * name, score, one meta line. Blurb and per-person score chips are gone;
- * the top pick keeps its glow + the share moment.
- */
-function ConsensusCard({
-  entry,
-  rank,
-  index = 0,
-  highlight = false,
-  shortlisted = false,
-  onShortlist,
-  shortlistDisabled = false,
-}: {
-  entry: RankedEntry;
-  rank?: number;
-  index?: number;
-  highlight?: boolean;
-  /** V9-05: on the organizer's shortlist for the plan's vote. */
-  shortlisted?: boolean;
-  /** V9-05: absent in demo mode, where no plan can be created. */
-  onShortlist?: () => void;
-  shortlistDisabled?: boolean;
-}): JSX.Element {
-  const bar = barById(entry.barId);
-  if (!bar) return <></>;
-  const nearMiss = !entry.isGroupFavorite;
-  return (
-    <article
-      className={[
-        'rise rounded-2xl px-4 py-3 border',
-        highlight
-          ? 'glow-accent border-accent bg-gradient-to-b from-accent/[0.08] to-surface'
-          : 'bg-surface border-border',
-      ].join(' ')}
-      style={{ ['--rise-delay' as string]: `${Math.min(index, 8) * 70}ms` }}
-    >
-      <div className="flex items-baseline justify-between gap-3">
-        <h3 className="font-display text-base leading-tight truncate">
-          {rank ? (
-            <span className="text-accent mr-2 tabular-nums">{rank}.</span>
-          ) : null}
-          {highlight ? (
-            <span className="text-accent" aria-hidden="true">★ </span>
-          ) : null}
-          {bar.name}
-        </h3>
-        <span
-          className="font-display text-lg tabular-nums text-accent shrink-0"
-          aria-label={`Group score ${entry.avgScore.toFixed(1)} out of 10`}
-        >
-          {entry.avgScore.toFixed(1)}
-        </span>
-      </div>
-      <p className="text-muted text-xs uppercase tracking-wider truncate mt-0.5">
-        {bar.neighborhood} · {'$'.repeat(bar.priceTier)}
-      </p>
-      {/* A near-miss shares the one list (UX-B) but must not read as a Group
-          Favorite: someone here scored it under 8.0, or has not scored it at
-          all. Said in words, not colour alone. */}
-      {nearMiss ? (
-        <p
-          data-testid="near-miss-badge"
-          className="mt-1.5 inline-flex items-center rounded-full border border-border px-2 py-0.5 text-[11px] text-muted"
-        >
-          Not a Group Favorite yet
-        </p>
-      ) : null}
-      {onShortlist ? (
-        <button
-          type="button"
-          aria-pressed={shortlisted}
-          aria-label={shortlisted ? `Remove ${bar.name} from the shortlist` : `Add ${bar.name} to the shortlist`}
-          disabled={shortlistDisabled}
-          onClick={onShortlist}
-          className={[
-            'mt-2 rounded-full border px-3 py-2 text-sm min-h-[44px] touch-manipulation disabled:opacity-50',
-            shortlisted ? 'border-accent bg-accent/10 text-text' : 'border-border bg-surface text-muted',
-          ].join(' ')}
-        >
-          {shortlisted ? 'On the shortlist ✓' : 'Add to shortlist'}
-        </button>
-      ) : null}
-      {/* The winner-share moment lives on the TOP pick (works signed-out
-          too — the share-card loop's entry). QA3: a labeled solid-outline
-          button spanning the card so it's findable on mobile. */}
-      {highlight ? (
-        <div className="mt-3">
-          <ShareButton
-            path={buildPickPath(bar.id)}
-            text={sharePickText(bar)}
-            label="Share the pick"
-            ariaLabel={`Share the pick: ${bar.name}`}
-            variant="outline"
-            wide
-          />
-        </div>
-      ) : null}
-    </article>
-  );
-}
-
-function EmptyState({
-  youHasRatings,
-  anyFollowed,
-}: {
-  youHasRatings: boolean;
-  anyFollowed: boolean;
-}): JSX.Element {
-  return (
-    <div className="bg-surface border border-border rounded-3xl p-6 text-center">
-      <p className="font-display text-xl mb-2">Pick at least two people.</p>
-      <p className="text-muted text-sm leading-relaxed mb-5">
-        Consensus needs a group. Select two or more of the people above to find
-        the bars you all agree on.
-      </p>
-      {!anyFollowed ? (
-        <Link
-          href="/friends"
-          className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-3 rounded-full min-h-[44px] touch-manipulation"
-        >
-          Follow some friends →
-        </Link>
-      ) : !youHasRatings ? (
-        <Link
-          href="/rankings"
-          className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-3 rounded-full min-h-[44px] touch-manipulation"
-        >
-          Add your own ratings →
-        </Link>
-      ) : null}
-    </div>
   );
 }

@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from './helpers/test';
+import { expect, test, type BrowserContext, type Locator, type Page, type Route } from './helpers/test';
 import { assertNoUnexpectedRest, stubStrictRest } from './helpers/strictRest';
 import { CATALOG_ROUTE, fulfillCatalog } from './helpers/catalogTest';
 import { readFileSync } from 'node:fs';
@@ -2180,12 +2180,15 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await page.route('**/auth/v1/**', fulfillJson(200, {}));
     // Somebody to invite: NO-005's row exists "once at least one person or
     // group is selected", and a solo plan has no vote to put a deadline on.
-    await page.route(
-      '**/rest/v1/rpc/get_following*',
-      fulfillJson(200, [
-        { id: FRIEND_ID, handle: 'sam', display_name: 'Sam Ruiz' },
-      ]),
-    );
+    // S-06: WHO'S GOING is mutual follows, so Sam follows back.
+    for (const rpc of ['get_following', 'get_followers']) {
+      await page.route(
+        `**/rest/v1/rpc/${rpc}*`,
+        fulfillJson(200, [
+          { id: FRIEND_ID, handle: 'sam', display_name: 'Sam Ruiz' },
+        ]),
+      );
+    }
     await page.goto('/friends');
     await openPlansTab(page);
     await page.getByTestId('start-night-out').click();
@@ -2574,15 +2577,15 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     expect(await top(fields)).toBeLessThan(await top(people));
     expect(await top(people)).toBeLessThan(await top(barSearch));
     expect(await top(barSearch)).toBeLessThan(await top(action));
-    await expect(action).toHaveText(/Create the Night Out & invite 1/);
+    await expect(action).toHaveText(/Create the night out · 1 invited/);
     await expect(page.getByRole('button', { name: /create the night out/i })).toHaveCount(1);
     // The generic /join share is not a plan invitation and is gone from the planner.
     await expect(page.getByRole('button', { name: /Invite friends to plan tonight/ })).toHaveCount(0);
 
     // The organizer shortlists a bar by name.
     await barSearch.fill('attaboy');
-    await page.getByRole('button', { name: /^Attaboy/ }).click();
-    await expect(page.getByText(/Shortlist · 1 of 3/)).toBeVisible();
+    await page.getByRole('button', { name: /^Add Attaboy to the shortlist/ }).click();
+    await expect(page.getByTestId('shortlist-count')).toHaveText(/1 of 3/);
     await expect(page.getByRole('button', { name: /^Remove Attaboy from the shortlist/ })).toBeVisible();
 
     await action.click();
@@ -2653,10 +2656,10 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
 
     // WHEN — "Tonight, 9:00 PM", in the field rather than behind a tap.
     const when = page.getByLabel('When');
-    await expect(when).toHaveValue(/T21:00$/);
-    const night = (await when.inputValue()).slice(0, 10);
-    await when.fill(`${night}T22:30`);
-    await expect(when).toHaveValue(`${night}T22:30`);
+    await expect(when).toHaveValue('21:00');
+    await when.fill('22:30');
+    await expect(when).toHaveValue('22:30');
+    const night = '2026-07-24';
     // Editing it never withdraws the CTA.
     await expect(
       page.getByRole('button', { name: /create the night out/i }),
@@ -2681,23 +2684,250 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
     await expect(page.getByTestId('deadline-remaining')).toContainText(/in about/i);
   });
 
-  test('a time on another night is explained in the row, and still does not block the CTA', async ({
-    page,
-    context,
-    baseURL,
-  }) => {
-    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
-    await context.addCookies([
-      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
-    ]);
-    await openTheForm(page);
+  /**
+   * S-06 — Create a night out, as drawn (README §6). Identity first, then
+   * logistics; the WHEN overlap the owner saw on the phone is acceptance 2.
+   */
+  test.describe('S-06: the create form as drawn', () => {
+    const ALEX_ID = '623e4567-e89b-42d3-a456-426614174000';
+    const SAM = { id: FRIEND_ID, handle: 'sam', display_name: 'Sam Ruiz' };
+    const ALEX = { id: ALEX_ID, handle: 'alex', display_name: 'Alex Chen' };
+    const rated = (user_id: string, bar_id: string, score: number) => ({
+      user_id,
+      bar_id,
+      tier: 'loved',
+      score,
+      rated_at: '2026-07-01T00:00:00.000Z',
+    });
 
-    // `set_night_out_start` bounds the start to the plan's own night, and a
-    // server-side refusal with nothing on screen is what this replaces.
-    await page.getByLabel('When').fill('2030-01-01T22:00');
-    await expect(page.getByTestId('when-off-night')).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: /create the night out/i }),
-    ).toBeEnabled();
+    /** Signed in, two mutual friends, optional shared scores. Lands on the form. */
+    async function openDrawnForm(
+      page: Page,
+      context: BrowserContext,
+      baseURL: string | undefined,
+      opts: { friends?: typeof SAM[]; friendRatings?: ReturnType<typeof rated>[]; youRatings?: Array<{ bar_id: string; score: number }> } = {},
+    ): Promise<void> {
+      test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+      await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
+      await context.addCookies([
+        { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+      ]);
+      await stubNightOutRest(page);
+      await stubSocialShellRest(page);
+      for (const rpc of ['get_my_night_outs', 'get_circle_rsvps', 'get_circle_suggestions', 'get_circle_vibe_votes']) {
+        await page.route(`**/rest/v1/rpc/${rpc}*`, fulfillJson(200, []));
+      }
+      await page.route('**/auth/v1/**', fulfillJson(200, {}));
+      const friends = opts.friends ?? [SAM, ALEX];
+      for (const rpc of ['get_following', 'get_followers']) {
+        await page.route(`**/rest/v1/rpc/${rpc}*`, fulfillJson(200, friends));
+      }
+      await page.route('**/rest/v1/rpc/get_friend_ratings*', fulfillJson(200, opts.friendRatings ?? []));
+      await page.route('**/rest/v1/ratings?*', async (route) => {
+        if (route.request().method() !== 'GET') return route.fallback();
+        await fulfillJson(
+          200,
+          (opts.youRatings ?? []).map((r) => ({ ...r, tier: 'loved', rated_at: '2026-07-02T00:00:00.000Z' })),
+        )(route);
+      });
+      await page.goto('/friends/consensus');
+      await expect(page.getByTestId('night-out-plan-fields')).toBeVisible();
+      await expect(page.getByText(/Loading your (circle|groups)/)).toHaveCount(0);
+      await expect(page.getByTestId('create-night-out')).toBeEnabled({ timeout: 15_000 });
+    }
+
+    const topOf = async (locator: Locator): Promise<number> => (await locator.boundingBox())!.y;
+
+    test('1: cover, name, WHEN, AREA, WHO’S GOING, SHORTLIST and the CTA, in that order', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      await openDrawnForm(page, context, baseURL);
+      const cover = page.getByTestId('cover-tile');
+      await expect(cover).toContainText(/add a cover photo/i);
+      const name = page.getByLabel('Name the night');
+      await expect(name).toHaveAttribute('placeholder', 'Name the night');
+      await expect(page.getByText('The name and cover are what people see on the invite.')).toBeVisible();
+      const when = page.getByTestId('when-field');
+      await expect(when).toContainText('Tonight,');
+      const area = page.getByLabel(/^Area/);
+      await expect(area).toHaveAttribute('placeholder', 'Anywhere');
+      const who = page.getByRole('heading', { name: /who.s going/i });
+      const shortlist = page.getByRole('heading', { name: /^shortlist$/i });
+      await expect(page.getByText(/Seed the vote with up to three bars/)).toBeVisible();
+      const cta = page.getByTestId('create-night-out');
+      await expect(page.getByText('Creates the plan and sends the invitations.')).toBeVisible();
+      const ys = [
+        await topOf(cover), await topOf(name), await topOf(when), await topOf(area),
+        await topOf(who), await topOf(shortlist), await topOf(cta),
+      ];
+      for (let i = 1; i < ys.length; i += 1) {
+        expect(ys[i], `section ${i} sits below section ${i - 1}: ${ys.join(', ')}`).toBeGreaterThan(ys[i - 1]);
+      }
+      // The empty tile is inert here (S-06b brings the picker): nothing to tap.
+      await expect(cover.getByRole('button')).toHaveCount(0);
+    });
+
+    test('2: nothing inside the WHEN field overlaps, and it clears 44px (the owner’s phone bug)', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      await openDrawnForm(page, context, baseURL);
+      const geometry = await page.evaluate(() => {
+        const field = document.querySelector<HTMLElement>('[data-testid="when-field"]');
+        if (!field) return null;
+        const boxes = Array.from(field.querySelectorAll<HTMLElement>('*'))
+          .map((el) => ({ tag: el.tagName, r: el.getBoundingClientRect() }))
+          .filter(({ r }) => r.width > 0 && r.height > 0)
+          .map(({ tag, r }) => ({ tag, left: r.left, right: r.right, top: r.top, bottom: r.bottom }));
+        const overlaps: string[] = [];
+        for (let i = 0; i < boxes.length; i += 1) {
+          for (let j = i + 1; j < boxes.length; j += 1) {
+            const a = boxes[i];
+            const b = boxes[j];
+            const inside = (x: typeof a, y: typeof b) =>
+              x.left >= y.left && x.right <= y.right && x.top >= y.top && x.bottom <= y.bottom;
+            if (inside(a, b) || inside(b, a)) continue; // a wrapper and its child
+            const apart = a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top;
+            if (!apart) overlaps.push(`${a.tag}${JSON.stringify(a)} x ${b.tag}${JSON.stringify(b)}`);
+          }
+        }
+        return { height: field.getBoundingClientRect().height, width: field.getBoundingClientRect().width, vw: window.innerWidth, overlaps };
+      });
+      expect(geometry).not.toBeNull();
+      expect(geometry!.overlaps, geometry!.overlaps.join('\n')).toEqual([]);
+      expect(geometry!.height).toBeGreaterThanOrEqual(44);
+      expect(geometry!.width).toBeLessThanOrEqual(geometry!.vw);
+    });
+
+    test('3: a name and two friends make the CTA read “Create the night out · 2 invited”', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      await openDrawnForm(page, context, baseURL);
+      await page.getByLabel('Name the night').fill('Sam’s birthday');
+      const cta = page.getByTestId('create-night-out');
+      const alex = page.getByRole('button', { name: /^Alex Chen/ });
+      await expect(alex).toHaveAttribute('aria-pressed', 'true');
+      await expect(cta).toHaveText('Create the night out · 2 invited');
+      await alex.click();
+      await expect(alex).toHaveAttribute('aria-pressed', 'false');
+      await expect(cta).toHaveText('Create the night out · 1 invited');
+      await alex.click();
+      await expect(cta).toHaveText('Create the night out · 2 invited');
+      // The name is capped where the column is.
+      await page.getByLabel('Name the night').fill('x'.repeat(90));
+      await expect(page.getByLabel('Name the night')).toHaveValue('x'.repeat(80));
+      await expect(page.getByText('80 characters is the limit.')).toBeVisible();
+    });
+
+    test('4: the shortlist caps at three — a fourth + does nothing and the counter stops at 3 of 3', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      await openDrawnForm(page, context, baseURL);
+      const count = page.getByTestId('shortlist-count');
+      await expect(count).toHaveText('0 of 3');
+      await page.getByLabel('Add a bar to the shortlist').fill('a');
+      const adds = page.getByRole('button', { name: /^Add .* to the shortlist$/ });
+      await expect.poll(() => adds.count()).toBeGreaterThanOrEqual(4);
+      for (let i = 0; i < 3; i += 1) {
+        // Always the first still-addable row; picked rows move to the top.
+        await adds.first().click();
+        await expect(count).toHaveText(`${i + 1} of 3`);
+      }
+      await expect(page.getByRole('button', { name: /^Remove .* from the shortlist$/ })).toHaveCount(3);
+      const fourth = adds.first();
+      await expect(fourth).toBeDisabled();
+      await fourth.click({ force: true });
+      await expect(count).toHaveText('3 of 3');
+      await expect(page.getByRole('button', { name: /^Remove .* from the shortlist$/ })).toHaveCount(3);
+    });
+
+    test('5: Group Favorites are offered first, before the search; the top pick is shareable and a near-miss is marked', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      await openDrawnForm(page, context, baseURL, {
+        friendRatings: [
+          rated(FRIEND_ID, 'death-and-co', 9), rated(ALEX_ID, 'death-and-co', 8.5),
+          rated(FRIEND_ID, 'attaboy', 7), rated(ALEX_ID, 'attaboy', 9),
+        ],
+        youRatings: [{ bar_id: 'death-and-co', score: 9 }, { bar_id: 'attaboy', score: 9 }],
+      });
+      await expect(page.getByRole('button', { name: /Share the pick: Death & Co/ })).toBeVisible();
+      await expect(page.getByTestId('near-miss-badge')).toHaveCount(1);
+      const rows = page.getByTestId('shortlist-row');
+      await expect(rows.first()).toHaveAttribute('data-bar-id', 'death-and-co');
+      await expect(rows.nth(1)).toHaveAttribute('data-bar-id', 'attaboy');
+      await page.getByLabel('Add a bar to the shortlist').fill('mood ring');
+      await expect(rows.filter({ hasText: /mood ring/i })).toHaveCount(1);
+      // Still favourites first, the search result after them.
+      await expect(rows.first()).toHaveAttribute('data-bar-id', 'death-and-co');
+      const ids = await rows.evaluateAll((els) => els.map((el) => el.getAttribute('data-bar-id')));
+      expect(ids.indexOf('death-and-co')).toBeLessThan(ids.indexOf('mood-ring'));
+      expect(ids.indexOf('attaboy')).toBeLessThan(ids.indexOf('mood-ring'));
+    });
+
+    test('6: one create call carries the title; a 500 keeps the form and its values, and says so', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      await openDrawnForm(page, context, baseURL);
+      let createCalls = 0;
+      let invites = 0;
+      let suggests = 0;
+      await page.route('**/rest/v1/rpc/create_night_out*', async (route) => {
+        createCalls += 1;
+        expect(route.request().postDataJSON()).toEqual({
+          p_night: '2026-07-24',
+          p_title: 'Sam’s birthday',
+          p_idempotency_key: expect.any(String),
+        });
+        await fulfillJson(500, { message: 'boom' })(route);
+      });
+      await page.route('**/rest/v1/rpc/invite_one_to_night_out*', async (route) => {
+        invites += 1;
+        await fulfillJson(200, true)(route);
+      });
+      await page.route('**/rest/v1/rpc/suggest_night_out_bar*', async (route) => {
+        suggests += 1;
+        await fulfillJson(200, true)(route);
+      });
+      await page.getByLabel('Name the night').fill('Sam’s birthday');
+      await page.getByLabel(/^Area/).fill('East Village');
+      await page.getByLabel('Add a bar to the shortlist').fill('attaboy');
+      await page.getByRole('button', { name: /^Add Attaboy to the shortlist/ }).click();
+      const cta = page.getByTestId('create-night-out');
+      await expect(cta).toHaveText('Create the night out · 2 invited');
+      await cta.click();
+      await expect.poll(() => createCalls).toBe(1);
+      await expect(page.getByText(/Couldn.t start it/)).toBeVisible();
+      await expect(page).toHaveURL(/\/friends\/consensus/);
+      await expect(page.getByLabel('Name the night')).toHaveValue('Sam’s birthday');
+      await expect(page.getByLabel(/^Area/)).toHaveValue('East Village');
+      await expect(page.getByRole('button', { name: /^Remove Attaboy from the shortlist/ })).toBeVisible();
+      await expect(page.getByRole('button', { name: /^Sam Ruiz/ })).toHaveAttribute('aria-pressed', 'true');
+      await expect(cta).toBeEnabled();
+      expect(createCalls).toBe(1);
+      expect(invites, 'no plan, so nobody to invite').toBe(0);
+      expect(suggests, 'no plan, so nothing to suggest').toBe(0);
+    });
+
+    test('7: signed out, the screen is /auth', async ({ page }) => {
+      await stubNightOutRest(page);
+      await stubSocialShellRest(page);
+      await page.route('**/auth/v1/**', fulfillJson(200, {}));
+      await page.goto('/friends/consensus');
+      await expect(page).toHaveURL(/\/auth(\?|$)/);
+      await expect(page.getByTestId('night-out-plan-fields')).toHaveCount(0);
+    });
   });
+
 });

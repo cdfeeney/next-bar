@@ -197,78 +197,12 @@ test.describe('Friends + consensus', () => {
     await expect(page.getByText('@sasha')).toBeVisible();
   });
 
-  test('Group Favorites shows bars the group all rated, top pick shareable (UX-B)', async ({ page }) => {
+  // S-06: signed out, /friends/consensus is /auth — the demo-curator consensus
+  // page is no longer a surface. Group Favorites / near-miss coverage moved to
+  // night-out.spec.ts ("Group Favorites are offered first"), signed in.
+  test('signed out, Plan Night Out sends you to /auth', async ({ page }) => {
     await page.goto('/friends/consensus');
-
-    // With the default group (claire + john), there is overlap.
-    await expect(page.getByText(/Group Favorites/i)).toBeVisible();
-    // Death & Co is loved by both curators → appears as a group pick,
-    // and the TOP pick carries the share moment (no vote step anymore).
-    await expect(
-      page.getByRole('heading', { name: /Death & Co/i }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: /Share the pick/i }),
-    ).toBeVisible();
-  });
-
-  /**
-   * Panel finding (both lanes, HIGH): `alsoConsider` was concatenated into
-   * `groupFavorites` and rendered identically, so a bar that FAILS unanimity
-   * was displayed as a Group Favorite — star, rank 1, and the share moment
-   * included.
-   *
-   * Following Sasha makes the group claire + john + sasha, and no bar is
-   * scored >= 8.0 by all three (Sasha shares only Attaboy with Claire, and
-   * John never rated it). Every entry is therefore a near-miss, which is the
-   * exact shape that used to render as a Group Favorite.
-   */
-  test('near-misses are marked, never presented as Group Favorites or as the shareable pick', async ({
-    page,
-  }) => {
-    await page.goto('/friends/people');
-    await page
-      .locator('.bg-surface')
-      .filter({ hasText: '@sasha' })
-      .getByRole('button', { name: /^Follow$/ })
-      .click();
-    await expect(page.getByRole('link', { name: /3\s+Following/i })).toBeVisible();
-
-    await page.goto('/friends/consensus');
-
-    // Bars still surface — nothing is hidden, that was the whole point of
-    // deleting the veto.
-    await expect(
-      page.getByRole('heading', { name: /Bemelmans Bar/i }),
-    ).toBeVisible();
-
-    // ...but every one of them is labelled as NOT a Group Favorite, and none
-    // carries the star/share moment reserved for a unanimous pick.
-    await expect(page.getByTestId('no-unanimous-pick')).toBeVisible();
-    const cards = page.locator('article');
-    // Group Favorites resolves its bars through the catalog, and the catalog
-    // can re-fetch mid-page (the 0019 swap-day check; same window
-    // mobile-controls waits out). Under a loaded gate that re-fetch landed
-    // between "cards visible" and `count()`, which does not wait, and read 0.
-    // Wait for the catalog to settle, then count once it is stable.
-    await expect(page.getByText(/Loading the Manhattan catalog/)).toHaveCount(0, { timeout: 15_000 });
-    await expect(cards.first()).toBeVisible();
-    await expect.poll(() => cards.count(), { timeout: 10_000 }).toBeGreaterThan(0);
-    const cardCount = await cards.count();
-    await expect(page.getByTestId('near-miss-badge')).toHaveCount(cardCount);
-    await expect(
-      page.getByRole('button', { name: /^Share the pick/ }),
-    ).toHaveCount(0);
-  });
-
-  test('consensus needs at least two people selected', async ({ page }) => {
-    await page.goto('/friends/consensus');
-
-    // Deselect john, leaving only claire → not enough for consensus. The chip
-    // is the button whose name STARTS with John; the selection summary also has
-    // a "Remove John" control (V9-04), so the old /John/ matched two elements.
-    await page.getByRole('button', { name: /^John/ }).click();
-    await expect(page.getByText(/Pick at least two people/i)).toBeVisible();
+    await expect(page).toHaveURL(/\/auth(\?|$)/);
   });
 
   test('sample-night seeder populates rankings from empty', async ({ page }) => {

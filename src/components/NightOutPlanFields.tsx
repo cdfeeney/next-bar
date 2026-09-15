@@ -3,7 +3,7 @@
 import { useCallback, useRef, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getBarById } from '@/lib/catalog';
-import { nycNightKey } from '@/lib/nightKey';
+import { NIGHT_ROLLOVER_HOUR, nycNightKey } from '@/lib/nightKey';
 import { useMyPresenceRead } from '@/app/friends/_components/usePinnedHandles';
 import {
   remainingLabel,
@@ -39,6 +39,9 @@ import {
 /** NO-002: "Tonight, 9:00 PM" — the plan's own night, at nine. */
 const DEFAULT_START_TIME = '21:00';
 
+/** S-06: `night_outs.title` is varchar(80); the field stops where the column does. */
+const TITLE_MAX_LENGTH = 80;
+
 /** NO-003: the column's own limit, so the field cannot offer what 0068 refuses. */
 const AREA_MAX_LENGTH = 60;
 
@@ -66,6 +69,12 @@ export type PlanEditOutcome = {
 export type NightOutPlanFields = {
   /** The rows, ready to render above the CTA. */
   fields: JSX.Element;
+  /**
+   * S-06: the name typed so far, trimmed — '' when none. Sent as `p_title` on
+   * the ONE create call, never applied afterwards: the title is part of the
+   * plan's identity, not an edit to a plan that already exists.
+   */
+  title: string;
   /**
    * Apply the three edits to a plan that now exists, and RETURN the ones the
    * server declined. Never throws and never reports a failure as a success.
@@ -105,9 +114,23 @@ export type NightOutPlanFields = {
   ) => Promise<PlanEditOutcome>;
 };
 
-/** 'YYYY-MM-DDTHH:mm' — what `<input type="datetime-local">` reads and writes. */
-function defaultStartValue(): string {
-  return `${nycNightKey()}T${DEFAULT_START_TIME}`;
+/**
+ * A wall-clock time ON TONIGHT as 'YYYY-MM-DDTHH:mm', the shape `isoOf` reads.
+ *
+ * S-06: the row is a `<input type="time">` — the plan's night is the only
+ * night `set_night_out_start` accepts, so the old datetime-local's date half
+ * could do nothing but produce the off-night refusal (and, on the owner's
+ * phone, overlap its own value). A time before the 4 AM rollover is the small
+ * hours of tonight, which is tomorrow's calendar date.
+ */
+function startValueOf(time: string): string {
+  const night = nycNightKey();
+  if (!/^\d{2}:\d{2}$/.test(time) || Number(time.slice(0, 2)) >= NIGHT_ROLLOVER_HOUR) {
+    return `${night}T${time}`;
+  }
+  const next = new Date(`${night}T12:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return `${next.toISOString().slice(0, 10)}T${time}`;
 }
 
 const NYC_PARTS = new Intl.DateTimeFormat('en-US', {
@@ -224,7 +247,9 @@ export function useNightOutPlanFields({
    * 9:00 PM — stand. Same `edit ?? derived` shape the Area row already uses.
    */
   const [startEdit, setStartEdit] = useState<string | null>(null);
-  const start = startEdit ?? defaultStartValue();
+  const start = startValueOf(startEdit ?? DEFAULT_START_TIME);
+  /** S-06: "Name the night" — `night_outs.title`, sent with the one create call. */
+  const [title, setTitle] = useState('');
   /**
    * NO-003: "reuses the area already known from Tonight." That is the
    * neighbourhood of the bar this account pinned tonight — the one area the app
@@ -246,21 +271,16 @@ export function useNightOutPlanFields({
   const [draftOwner, setDraftOwner] = useState<string | null>(identity);
   if (identity !== draftOwner) {
     setDraftOwner(identity);
+    setTitle('');
     setStartEdit(null);
     setAreaEdit(null);
     setDeadlineMode('none');
     setDeadline('');
   }
 
-  /**
-   * The night this device believes it is, checked BEFORE the write rather than
-   * after a refusal: `set_night_out_start` bounds the start to the plan's own
-   * night, so a time typed into a different day is declined server-side with
-   * nothing on screen explaining why. Said here, in the row it belongs to.
-   */
+  // A time-only row cannot land on another night (`startValueOf`), so the old
+  // off-night refusal has no input left that reaches it.
   const startIso = isoOf(start);
-  const startOffNight =
-    startIso !== null && nycNightKey(new Date(startIso)) !== nycNightKey();
   /**
    * Edited to something that is not a time — in practice, cleared.
    *
@@ -303,8 +323,8 @@ export function useNightOutPlanFields({
    * and still skipped writing it. Each write reads this instead, so what is
    * sent is what the form shows when the write goes out.
    */
-  const live = useRef({ startEdit, start, startIso, startOffNight, area, areaEdit, presenceSettled, deadlineIso });
-  live.current = { startEdit, start, startIso, startOffNight, area, areaEdit, presenceSettled, deadlineIso };
+  const live = useRef({ startEdit, start, startIso, area, areaEdit, presenceSettled, deadlineIso });
+  live.current = { startEdit, start, startIso, area, areaEdit, presenceSettled, deadlineIso };
 
   const apply = useCallback(
     async (
@@ -328,8 +348,8 @@ export function useNightOutPlanFields({
        */
       const stopped = (): boolean => signal?.aborted === true;
       // The night these rows were SHOWING, against the night the plan is for.
-      // Only an untouched row can differ silently: an edited one that lands on
-      // another night is already narrated by `startOffNight` and not sent.
+      // Only an untouched row can differ silently: an edited one is a time on
+      // whatever tonight is when it is read.
       const nightMoved =
         live.current.startEdit === null && live.current.start.slice(0, 10) !== planNight
           ? planNight
@@ -338,7 +358,7 @@ export function useNightOutPlanFields({
       // default, so there is nothing to write and no way for that write to
       // fail; an edited one is written, and an off-night one is not attempted.
       const whenNow = live.current;
-      if (whenNow.startEdit !== null && whenNow.startIso !== null && !whenNow.startOffNight) {
+      if (whenNow.startEdit !== null && whenNow.startIso !== null) {
         if (stopped()) failed.push('the time');
         else if (!(await setNightOutStart(supabase, planId, whenNow.startIso))) {
           failed.push('the time');
@@ -404,25 +424,60 @@ export function useNightOutPlanFields({
   );
 
   const fields = (
-    <div className="mt-4 space-y-3 text-left" data-testid="night-out-plan-fields">
+    <div className="mt-4 space-y-5 text-left" data-testid="night-out-plan-fields">
+      {/* S-06: identity first (README §6). The cover tile is EMPTY and inert
+          here — S-06b brings the picker; a tile that opened nothing would be a
+          dead end, so it is not a button yet. */}
+      <div
+        data-testid="cover-tile"
+        className="flex h-[150px] w-full items-center justify-center rounded-3xl border border-dashed border-[#3a3a3a] bg-surface"
+      >
+        <span className="font-label text-[11px] font-bold uppercase tracking-[0.16em] text-muted">
+          + Add a cover photo
+        </span>
+      </div>
+
+      <div>
+        <input
+          id="night-out-name"
+          type="text"
+          aria-label="Name the night"
+          className="block w-full border-0 border-b border-border bg-transparent px-0 py-2 font-display text-[22px] font-bold text-text placeholder:text-muted focus:outline-none focus:border-accent min-h-[44px]"
+          value={title}
+          maxLength={TITLE_MAX_LENGTH}
+          disabled={disabled}
+          placeholder="Name the night"
+          onChange={(e) => setTitle(e.target.value)}
+        />
+        <p className="mt-2 text-sm text-muted">
+          {title.length >= TITLE_MAX_LENGTH
+            ? `${TITLE_MAX_LENGTH} characters is the limit.`
+            : 'The name and cover are what people see on the invite.'}
+        </p>
+      </div>
+
       <div>
         <label className={LABEL} htmlFor="night-out-when">
           When
         </label>
-        <input
-          id="night-out-when"
-          type="datetime-local"
-          className={ROW}
-          value={start}
-          disabled={disabled}
-          onChange={(e) => setStartEdit(e.target.value)}
-        />
-        {startOffNight ? (
-          <p className="mt-1 text-sm text-red-400" data-testid="when-off-night">
-            That&apos;s a different night — pick a time on tonight, or leave it
-            at 9:00 PM.
-          </p>
-        ) : null}
+        {/* One surface field reading "Tonight, 9:00 PM". The prefix and the
+            native time control are siblings in a flex row, so neither can be
+            drawn over the other — the overlap the owner saw on a 390px viewport
+            was the datetime-local control's own date and time halves. */}
+        <div
+          data-testid="when-field"
+          className="flex min-h-[44px] w-full items-center gap-2 rounded-2xl border border-border bg-surface px-4 py-2 text-text"
+        >
+          <span className="shrink-0">Tonight,</span>
+          <input
+            id="night-out-when"
+            type="time"
+            className="min-h-[36px] min-w-0 flex-1 bg-transparent text-text touch-manipulation"
+            value={startEdit ?? DEFAULT_START_TIME}
+            disabled={disabled}
+            onChange={(e) => setStartEdit(e.target.value)}
+          />
+        </div>
         {startMissing ? (
           <p className="mt-1 text-sm text-red-400" data-testid="when-missing">
             Pick a time, or your night out starts at 9:00 PM.
@@ -498,5 +553,5 @@ export function useNightOutPlanFields({
     </div>
   );
 
-  return { fields, apply };
+  return { fields, apply, title: title.trim() };
 }

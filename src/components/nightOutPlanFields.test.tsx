@@ -36,12 +36,10 @@ vi.mock('@/lib/catalog', () => ({
   getBarById: (id: string) =>
     id === 'attaboy' ? { id, name: 'Attaboy', neighborhood: 'Lower East Side' } : undefined,
 }));
-vi.mock('@/lib/nightKey', () => ({
-  nycNightKey: (at: Date = new Date()) =>
-    at.getTime() >= Date.parse('2026-08-21T08:00:00.000Z')
-      ? '2026-08-21'
-      : '2026-08-20',
-}));
+// S-06: the real night key. Fake timers pin the clock, so the real rule
+// (4:00 AM New York) is as deterministic as the stub was, and the winter and
+// spring-forward cases below need the real calendar.
+
 vi.mock('@/app/friends/_components/usePinnedHandles', () => ({
   useMyPresence: () => presence,
   useMyPresenceRead: () => ({ presence, settled: presenceSettled }),
@@ -172,8 +170,10 @@ describe('the When row (V8-R-NO-002)', () => {
     // "the default is visible, not hidden behind a tap" — in the field itself,
     // not offered as a placeholder the owner has to accept.
     const when = screen.getByLabelText('When') as HTMLInputElement;
-    expect(when.value).toBe('2026-08-20T21:00');
+    expect(when.value).toBe('21:00');
     expect(when.placeholder).toBe('');
+    // S-06: the row reads "Tonight, 9:00 PM" — the night is not the owner's to pick.
+    expect(screen.getByTestId('when-field').textContent).toContain('Tonight,');
   });
 
   test('an untouched default is not written — it is already the server’s', async () => {
@@ -193,7 +193,7 @@ describe('the When row (V8-R-NO-002)', () => {
   test('an edited time is written as an instant read in America/New_York', async () => {
     render(<Harness />);
     fireEvent.change(screen.getByLabelText('When'), {
-      target: { value: '2026-08-20T22:30' },
+      target: { value: '22:30' },
     });
     screen.getByTestId('create').click();
     await waitFor(() => expect(setNightOutStart).toHaveBeenCalledTimes(1));
@@ -217,9 +217,10 @@ describe('the When row (V8-R-NO-002)', () => {
    */
   test('a winter time is read in EST, so the offset is not hardcoded', async () => {
     // 2026-01-15 is EST, UTC-5. Same wall clock, a different instant.
+    vi.setSystemTime(Date.parse('2026-01-16T01:30:00.000Z'));
     render(<Harness />);
     fireEvent.change(screen.getByLabelText('When'), {
-      target: { value: '2026-01-15T22:30' },
+      target: { value: '22:30' },
     });
     screen.getByTestId('create').click();
     await waitFor(() => expect(setNightOutStart).toHaveBeenCalledTimes(1));
@@ -239,22 +240,6 @@ describe('the When row (V8-R-NO-002)', () => {
     // row states it rather than the owner discovering it on the plan.
     screen.getByTestId('create').click();
     await waitFor(() => expect(screen.getByTestId('refused').textContent).toBe('none'));
-    expect(setNightOutStart).not.toHaveBeenCalled();
-  });
-
-  /**
-   * `set_night_out_start` bounds the start to the plan's own night, so a time
-   * on another day is declined server-side with nothing on screen explaining
-   * why. Said in the row instead, and not attempted.
-   */
-  test('a time on a different night is explained rather than sent', async () => {
-    render(<Harness />);
-    fireEvent.change(screen.getByLabelText('When'), {
-      target: { value: '2026-08-22T22:00' },
-    });
-    expect(screen.getByTestId('when-off-night')).toBeTruthy();
-    screen.getByTestId('create').click();
-    await waitFor(() => expect(setNightOutArea).not.toHaveBeenCalled());
     expect(setNightOutStart).not.toHaveBeenCalled();
   });
 });
@@ -383,9 +368,11 @@ describe('the two defects the round-3 panel found by triggering them', () => {
    * defect. The round trip through the NY formatter is what detects it.
    */
   test('a time New York’s clocks skip is refused in the row, not silently moved', async () => {
+    // The evening of 2026-03-07: 2:30 "tonight" is the small hours of the 8th.
+    vi.setSystemTime(Date.parse('2026-03-08T01:30:00.000Z'));
     render(<Harness />);
     fireEvent.change(screen.getByLabelText('When'), {
-      target: { value: '2026-03-08T02:30' },
+      target: { value: '02:30' },
     });
     expect(screen.getByTestId('when-impossible')).toBeTruthy();
     // Not confused with an empty field — the two say different things.
@@ -398,9 +385,10 @@ describe('the two defects the round-3 panel found by triggering them', () => {
 
   test('3:30 AM the same night is a real time and is written', async () => {
     // The other side of the same gap: 3:30 EDT exists, at 07:30Z.
+    vi.setSystemTime(Date.parse('2026-03-08T01:30:00.000Z'));
     render(<Harness planNight="2026-03-07" />);
     fireEvent.change(screen.getByLabelText('When'), {
-      target: { value: '2026-03-08T03:30' },
+      target: { value: '03:30' },
     });
     expect(screen.queryByTestId('when-impossible')).toBeNull();
     screen.getByTestId('create').click();
@@ -439,19 +427,6 @@ describe('the two defects the round-3 panel found by triggering them', () => {
       expect(screen.getByTestId('night-moved').textContent).toBe('none'),
     );
   });
-
-  test('an EDITED row that lands on another night is the off-night row, never a move', async () => {
-    render(<Harness planNight="2026-08-21" />);
-    fireEvent.change(screen.getByLabelText('When'), {
-      target: { value: '2026-08-22T22:00' },
-    });
-    expect(screen.getByTestId('when-off-night')).toBeTruthy();
-    screen.getByTestId('create').click();
-    await waitFor(() =>
-      expect(screen.getByTestId('night-moved').textContent).toBe('none'),
-    );
-    expect(setNightOutStart).not.toHaveBeenCalled();
-  });
 });
 
 describe('an abandoned apply stops writing (round-10 round 4, Codex)', () => {
@@ -472,7 +447,7 @@ describe('an abandoned apply stops writing (round-10 round 4, Codex)', () => {
 
     render(<HarnessWithSignal signal={controller.signal} />);
     fireEvent.change(screen.getByLabelText('When'), {
-      target: { value: '2026-08-20T22:30' },
+      target: { value: '22:30' },
     });
     fireEvent.change(screen.getByLabelText(/^Area/), {
       target: { value: 'East Village' },
@@ -514,7 +489,7 @@ describe('an abandoned apply stops writing (round-10 round 4, Codex)', () => {
 
     render(<Harness />);
     fireEvent.change(screen.getByLabelText('When'), {
-      target: { value: '2026-08-20T22:30' },
+      target: { value: '22:30' },
     });
     // Tapped with the Area still empty.
     screen.getByTestId('create').click();
@@ -561,7 +536,7 @@ describe('an abandoned apply stops writing (round-10 round 4, Codex)', () => {
     const controller = new AbortController();
     render(<HarnessWithSignal signal={controller.signal} />);
     fireEvent.change(screen.getByLabelText('When'), {
-      target: { value: '2026-08-20T22:30' },
+      target: { value: '22:30' },
     });
     fireEvent.change(screen.getByLabelText(/^Area/), {
       target: { value: 'East Village' },
@@ -630,7 +605,7 @@ describe('the drafts belong to an account', () => {
   test('an in-place identity change clears every row', async () => {
     const view = render(<Harness identity="user-a" />);
     fireEvent.change(screen.getByLabelText('When'), {
-      target: { value: '2026-08-20T23:45' },
+      target: { value: '23:45' },
     });
     fireEvent.change(screen.getByLabelText(/^Area/), {
       target: { value: 'East Village' },
@@ -639,9 +614,7 @@ describe('the drafts belong to an account', () => {
 
     view.rerender(<Harness identity="user-b" />);
 
-    expect((screen.getByLabelText('When') as HTMLInputElement).value).toBe(
-      '2026-08-20T21:00',
-    );
+    expect((screen.getByLabelText('When') as HTMLInputElement).value).toBe('21:00');
     expect((screen.getByLabelText(/^Area/) as HTMLInputElement).value).toBe('');
     expect((screen.getByLabelText('No deadline') as HTMLInputElement).checked).toBe(true);
 
@@ -660,7 +633,7 @@ describe('a refusal is RETURNED, never swallowed and never painted here', () => 
     setNightOutArea.mockResolvedValue(false);
     render(<Harness />);
     fireEvent.change(screen.getByLabelText('When'), {
-      target: { value: '2026-08-20T22:30' },
+      target: { value: '22:30' },
     });
     fireEvent.change(screen.getByLabelText(/^Area/), {
       target: { value: 'East Village' },
@@ -711,18 +684,12 @@ describe('the two defects the round-10 panel found by triggering them', () => {
    */
   test('an untouched When row follows the rollover instead of freezing at mount', async () => {
     render(<Harness />);
-    expect((screen.getByLabelText('When') as HTMLInputElement).value).toBe(
-      '2026-08-20T21:00',
-    );
+    expect((screen.getByLabelText('When') as HTMLInputElement).value).toBe('21:00');
 
     // Cross 4:00 AM with the form still open, then re-render.
     vi.setSystemTime(Date.parse('2026-08-21T08:30:00.000Z'));
     fireEvent.change(screen.getByLabelText(/^Area/), { target: { value: 'x' } });
-    expect((screen.getByLabelText('When') as HTMLInputElement).value).toBe(
-      '2026-08-21T21:00',
-    );
-    // And it is not an off-night start, because it moved with the night.
-    expect(screen.queryByTestId('when-off-night')).toBeNull();
+    expect((screen.getByLabelText('When') as HTMLInputElement).value).toBe('21:00');
 
     // Still nothing to write: untouched means "the server's own default".
     screen.getByTestId('create').click();

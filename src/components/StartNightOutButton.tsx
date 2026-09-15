@@ -951,7 +951,14 @@ export default function StartNightOutButton({
         attemptKey.current = crypto.randomUUID();
         attemptNight.current = nightKey;
       }
-      const planId = await createNightOut(supabase, nightKey, undefined, attemptKey.current);
+      // S-06: the name goes on the ONE create call, read at the tap like the
+      // guest list. '' is no name — the column is nullable and S-07 falls back.
+      const planId = await createNightOut(
+        supabase,
+        nightKey,
+        planFields.title === '' ? undefined : planFields.title,
+        attemptKey.current,
+      );
       if (owner !== liveUserId.current) {
         // A different account is on screen. The plan (if any) still belongs to
         // `owner`, so park it rather than dropping it — but paint nothing.
@@ -1163,9 +1170,6 @@ export default function StartNightOutButton({
 
   return (
     <div className="mt-4 text-center">
-      <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-1 text-left">
-        Plan details
-      </h2>
       {planFields.fields}
       {/* V9-05: recipients and suggested bars sit BETWEEN the details and the
           action, so the one button that creates the plan and sends its
@@ -1179,14 +1183,16 @@ export default function StartNightOutButton({
         // gets created. `disabled` is the caller's own veto, kept alongside it.
         disabled={busy || disabled || createdPlanId !== null}
         data-testid="create-night-out"
-        className="mt-6 w-full rounded-full bg-accent px-5 py-3 font-display text-bg min-h-[44px] touch-manipulation disabled:opacity-50"
+        // S-06: a 54px accent pill; held = bg-held on muted, never opacity.
+        className="mt-6 w-full rounded-full bg-accent px-5 py-3 font-display font-semibold text-bg min-h-[54px] touch-manipulation disabled:bg-held disabled:text-muted"
       >
         {busy
           ? 'Creating…'
           : guestCount > 0
-            ? `Create the Night Out & invite ${guestCount}`
-            : 'Create the Night Out'}
+            ? `Create the night out · ${guestCount} invited`
+            : 'Create the night out'}
       </button>
+      <p className="mt-2 text-xs text-muted">Creates the plan and sends the invitations.</p>
       {error ? (
         <p className="mt-2 text-sm text-red-400">
           Couldn&apos;t start it — try again.

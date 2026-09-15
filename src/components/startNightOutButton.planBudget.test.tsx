@@ -27,7 +27,7 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => ({ status: 'signed-in', user: { id: USER } }),
 }));
-vi.mock('@/lib/nightKey', () => ({ nycNightKey: () => '2026-08-17' }));
+vi.mock('@/lib/nightKey', () => ({ NIGHT_ROLLOVER_HOUR: 4, nycNightKey: () => '2026-08-17' }));
 vi.mock('@/lib/supabase/client', () => ({ getBrowserSupabase: () => ({}) }));
 vi.mock('@/app/friends/_components/usePinnedHandles', () => ({
   useMyPresence: () => null,

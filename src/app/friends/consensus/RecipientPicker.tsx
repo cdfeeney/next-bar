@@ -180,7 +180,7 @@ export function PersonChip({
       className={[
         'flex items-center gap-2 pl-1 pr-4 py-1 rounded-full border transition-colors min-h-[44px] touch-manipulation',
         selected
-          ? 'border-accent bg-accent/10 text-text'
+          ? 'border-accent bg-accent/10 text-accent'
           : 'border-border bg-surface text-muted',
       ].join(' ')}
     >

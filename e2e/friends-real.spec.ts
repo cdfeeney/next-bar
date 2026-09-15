@@ -126,6 +126,10 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
   await page.route('**/rest/v1/rpc/get_following**', (route) =>
     fulfillJson(200, unfollowed ? [] : (opts.following ?? []))(route),
   );
+  // S-06: /friends/consensus offers MUTUAL follows, so the circle here follows back.
+  await page.route('**/rest/v1/rpc/get_followers**', (route) =>
+    fulfillJson(200, unfollowed ? [] : (opts.following ?? []))(route),
+  );
   await page.route(
     '**/rest/v1/rpc/search_handles**',
     fulfillJson(200, opts.searchResults ?? []),
