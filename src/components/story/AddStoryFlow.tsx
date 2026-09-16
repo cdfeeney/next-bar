@@ -35,6 +35,7 @@ export default function AddStoryFlow({
   friends,
   friendsReady,
   groups,
+  groupsUnavailable = false,
   nightOut,
   onCancel,
   onPublish,
@@ -48,6 +49,8 @@ export default function AddStoryFlow({
   friendsReady: boolean;
   /** The author's named groups (Group DESTINATION targets). */
   groups: readonly ComposerGroup[];
+  /** The groups read FAILED — distinct from having none. */
+  groupsUnavailable?: boolean;
   /** Tonight's night out, or null when there is none. */
   nightOut: ComposerNightOut | null;
   onCancel: () => void;
@@ -86,6 +89,7 @@ export default function AddStoryFlow({
       friends={friends}
       friendsReady={friendsReady}
       groups={groups}
+      groupsUnavailable={groupsUnavailable}
       nightOut={nightOut}
       onPublish={onPublish}
       onUndo={onUndo}

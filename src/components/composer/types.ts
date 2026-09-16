@@ -60,13 +60,12 @@ export const DESTINATION_RETENTION: Readonly<Record<DestinationKey, string>> = {
 };
 
 /**
- * V8-R-CMP-005 — the Story audience, which governs the STORY ONLY.
- *
- * `group` here names a MUTUAL-FRIEND GROUP used as an audience, and D-C-37
- * resolves it to that group INTERSECTED WITH the poster's mutual friends. It is
- * not the Group DESTINATION, which keeps its own fixed membership (V8-R-CMP-007).
+ * The Story audience, which governs the STORY ONLY — exactly two choices, the
+ * same two `storyStore.ts`'s `StoryAudience` stores (README §9, S-11). A named
+ * group is a DESTINATION (its own thread, V8-R-CMP-007), never a way to narrow
+ * a story; the earlier `'group'` audience member is gone.
  */
-export type StoryAudienceChoice = 'friends' | 'group' | 'custom';
+export type StoryAudienceChoice = 'friends' | 'custom';
 
 /** One of the author's named groups, as both an audience and a destination. */
 export type ComposerGroup = {
@@ -103,8 +102,6 @@ export type PublishInput = {
    * 42501 — so this is the honest UI half of a rule the database enforces.
    */
   storyAudienceIds: readonly string[];
-  /** Set when the story audience came from a named group, for the host's records. */
-  storyAudienceGroupId: string | null;
   /** Group DESTINATION targets. Fixed membership, never intersected (D-C-37 exception). */
   groupIds: readonly string[];
   nightOutId: string | null;
@@ -247,11 +244,11 @@ export function receiptFor(
 /**
  * V8-R-CMP-005 / D-C-37 — who the STORY actually reaches.
  *
- * A named group resolves to that group INTERSECTED WITH the poster's mutual
- * friends: a group member who is not a mutual friend is not a recipient. The
- * intersection is also enforced server-side, which is what makes this safe to
- * compute here — a client cannot widen it, because `publish_story` refuses a
- * recipient who is not an accepted mutual friend.
+ * A custom pick is INTERSECTED WITH the poster's mutual friends: a picked id
+ * that is no longer a mutual friend is not a recipient. The intersection is
+ * also enforced server-side, which is what makes this safe to compute here —
+ * a client cannot widen it, because `publish_story` refuses a recipient who is
+ * not an accepted mutual friend.
  *
  * `friends` returns EMPTY on purpose: "every mutual friend" is a set the server
  * owns, and enumerating it client-side would freeze a circle that changes.
@@ -260,15 +257,11 @@ export function resolveStoryRecipients(input: {
   choice: StoryAudienceChoice;
   /** Accepted mutual friends, as profile ids. */
   mutualIds: readonly string[];
-  /** The chosen audience group's fixed members. */
-  groupMemberIds?: readonly string[];
   /** Hand-picked recipients. */
   customIds?: readonly string[];
 }): readonly string[] {
   if (input.choice === 'friends') return [];
-  const picked =
-    input.choice === 'group' ? (input.groupMemberIds ?? []) : (input.customIds ?? []);
-  return picked.filter((id) => input.mutualIds.includes(id));
+  return (input.customIds ?? []).filter((id) => input.mutualIds.includes(id));
 }
 
 /**
@@ -416,7 +409,6 @@ export type ComposerSelection = {
   groupIds: readonly string[];
   tagIds: readonly string[];
   storyAudience: StoryAudienceChoice;
-  storyAudienceGroupId: string | null;
   customIds: readonly string[];
   /**
    * WHICH night out was chosen, not merely that one was.
@@ -459,11 +451,9 @@ export function reconcileSelection(input: {
   const groupIds = selection.groupIds.filter((id) => liveGroupIds.includes(id));
   const tagIds = selection.tagIds.filter((id) => input.mutualIds.includes(id));
 
-  const audienceGroup = input.groups.find((group) => group.id === selection.storyAudienceGroupId);
   const storyAudienceIds = resolveStoryRecipients({
     choice: selection.storyAudience,
     mutualIds: input.mutualIds,
-    groupMemberIds: audienceGroup?.memberIds ?? [],
     customIds: selection.customIds,
   });
 

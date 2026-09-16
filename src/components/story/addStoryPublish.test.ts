@@ -16,7 +16,6 @@ function input(overrides: Partial<PublishInput> = {}): PublishInput {
     tagIds: [],
     storyAudience: 'friends',
     storyAudienceIds: [],
-    storyAudienceGroupId: null,
     groupIds: [],
     nightOutId: null,
     ...overrides,

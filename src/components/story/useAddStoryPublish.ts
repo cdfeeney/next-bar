@@ -30,12 +30,15 @@ export function useAddStoryPublish(
   youId: string | null,
 ): {
   groups: readonly ComposerGroup[];
+  groupsUnavailable: boolean;
   nightOut: ComposerNightOut | null;
   publish: (input: PublishInput) => Promise<PublishResult>;
   undo: (publishId: string) => Promise<{ ok: true } | { ok: false; message: string }>;
 } {
   const client = useMemo(() => getBrowserSupabase(), []);
   const [groups, setGroups] = useState<readonly ComposerGroup[]>([]);
+  /** A FAILED groups read is not "no groups": the Group row says which (Codex, r2). */
+  const [groupsUnavailable, setGroupsUnavailable] = useState(false);
   const [nightOut, setNightOut] = useState<ComposerNightOut | null>(null);
 
   useEffect(() => {
@@ -44,6 +47,7 @@ export function useAddStoryPublish(
     // the targets are dropped the moment the viewer changes and refilled only
     // from the new account's own reads.
     setGroups([]);
+    setGroupsUnavailable(false);
     setNightOut(null);
     if (client === null || youId === null) return undefined;
     let cancelled = false;
@@ -52,13 +56,14 @@ export function useAddStoryPublish(
       const [mine, nights, owned] = await Promise.all([
         fetchMyGroups(client),
         getMyNightOuts(client),
-        fetchOwnedTonight(client, nightKey),
+        fetchOwnedTonight(client, youId, nightKey),
       ]);
       if (cancelled) return;
-      // A failed groups read leaves the Group row "no groups yet" rather than
-      // inventing targets; the composer refuses an empty Group selection anyway.
       if (mine.ok) {
         setGroups(mine.value.map((group) => ({ id: group.id, name: group.name, memberIds: [] })));
+      } else {
+        // Not an empty list: the row is held and says the read failed.
+        setGroupsUnavailable(true);
       }
       setNightOut(tonightFrom(nights ?? [], nightKey) ?? owned);
     })();
@@ -124,23 +129,28 @@ export function useAddStoryPublish(
     [client, stories],
   );
 
-  return { groups, nightOut, publish, undo };
+  return { groups, groupsUnavailable, nightOut, publish, undo };
 }
 
 /**
- * A plan the caller OWNS for tonight. RLS admits owner and member rows, so the
- * filter here is only "tonight, not cancelled"; a member row that also shows up
- * is harmless (the RPC hit wins, and the same plan is the same target). A read
- * failure is null: the row then says "No night out tonight", never a guess.
+ * A plan the caller OWNS for tonight — `owner_id = you`, explicitly. RLS
+ * (0044 `night_outs_select_member`) also admits rows where the caller is a
+ * PENDING or DECLINED member, and `add_night_out_media` refuses those (42501),
+ * so without the owner filter a friend's plan you never accepted could be
+ * offered and then fail after the upload (Fable, S-11 r2). Accepted
+ * invitations come from the RPC; this read is owner rows only. A read failure
+ * is null: the row then says "No night out tonight", never a guess.
  */
 async function fetchOwnedTonight(
   client: SupabaseClient,
+  youId: string,
   nightKey: string,
 ): Promise<ComposerNightOut | null> {
   try {
     const { data, error } = await client
       .from('night_outs')
       .select('id, title, night, status')
+      .eq('owner_id', youId)
       .eq('night', nightKey)
       .neq('status', 'cancelled')
       .order('created_at', { ascending: true })

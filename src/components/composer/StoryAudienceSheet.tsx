@@ -20,8 +20,7 @@ import type { StoryAudienceChoice } from './types';
  * The composer used to offer a third, named-group audience here. The social
  * redesign (2026-09-13) dropped it: a story's audience is its friends or a
  * hand-picked few, and a GROUP is a destination (its own thread), not a way
- * to narrow a story. `StoryAudienceChoice` keeps the `'group'` member so the
- * pure resolution in `types.ts` stays total; this sheet can never emit it.
+ * to narrow a story. `StoryAudienceChoice` is exactly these two.
  *
  * IT IS A SHEET OVER THE DESTINATION SCREEN, NOT A FOURTH FRAME: "opens as a
  * sheet over the destination screen rather than as a fourth frame" is the

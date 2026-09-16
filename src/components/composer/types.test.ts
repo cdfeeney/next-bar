@@ -95,17 +95,7 @@ describe('V8-R-CMP-005 / D-C-37 — the story audience is intersected', () => {
     ).toEqual([]);
   });
 
-  test('a named group drops the member who is not a mutual friend', () => {
-    expect(
-      resolveStoryRecipients({
-        choice: 'group',
-        mutualIds: mutuals,
-        groupMemberIds: ['a', 'stranger', 'b'],
-      }),
-    ).toEqual(['a', 'b']);
-  });
-
-  test('a custom pick is intersected too — a stale id is not a recipient', () => {
+  test('a custom pick is intersected — a stale id is not a recipient', () => {
     expect(
       resolveStoryRecipients({
         choice: 'custom',
@@ -115,19 +105,19 @@ describe('V8-R-CMP-005 / D-C-37 — the story audience is intersected', () => {
     ).toEqual(['b']);
   });
 
-  test('a group of non-mutuals resolves to nobody rather than to the whole group', () => {
+  test('a custom pick of non-mutuals resolves to nobody rather than to the picked set', () => {
     expect(
       resolveStoryRecipients({
-        choice: 'group',
+        choice: 'custom',
         mutualIds: mutuals,
-        groupMemberIds: ['x', 'y'],
+        customIds: ['x', 'y'],
       }),
     ).toEqual([]);
   });
 
   test('fails closed when the narrowing reaches nobody', () => {
     expect(
-      storyAudienceLapsed({ choice: 'group', mutualsReady: true, resolved: [] }),
+      storyAudienceLapsed({ choice: 'custom', mutualsReady: true, resolved: [] }),
     ).toBe(true);
   });
 
@@ -158,7 +148,7 @@ describe('V8-R-CMP-014 — the pre-publish summary states everything in words', 
     const lines = summaryLines({
       ...base,
       destinations: ['feed', 'story', 'night_out', 'group'],
-      storyAudience: 'group',
+      storyAudience: 'custom',
       storyRecipientCount: 3,
       groupNames: ['Bar Crew'],
       nightOutLabel: "Friday at The Fox",
@@ -284,7 +274,7 @@ describe('V8-R-CMP-005 — a tag the story will not reach', () => {
       taggedOutsideStoryAudience({
         ...base,
         destinations: ['story'],
-        storyAudience: 'group',
+        storyAudience: 'custom',
         storyAudienceIds: ['alex', 'blake'],
       }),
     ).toEqual([]);
@@ -334,7 +324,6 @@ describe('reconcileSelection — stored intent against the live world', () => {
     groupIds: [] as readonly string[],
     tagIds: [] as readonly string[],
     storyAudience: 'friends' as const,
-    storyAudienceGroupId: null,
     customIds: [] as readonly string[],
     nightOutId: 'no1' as string | null,
   };
@@ -405,11 +394,11 @@ describe('reconcileSelection — stored intent against the live world', () => {
       selection: {
         ...selection,
         destinations: ['story'],
-        storyAudience: 'group',
-        storyAudienceGroupId: 'crew',
+        storyAudience: 'custom',
+        customIds: ['alex', 'stranger'],
       },
     });
-    // Bar Crew holds alex (gone) and stranger (never mutual) — nobody is left.
+    // alex has left the circle and stranger was never in it — nobody is left.
     expect([...live.storyAudienceIds]).toEqual([]);
     expect(live.storyLapsed).toBe(true);
   });
@@ -430,11 +419,11 @@ describe('reconcileSelection — stored intent against the live world', () => {
         ...selection,
         destinations: ['story'],
         tagIds: ['sam'],
-        storyAudience: 'group',
-        storyAudienceGroupId: 'crew',
+        storyAudience: 'custom',
+        customIds: ['alex'],
       },
     });
-    // Bar Crew resolves to alex; sam is tagged but would not see it.
+    // The story is narrowed to alex; sam is tagged but would not see it.
     expect([...live.storyAudienceIds]).toEqual(['alex']);
     expect([...live.strandedTagIds]).toEqual(['sam']);
   });

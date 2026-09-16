@@ -53,6 +53,7 @@ export default function GlobalComposer({
   friends,
   friendsReady,
   groups,
+  groupsUnavailable = false,
   nightOut,
   defaultStoryAudience = 'friends',
   onPublish,
@@ -73,6 +74,8 @@ export default function GlobalComposer({
   friendsReady: boolean;
   /** The author's named groups, with their FIXED membership. */
   groups: readonly ComposerGroup[];
+  /** The groups read FAILED. Not the same as `groups` being empty, and the row says so. */
+  groupsUnavailable?: boolean;
   /** Tonight's night out, or null. */
   nightOut: ComposerNightOut | null;
   /** The Account default the Story audience subrow is pre-filled from (V8-R-CMP-005). */
@@ -151,8 +154,6 @@ export default function GlobalComposer({
       groupIds: selectedGroupIds,
       tagIds: people.map((person) => person.id),
       storyAudience,
-      // The sheet offers Friends or Custom only (README §9); no group audience.
-      storyAudienceGroupId: null,
       customIds,
       nightOutId: selectedNightOutId,
     },
@@ -263,7 +264,6 @@ export default function GlobalComposer({
         tagIds: live.tagIds,
         storyAudience,
         storyAudienceIds: storyRecipients,
-        storyAudienceGroupId: null,
         groupIds: destinations.includes('group') ? live.groupIds : [],
         nightOutId: destinations.includes('night_out') ? (nightOut?.id ?? null) : null,
       });
@@ -459,6 +459,7 @@ export default function GlobalComposer({
         <DestinationsStep
           destinations={destinations}
           groups={groups}
+          groupsUnavailable={groupsUnavailable}
           selectedGroupIds={live.groupIds}
           groupsOpen={groupsOpen}
           // The row shows the CHOSEN plan while one is selected, so a replacement

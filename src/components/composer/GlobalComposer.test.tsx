@@ -608,7 +608,6 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     await screen.findByTestId('composer-receipt');
 
     expect([...published[0].storyAudienceIds]).toEqual(['alex']);
-    expect(published[0].storyAudienceGroupId).toBeNull();
   });
 
   test('the Custom picker narrows by name or @handle', async () => {
@@ -695,7 +694,6 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     await user.click(screen.getByTestId('composer-share'));
     await screen.findByTestId('composer-receipt');
     expect([...published[0].storyAudienceIds]).toEqual(['alex']);
-    expect(published[0].storyAudienceGroupId).toBeNull();
   });
 
   test('dismissing with Custom empty falls back to Friends (README §9)', async () => {

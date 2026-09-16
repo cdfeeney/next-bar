@@ -303,6 +303,7 @@ export default function SocialPage(): JSX.Element {
           friends={stories.friends}
           friendsReady={stories.friendsReady}
           groups={composer.groups}
+          groupsUnavailable={composer.groupsUnavailable}
           nightOut={composer.nightOut}
           onCancel={() => setAddingStory(false)}
           onPublish={composer.publish}

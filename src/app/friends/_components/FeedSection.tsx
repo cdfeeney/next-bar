@@ -204,6 +204,10 @@ export default function FeedSection({
     // Feed there is nothing to load: the banner is not gated on auth, so a read
     // that failed while signed in outlived the session that issued it.
     setLoadFailed(false);
+    // AND "SETTLED" IS PER ACCOUNT. Left true from A's read, B saw "Nothing
+    // here yet" while B's own posts read was still in flight — the ready-and-
+    // empty claim made about a Feed that had not been read (Fable, S-11 r2).
+    setSettled(false);
   }
 
   /**

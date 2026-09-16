@@ -39,6 +39,7 @@ import {
 export default function DestinationsStep({
   destinations,
   groups,
+  groupsUnavailable = false,
   selectedGroupIds,
   groupsOpen,
   nightOut,
@@ -63,6 +64,12 @@ export default function DestinationsStep({
 }: {
   destinations: readonly DestinationKey[];
   groups: readonly ComposerGroup[];
+  /**
+   * The groups read FAILED. The row is held and SAYS so — an empty list would
+   * claim the author has no groups, which is the collapse every other read on
+   * Social refuses (Codex, S-11 r2).
+   */
+  groupsUnavailable?: boolean;
   selectedGroupIds: readonly string[];
   groupsOpen: boolean;
   /**
@@ -255,9 +262,19 @@ export default function DestinationsStep({
           <DestinationRow
             testId="composer-destination-group"
             destination="group"
-            hint={retiredHint('group') ?? groupSummary(groups, selectedGroupIds)}
+            hint={
+              retiredHint('group')
+              ?? (groupsUnavailable
+                ? 'Your groups could not be loaded'
+                : groups.length === 0
+                  ? 'You have no groups yet'
+                  : groupSummary(groups, selectedGroupIds))
+            }
             on={on('group')}
-            disabled={rowDisabled('group')}
+            // With no group to send to there is nothing to turn ON — the same
+            // rule as the Night Out row (README §9.4 "unavailable when there is
+            // none"). A row already on can always be turned off.
+            disabled={rowDisabled('group', groupsUnavailable || groups.length === 0)}
             onClick={() => onToggleDestination('group')}
           />
           {/* EXPANDS IN PLACE. The dropdown is joined to its row, and the
@@ -431,8 +448,7 @@ function audienceLabel(
   count: number | null,
 ): string {
   if (choice === 'friends') return 'Friends';
-  const people = `${count ?? 0} ${count === 1 ? 'person' : 'people'}`;
-  return choice === 'group' ? `Group · ${people}` : `Custom · ${people}`;
+  return `Custom · ${count ?? 0} ${count === 1 ? 'person' : 'people'}`;
 }
 
 /** Restated ON THE ROW, open or closed (V8-R-CMP-007). */
