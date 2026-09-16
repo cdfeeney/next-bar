@@ -44,6 +44,20 @@ describeLive('0080 night_out_anon_rsvps — a guest RSVPs with a name', () => {
     }
   }
 
+  /**
+   * A permission error ABORTS the whole transaction in Postgres, so every later
+   * query in the same test dies with "current transaction is aborted" — which
+   * is what this suite did the first time it ran against an applied 0080. Take
+   * an expected denial inside a savepoint and the transaction survives it.
+   */
+  async function expectDenied(sql: string, params: unknown[]) {
+    await db.query('SAVEPOINT denial');
+    await expect(db.query(sql, params)).rejects.toMatchObject({
+      message: expect.stringMatching(/permission denied/i),
+    });
+    await db.query('ROLLBACK TO SAVEPOINT denial');
+  }
+
   const asRole = async (role: string, uid?: string) => {
     await db.query(`SET LOCAL ROLE ${role}`);
     if (uid) {
@@ -126,9 +140,7 @@ describeLive('0080 night_out_anon_rsvps — a guest RSVPs with a name', () => {
       expect(none, 'a non-member sees no guests').toEqual([]);
 
       await asRole('anon');
-      await expect(
-        db.query('select * from public.get_night_out_anon_guests($1)', [planId]),
-      ).rejects.toMatchObject({ message: expect.stringMatching(/permission denied/i) });
+      await expectDenied('select * from public.get_night_out_anon_guests($1)', [planId]);
     });
   });
 
@@ -137,9 +149,7 @@ describeLive('0080 night_out_anon_rsvps — a guest RSVPs with a name', () => {
     await inRollback(async () => {
       const { token } = await ownerWithPlan();
       await asRole('anon');
-      await expect(
-        db.query('select * from public.preview_night_out_attendees($1)', [token]),
-      ).rejects.toMatchObject({ message: expect.stringMatching(/permission denied/i) });
+      await expectDenied('select * from public.preview_night_out_attendees($1)', [token]);
       // The preview (with its accepted COUNT) is still anon-readable.
       const { rows } = await db.query('select * from public.preview_night_out($1)', [token]);
       expect(rows.length).toBe(1);
