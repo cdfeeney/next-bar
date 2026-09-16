@@ -15,9 +15,12 @@ import { directionsHref } from '@/lib/travelTime';
 export default function DecidedBanner({
   barId,
   onShare,
+  shareNotice,
 }: {
   barId: string;
   onShare: () => void;
+  /** R-03 item 2: the copy confirmation (or the by-hand URL) shows HERE, beside Share. */
+  shareNotice: string | null;
 }): JSX.Element {
   const bar = getBarById(barId);
   const name = bar?.name ?? barId;
@@ -51,6 +54,11 @@ export default function DecidedBanner({
           Share
         </button>
       </div>
+      {shareNotice !== null ? (
+        <p className="mt-3 break-all text-xs text-muted" role="status" data-testid="decided-share-notice">
+          {shareNotice}
+        </p>
+      ) : null}
     </section>
   );
 }

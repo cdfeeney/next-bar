@@ -631,11 +631,29 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     const rows = page.getByTestId('night-out-board').getByRole('listitem');
     await expect(rows.first()).toContainText(/5 votes/);
 
+    // R-03 item 4: once locked, the re-read is a DECIDED plan on the top bar and
+    // the board shows it — the banner, VOTING CLOSED, PICKED on that row only.
+    let locked = false;
+    await page.route('**/rest/v1/rpc/get_night_out*', async (route) => {
+      const url = route.request().url();
+      if (!locked || !/\/rpc\/get_night_out(?:\?|$)/.test(url)) return route.fallback();
+      await fulfillJson(200, [{ ...PLAN_ROW, caller_role: 'owner', status: 'decided', decided_bar_id: 'please-dont-tell' }])(route);
+    });
+    await page.route('**/rest/v1/rpc/lock_night_out*', async (route) => {
+      lockedWith = route.request().postDataJSON() as Record<string, unknown>;
+      locked = true;
+      await fulfillJson(200, 'please-dont-tell')(route);
+    });
     await page.getByTestId('night-out-lock').click();
     await expect.poll(() => lockedWith, { timeout: 5000 }).not.toBeNull();
     // The bar is NOT a parameter: the server picks the leader inside the same
     // serialized section that takes it.
     expect(Object.keys(lockedWith ?? {})).toEqual(['p_night_out']);
+    await expect(page.getByTestId('decided-banner')).toBeVisible();
+    await expect(page.getByTestId('shortlist-state')).toHaveText(/Voting closed/i);
+    await expect(page.getByTestId('shortlist-picked')).toHaveCount(1);
+    await expect(page.getByTestId('shortlist-row').first().getByTestId('shortlist-picked')).toBeVisible();
+    await expect(page.getByTestId('night-out-lock')).toHaveCount(0);
   });
 
   /**
@@ -3042,7 +3060,10 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       await expect(boardCover).toHaveAttribute('data-cover-state', 'ok');
       const title = page.getByRole('heading', { level: 1 });
       await expect(title).toBeVisible();
-      expect((await title.boundingBox())!.y).toBeGreaterThan((await boardCover.boundingBox())!.y);
+      // R-03 item 10: the title lies ENTIRELY below the cover, not merely lower.
+      const coverBox = (await boardCover.boundingBox())!;
+      const titleBox = (await title.boundingBox())!;
+      expect(titleBox.y).toBeGreaterThanOrEqual(coverBox.y + coverBox.height);
     });
 
     test('S-06b 3: a plan created without a cover writes none and renders as before on the board', async ({
@@ -3104,11 +3125,6 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
         '**/rest/v1/rpc/get_my_night_out_invitation_notifications*',
         fulfillJson(200, [notification(1, WITH_COVER, 'Birthday drinks'), notification(2, NO_COVER, 'Quiet one')]),
       );
-      await page.route('**/rest/v1/night_outs?*', async (route) => {
-        if (route.request().method() !== 'GET') return route.fallback();
-        const url = route.request().url();
-        await fulfillJson(200, url.includes(WITH_COVER) ? [{ id: WITH_COVER, cover: 'template:birthday' }] : [{ id: NO_COVER, cover: null }])(route);
-      });
       // The card people actually see (round-1 Codex HIGH): a membership-backed
       // pending invitation renders through PlanInvites, and PlansSection hides
       // the matching notification. So a THIRD plan comes through get_my_night_outs.
@@ -3156,6 +3172,32 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       await expect(noCover.getByTestId('invite-cover')).toHaveCount(0);
       await expect(noCover.getByTestId('invite-cover-state')).toHaveAttribute('data-plan-cover-state', 'none');
     });
+
+    test('R-03 8: nothing unanimous — every card is a near-miss, none is shareable; and fewer than two people is the empty state', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      // Sam loves it, Alex does not: no bar clears 8.0 for everyone selected.
+      await openDrawnForm(page, context, baseURL, {
+        friendRatings: [
+          rated(FRIEND_ID, 'death-and-co', 9), rated(ALEX_ID, 'death-and-co', 7),
+          rated(FRIEND_ID, 'attaboy', 8.5), rated(ALEX_ID, 'attaboy', 6),
+        ],
+        youRatings: [{ bar_id: 'death-and-co', score: 9 }, { bar_id: 'attaboy', score: 9 }],
+      });
+      await expect(page.getByTestId('no-unanimous-pick')).toBeVisible();
+      const cards = page.locator('article');
+      await expect.poll(() => cards.count()).toBeGreaterThan(0);
+      await expect(page.getByTestId('near-miss-badge')).toHaveCount(await cards.count());
+      await expect(page.getByRole('button', { name: /^Share the pick/ })).toHaveCount(0);
+      // Deselect everyone but You: consensus needs a group.
+      await page.getByRole('button', { name: /^Sam Ruiz/ }).click();
+      await page.getByRole('button', { name: /^Alex Chen/ }).click();
+      await expect(page.getByText(/Pick at least two people/i)).toBeVisible();
+      await expect(page.getByTestId('no-unanimous-pick')).toHaveCount(0);
+    });
+
 
     test('7: signed out, the screen is /auth', async ({ page }) => {
       await stubNightOutRest(page);
@@ -3330,5 +3372,144 @@ test.describe('S-07: the plan board as drawn', () => {
     await rows.nth(1).getByRole('button', { name: /^Vote for Attaboy/ }).click();
     await expect.poll(() => calls.length).toBe(1);
     expect(calls[0]).toEqual({ p_night_out: PLAN_ID, p_bar: 'attaboy' });
+  });
+});
+
+/** R-03 — the wave-2 MEDIUMs, each pinned where it was found. */
+test.describe('R-03: wave-2 review follow-ups', () => {
+  const PDT = 'please-dont-tell';
+  const FRIEND_ID = '523e4567-e89b-42d3-a456-426614174000';
+
+  async function ownerBoard(
+    page: Page,
+    context: BrowserContext,
+    baseURL: string | undefined,
+    planPatch: Record<string, unknown> = {},
+    board?: unknown[],
+  ): Promise<void> {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubOwnerRpcs(page);
+    await page.route('**/rest/v1/rpc/get_night_out*', async (route) => {
+      const url = route.request().url();
+      if (board && url.includes('get_night_out_board')) return fulfillJson(200, board)(route);
+      if (!/\/rpc\/get_night_out(?:\?|$)/.test(url)) return route.fallback();
+      await fulfillJson(200, [{ ...PLAN_ROW, caller_role: 'owner', ...planPatch }])(route);
+    });
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByTestId('plan-header')).toBeVisible();
+  }
+
+  test('1: the row that holds your vote says so in words, and its control has an accessible name', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    await ownerBoard(page, context, baseURL, {}, [
+      { bar_id: PDT, suggested_by_handle: 'sam', votes: 5, caller_voted: true },
+      { bar_id: 'attaboy', suggested_by_handle: 'conor', votes: 1, caller_voted: false },
+    ]);
+    const held = page.getByTestId('shortlist-row').first();
+    await expect(held).toContainText(/your vote/i);
+    await expect(held.getByRole('img', { name: /^Your vote/ })).toBeVisible();
+  });
+
+  test('5: "Suggest another bar" is a picker — type a name, tap +, one suggest call; nothing matches says so', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    await ownerBoard(page, context, baseURL);
+    const calls: unknown[] = [];
+    await page.route('**/rest/v1/rpc/suggest_night_out_bar*', async (route) => {
+      calls.push(route.request().postDataJSON());
+      await fulfillJson(200, true)(route);
+    });
+    const box = page.getByRole('searchbox', { name: /suggest a bar/i });
+    await box.fill('zzzz-no-such-bar');
+    await expect(page.getByText('No matching bars.')).toBeVisible();
+    await box.fill('mood');
+    const row = page.getByTestId('suggest-matches').locator('[data-bar-id="mood-ring"]');
+    await expect(row).toContainText('Mood Ring');
+    await row.getByRole('button', { name: /^Suggest Mood Ring/ }).click();
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0]).toEqual({ p_night_out: PLAN_ID, p_bar: 'mood-ring' });
+    await expect(box).toHaveValue('');
+    // A bar already on the shortlist is offered as held, never suggested twice.
+    await box.fill('attaboy');
+    await expect(page.getByRole('button', { name: /Attaboy is already on the shortlist/ })).toBeDisabled();
+    await expect(page.getByText(/Pick a bar from the catalog/)).toHaveCount(0);
+  });
+
+  test('2: Share on the decided banner reports beside the banner, not only in the footer', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    await ownerBoard(page, context, baseURL, { status: 'decided', decided_bar_id: PDT });
+    await page.getByTestId('decided-banner').getByRole('button', { name: 'Share' }).click();
+    const notice = page.getByTestId('decided-share-notice');
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText(/Invite link copied|night-out/);
+    await expect(page.getByTestId('plan-footer').getByRole('status')).toHaveCount(0);
+  });
+
+  test('3: a pending invitee sees "I’m in" in the first viewport, above the shortlist', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubMemberRpcs(page);
+    await page.route('**/rest/v1/rpc/get_night_out*', async (route) => {
+      const url = route.request().url();
+      if (!/\/rpc\/get_night_out(?:\?|$)/.test(url)) return route.fallback();
+      await fulfillJson(200, [{ ...PLAN_ROW, caller_role: 'member', caller_status: 'pending' }])(route);
+    });
+    await page.goto(`/night-out/${TOKEN}`);
+    const accept = page.getByTestId('rsvp-row-accept').getByRole('button', { name: /I.m in/ });
+    await expect(accept).toBeVisible();
+    const box = (await accept.boundingBox())!;
+    const vh = await page.evaluate(() => window.innerHeight);
+    expect(box.y + box.height).toBeLessThanOrEqual(vh);
+    expect(box.y).toBeLessThan((await page.getByTestId('plan-shortlist').boundingBox())!.y);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    // The rest of the row (Not tonight) stays by the footer, and there is one I'm in, not two.
+    await expect(page.getByRole('button', { name: /I.m in/ })).toHaveCount(1);
+    await expect(page.getByTestId('rsvp-row-rest').getByRole('button', { name: /not tonight/i })).toBeVisible();
+  });
+
+  test('6: the three recovery "Open it" buttons are 44px', async ({ page, context, baseURL }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await page.clock.setFixedTime(new Date('2026-07-24T20:00:00-04:00'));
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubNightOutRest(page);
+    await stubSocialShellRest(page);
+    for (const rpc of ['get_my_night_outs', 'get_circle_rsvps', 'get_circle_suggestions', 'get_circle_vibe_votes']) {
+      await page.route(`**/rest/v1/rpc/${rpc}*`, fulfillJson(200, []));
+    }
+    await page.route('**/auth/v1/**', fulfillJson(200, {}));
+    for (const rpc of ['get_following', 'get_followers']) {
+      await page.route(`**/rest/v1/rpc/${rpc}*`, fulfillJson(200, [{ id: FRIEND_ID, handle: 'sam', display_name: 'Sam Ruiz' }]));
+    }
+    await stubOwnerRpcs(page);
+    await page.route('**/rest/v1/rpc/create_night_out*', fulfillJson(200, PLAN_ID));
+    // One refused invite holds the screen with an Open it beside the report.
+    await page.route('**/rest/v1/rpc/invite_one_to_night_out*', fulfillJson(200, false));
+    await page.route('**/rest/v1/rpc/get_my_night_outs*', fulfillJson(200, []));
+    await page.goto('/friends/consensus');
+    await expect(page.getByTestId('create-night-out')).toBeEnabled({ timeout: 15_000 });
+    await page.getByTestId('create-night-out').click();
+    await expect(page.getByTestId('unsent-outcome')).toBeVisible();
+    const open = page.getByRole('button', { name: /^Open it$/ });
+    await expect(open).toBeVisible();
+    expect((await open.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   });
 });

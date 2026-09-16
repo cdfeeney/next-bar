@@ -20,8 +20,10 @@
  * given. A FAILED board read (`board === null`) is stated, never drawn as an
  * empty shortlist.
  */
+import { useMemo } from 'react';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getBarById } from '@/lib/catalog';
+import { useBars } from '@/lib/useBars';
 import { remainingLabel } from '@/lib/nightOutPlan';
 import { lockNightOut, removeNightOutSuggestion, type NightOutVoting } from '../planActions';
 import {
@@ -33,6 +35,7 @@ import {
 import { ShortlistOverflow, barLabel, deadlineLabel } from './planPage';
 
 const LABEL = 'font-label text-[11px] font-bold uppercase tracking-[0.25em]';
+const SUGGEST_MATCHES = 6;
 
 export default function PlanShortlist({
   plan,
@@ -74,6 +77,16 @@ export default function PlanShortlist({
   setActionError: (next: string | null) => void;
   withRefresh: (action: () => Promise<boolean>, capacityRefusable?: boolean) => () => Promise<void>;
 }): JSX.Element | null {
+  // R-03 item 5: the picker's matches. The hook is called unconditionally
+  // (before the early return) so the render order never changes.
+  const bars = useBars();
+  const suggestTerm = suggestInput.trim().toLocaleLowerCase();
+  const suggestMatches = useMemo(
+    () => (suggestTerm === ''
+      ? []
+      : bars.filter((b) => b.name.toLocaleLowerCase().includes(suggestTerm)).slice(0, SUGGEST_MATCHES)),
+    [bars, suggestTerm],
+  );
   if (isCancelled) return null;
   const decided = plan.status === 'decided';
   const leaderId = isPlanOpen && votingOpen && rankedBoard.length > 0 && rankedBoard[0].votes > 0
@@ -148,6 +161,9 @@ export default function PlanShortlist({
                 ) : (
                   <span
                     className={voteClass}
+                    // role="img" so the aria-label is an accessible name (ARIA
+                    // forbids aria-label on a generic span — R-03 item 1).
+                    role="img"
                     aria-label={entry.callerVoted ? `Your vote — ${entry.votes} ${entry.votes === 1 ? 'vote' : 'votes'}` : `${entry.votes} ${entry.votes === 1 ? 'vote' : 'votes'}`}
                     data-testid={entry.callerVoted ? 'shortlist-voted' : undefined}
                   >
@@ -161,7 +177,7 @@ export default function PlanShortlist({
                     {bar?.neighborhood ? `${bar.neighborhood} · ` : ''}
                     suggested by {suggestedByYou ? 'you' : (entry.suggestedByHandle ?? 'someone')}
                     {/* The count in words, for the reader and for the e2e that keys on "N votes". */}
-                    <span className="sr-only"> · {entry.votes} {entry.votes === 1 ? 'vote' : 'votes'}</span>
+                    <span className="sr-only"> · {entry.votes} {entry.votes === 1 ? 'vote' : 'votes'}{entry.callerVoted ? ' · your vote' : ''}</span>
                   </p>
                 </div>
                 {picked ? (
@@ -212,35 +228,58 @@ export default function PlanShortlist({
                 : "Say you're in to suggest a bar."}
         </p>
       ) : (
-        <form
-          className="mt-3 flex gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const barId = suggestInput.trim().toLowerCase();
-            if (getBarById(barId) === undefined) {
-              setActionError('Pick a bar from the catalog (its id).');
-              return;
-            }
-            setSuggestInput('');
-            void withRefresh(() => {
-              const supabase = getBrowserSupabase();
-              return supabase
-                ? suggestNightOutBar(supabase, plan.id, barId)
-                : Promise.resolve(false);
-            })();
-          }}
-        >
+        // R-03 item 5 (owner 2026-09-16: "picker version is what we want"):
+        // search by name, rows with a trailing +, a tap suggests the bar and it
+        // lands with zero votes. Same shape as the create form's shortlist.
+        <div className="mt-3" data-testid="suggest-picker">
           <input
             value={suggestInput}
             onChange={(event) => setSuggestInput(event.target.value)}
+            type="search"
             placeholder="Suggest another bar…"
             aria-label="Suggest a bar"
-            className="min-h-[44px] flex-1 rounded-2xl border border-border bg-surface px-4 py-2 text-text"
+            className="min-h-[44px] w-full rounded-2xl border border-border bg-surface px-4 py-2 text-text"
           />
-          <button type="submit" className="min-h-[44px] rounded-full border border-border px-4 text-sm touch-manipulation">
-            Suggest
-          </button>
-        </form>
+          {suggestTerm !== '' && suggestMatches.length === 0 ? (
+            <p className="mt-2 text-sm text-muted">No matching bars.</p>
+          ) : null}
+          {suggestMatches.length > 0 ? (
+            <ul className="mt-2 space-y-2" data-testid="suggest-matches">
+              {suggestMatches.map((bar) => {
+                const already = (board ?? []).some((e) => e.barId === bar.id);
+                return (
+                  <li
+                    key={bar.id}
+                    data-bar-id={bar.id}
+                    className="flex items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="font-display text-sm truncate">{bar.name}</p>
+                      <p className="text-xs uppercase tracking-wider text-muted truncate">{bar.neighborhood}</p>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={already ? `${bar.name} is already on the shortlist` : `Suggest ${bar.name}`}
+                      disabled={already}
+                      onClick={() => {
+                        setSuggestInput('');
+                        void withRefresh(() => {
+                          const supabase = getBrowserSupabase();
+                          return supabase
+                            ? suggestNightOutBar(supabase, plan.id, bar.id)
+                            : Promise.resolve(false);
+                        })();
+                      }}
+                      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-border text-lg text-muted touch-manipulation disabled:bg-held disabled:text-muted"
+                    >
+                      <span aria-hidden="true">{already ? '✓' : '+'}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+        </div>
       )}
 
       {/* V8-R-SOC-007. ONE action with a fixed object, not a Pick-this on every

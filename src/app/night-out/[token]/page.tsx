@@ -734,8 +734,19 @@ export default function NightOutPage({
 
       {/* README §7: the decided banner, locked plans only. */}
       {!isCancelled && plan.status === 'decided' && plan.decidedBarId !== null ? (
-        <DecidedBanner barId={plan.decidedBarId} onShare={copyInviteLink} />
+        <DecidedBanner barId={plan.decidedBarId} onShare={copyInviteLink} shareNotice={shareNotice} />
       ) : null}
+
+      {/* R-03 item 3: a pending invitee's "I'm in" sits above the shortlist. */}
+      <RsvpRow
+        plan={plan}
+        isCancelled={isCancelled}
+        isDeclined={isDeclined}
+        isOwner={isOwner}
+        respondAs={respondAs}
+        withRefresh={withRefresh}
+        variant="accept"
+      />
 
       {actionError !== null ? (
         <p className="mt-4 text-center text-sm text-red-400">{actionError}</p>
@@ -771,9 +782,14 @@ export default function NightOutPage({
         isOwner={isOwner}
         respondAs={respondAs}
         withRefresh={withRefresh}
+        variant="rest"
       />
 
-      {!isCancelled ? <PlanFooter shareNotice={shareNotice} onCopyInvite={copyInviteLink} /> : null}
+      {/* The notice shows beside whichever Share produced it: the banner on a
+          decided plan (R-03 item 2), the footer otherwise. */}
+      {!isCancelled ? (
+        <PlanFooter shareNotice={plan.status === 'decided' ? null : shareNotice} onCopyInvite={copyInviteLink} />
+      ) : null}
 
       {/* V8-R-NO-008 / V8-R-NO-009. Rendered for a CANCELLED plan too: the
           night still happened, its photos are still inside their window, and

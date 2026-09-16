@@ -1235,7 +1235,7 @@ export default function StartNightOutButton({
             <button
               type="button"
               onClick={() => router.push(`/night-out/${openToken}`)}
-              className="mt-2 rounded-full border px-5 py-2 text-sm"
+              className="mt-2 inline-flex min-h-[44px] items-center rounded-full border px-5 text-sm touch-manipulation"
             >
               Open it
             </button>
@@ -1262,7 +1262,7 @@ export default function StartNightOutButton({
         <button
           type="button"
           onClick={() => router.push(`/night-out/${openToken}`)}
-          className="mt-2 rounded-full border px-5 py-2 text-sm"
+          className="mt-2 inline-flex min-h-[44px] items-center rounded-full border px-5 text-sm touch-manipulation"
         >
           Open it
         </button>
@@ -1276,7 +1276,7 @@ export default function StartNightOutButton({
           <button
             type="button"
             onClick={() => void retryOpen()}
-            className="mt-2 rounded-full border px-5 py-2 text-sm"
+            className="mt-2 inline-flex min-h-[44px] items-center rounded-full border px-5 text-sm touch-manipulation"
           >
             Open it
           </button>

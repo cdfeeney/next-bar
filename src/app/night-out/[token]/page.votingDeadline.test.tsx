@@ -30,7 +30,13 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => auth }));
 vi.mock('@/lib/supabase/client', () => ({ getBrowserSupabase: () => ({}) }));
-vi.mock('@/lib/catalog', () => ({ getBarById: () => null }));
+vi.mock('@/lib/catalog', () => ({
+  getBarById: () => null,
+  // R-03: the board's suggest picker reads the catalog through useBars.
+  subscribeCatalog: () => () => {},
+  // A STABLE snapshot: useSyncExternalStore re-renders forever on a fresh array.
+  getBarsSnapshot: ((empty: never[]) => () => empty)([]),
+}));
 vi.mock('@/components/StartNightOutButton', () => ({
   default: () => null,
   forgetStartedNightOut: vi.fn(),

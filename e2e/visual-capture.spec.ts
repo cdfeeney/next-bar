@@ -12,12 +12,15 @@ import path from 'node:path';
  */
 const OUT = process.env.VISUAL_CAPTURE_DIR;
 
-const SCREENS: Array<{ name: string; route: string; ready: RegExp | string }> = [
+const SCREENS: Array<{ name: string; route: string; ready: RegExp | string; requiresSession?: boolean }> = [
   { name: 'next-bar-home', route: '/', ready: /Next Bar|Where next/i },
   { name: 'map', route: '/map', ready: /map/i },
   { name: 'rankings', route: '/rankings', ready: /Rankings/i },
   { name: 'social', route: '/friends', ready: /Friends|Social/i },
-  { name: 'plan-night-out-form', route: '/friends/consensus', ready: /night out|plan/i },
+  // S-06: signed out this route is /auth. The capture needs a real session: set
+  // VISUAL_CAPTURE_SESSION_COOKIE to "<name>=<value>" for the staging account
+  // (design-screens-20260913/capture.mjs shows the sign-in) or the screen skips.
+  { name: 'plan-night-out-form', route: '/friends/consensus', ready: /night out|plan/i, requiresSession: true },
   { name: 'settings', route: '/settings', ready: /Account|Settings/i },
   { name: 'nights', route: '/nights', ready: /night/i },
   // nb-social-20260914: the Social redesign's pushed screens (S-01, S-05). They 404 until
@@ -30,7 +33,16 @@ test.describe('V9-11 visual evidence capture', () => {
   test.skip(!OUT, 'set VISUAL_CAPTURE_DIR to capture');
 
   for (const screen of SCREENS) {
-    test(`capture ${screen.name}`, async ({ page }, testInfo) => {
+    test(`capture ${screen.name}`, async ({ page, context, baseURL }, testInfo) => {
+      const sessionCookie = process.env.VISUAL_CAPTURE_SESSION_COOKIE;
+      test.skip(
+        Boolean(screen.requiresSession) && !sessionCookie,
+        'needs a signed-in session: set VISUAL_CAPTURE_SESSION_COOKIE=<name>=<value> for the staging account',
+      );
+      if (screen.requiresSession && sessionCookie) {
+        const eq = sessionCookie.indexOf('=');
+        await context.addCookies([{ name: sessionCookie.slice(0, eq), value: sessionCookie.slice(eq + 1), url: baseURL as string }]);
+      }
       await page.goto(screen.route);
       await expect(page.locator('main')).toBeVisible({ timeout: 20_000 });
       // The per-screen readiness text is what makes this a capture of the

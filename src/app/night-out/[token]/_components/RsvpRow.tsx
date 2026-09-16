@@ -11,6 +11,7 @@ export default function RsvpRow({
   isOwner,
   respondAs,
   withRefresh,
+  variant = 'all',
 }: {
   plan: NightOut;
   isCancelled: boolean;
@@ -18,26 +19,36 @@ export default function RsvpRow({
   isOwner: boolean;
   respondAs: (accept: boolean) => () => Promise<boolean>;
   withRefresh: (action: () => Promise<boolean>, capacityRefusable?: boolean) => () => Promise<void>;
-}): JSX.Element {
+  /**
+   * R-03 item 3: a pending invitee's "I'm in" is the primary action and belongs
+   * ABOVE the shortlist, in the first viewport; the rest of the row stays at the
+   * bottom by the footer. 'accept' renders only that button, 'rest' everything else.
+   */
+  variant?: 'all' | 'accept' | 'rest';
+}): JSX.Element | null {
+  if (isCancelled) return null;
+  const showAccept = variant !== 'rest' && plan.callerStatus === 'pending';
+  const showRest = variant !== 'accept';
+  if (!showAccept && !showRest) return null;
   return (
     <>
-      {!isCancelled ? (
-        <section className="mt-6 flex justify-center gap-3">
-          {plan.callerStatus === 'pending' ? (
+      {(
+        <section className="mt-6 flex justify-center gap-3" data-testid={`rsvp-row-${variant}`}>
+          {showAccept ? (
             // An invited member accepts EXPLICITLY (viewing never mutates).
             <button
               type="button"
               onClick={withRefresh(respondAs(true))}
-              className="rounded-full bg-white px-5 py-2 font-semibold text-black"
+              className="inline-flex min-h-[44px] items-center rounded-full bg-accent px-6 font-display font-semibold text-bg touch-manipulation"
             >
               I&apos;m in
             </button>
           ) : null}
-          {isDeclined ? (
+          {!showRest ? null : isDeclined ? (
             <button
               type="button"
               onClick={withRefresh(respondAs(true), true)}
-              className="rounded-full border px-5 py-2"
+              className="inline-flex min-h-[44px] items-center rounded-full border border-border px-5 touch-manipulation"
             >
               Count me back in
             </button>
@@ -45,7 +56,7 @@ export default function RsvpRow({
             <button
               type="button"
               onClick={withRefresh(respondAs(false))}
-              className="rounded-full border px-5 py-2"
+              className="inline-flex min-h-[44px] items-center rounded-full border border-border px-5 touch-manipulation"
             >
               Not tonight
             </button>
@@ -58,13 +69,13 @@ export default function RsvpRow({
                   ? cancelNightOut(supabase, plan.id)
                   : Promise.resolve(false);
               })}
-              className="rounded-full border border-red-400 px-5 py-2 text-red-400"
+              className="inline-flex min-h-[44px] items-center rounded-full border border-red-400 px-5 text-red-400 touch-manipulation"
             >
               Cancel night out
             </button>
           )}
         </section>
-      ) : null}
+      )}
     </>
   );
 }

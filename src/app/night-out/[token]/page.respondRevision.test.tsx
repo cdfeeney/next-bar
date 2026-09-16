@@ -63,7 +63,13 @@ vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => ({ status: 'signed-in', user: { id: 'u1' } }),
 }));
 vi.mock('@/lib/supabase/client', () => ({ getBrowserSupabase: () => ({}) }));
-vi.mock('@/lib/catalog', () => ({ getBarById: () => null }));
+vi.mock('@/lib/catalog', () => ({
+  getBarById: () => null,
+  // R-03: the board's suggest picker reads the catalog through useBars.
+  subscribeCatalog: () => () => {},
+  // A STABLE snapshot: useSyncExternalStore re-renders forever on a fresh array.
+  getBarsSnapshot: ((empty: never[]) => () => empty)([]),
+}));
 vi.mock('@/lib/pendingInvite', () => ({
   consumePendingInvite: () => null,
   peekPendingInvite: () => null,
