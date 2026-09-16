@@ -2228,13 +2228,6 @@ test.describe('S-08: the saved night recap', () => {
   }
 
   test('two stops in order with the right badge on each, and the headline names the Loved bar', async ({ page, context, baseURL }) => {
-    // S-08c acceptance #2 (was S-08b acceptance #4): no new console errors on
-    // /nights/[id]. Attach BEFORE the goto inside openRecap so mount-time errors
-    // are caught too; same error filter as app-shell-smoke's expectNoConsoleErrors.
-    const consoleErrors: string[] = [];
-    page.on('console', (msg) => {
-      if (msg.type() === 'error') consoleErrors.push(msg.text());
-    });
     await openRecap(page, context, baseURL, [
       { bar_id: 'attaboy', sort_order: 1, rating: 'loved' },
       { bar_id: 'dead-rabbit', sort_order: 2, rating: 'pass' },
@@ -2262,7 +2255,34 @@ test.describe('S-08: the saved night recap', () => {
     await expect(markerIcons).toHaveCount(2);
     await expect(map.locator('.leaflet-marker-icon[tabindex="0"]')).toHaveCount(0);
     await expect(map.locator('.leaflet-marker-icon[role="button"]')).toHaveCount(0);
-    // S-08c #2: no console errors surfaced while the recap + map rendered.
+  });
+
+  // S-08c #2 (was S-08b acceptance #4): the recap + map render with no console
+  // errors on /nights/[id]. Its own test with photo:false, because openRecap
+  // deliberately 404s /api/media/*/url to model "photos no longer available",
+  // and that intentional 404 is not the map's doing. With no photo the only
+  // things loading are the recap shell and the inert map. app-shell-smoke's
+  // error filter (type === 'error'), attached BEFORE the goto so mount-time
+  // errors are caught too.
+  test('the recap and its map render with no console errors', async ({ page, context, baseURL }) => {
+    const consoleErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    await openRecap(
+      page,
+      context,
+      baseURL,
+      [
+        { bar_id: 'attaboy', sort_order: 1, rating: 'loved' },
+        { bar_id: 'dead-rabbit', sort_order: 2, rating: 'pass' },
+      ],
+      { photo: false },
+    );
+    // Wait for the inert map and its markers to actually mount before asserting.
+    await expect(page.getByTestId('saved-night-map').locator('[data-stop]')).toHaveCount(2);
+    // Yield once so any post-mount errors land in the array (app-shell-smoke style).
+    await page.waitForTimeout(250);
     expect(consoleErrors, `console errors on /nights/[id]: ${consoleErrors.join(' | ')}`).toEqual([]);
   });
 
