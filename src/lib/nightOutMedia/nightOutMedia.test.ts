@@ -458,6 +458,10 @@ describe('fetchSavedNight (V8-R-ACC-002)', () => {
           { mediaId: UUID_A, storagePath: 'a/1.jpg' },
           { mediaId: UUID_B, storagePath: 'a/2.jpg' },
         ],
+        // S-08a: the stops read (get_saved_night_bars) is a separate RPC; this
+        // mock answers it with the media rows, which carry no bar_id, so the
+        // stops parse to an empty list — a genuine empty is proven live.
+        bars: [],
       },
     });
   });

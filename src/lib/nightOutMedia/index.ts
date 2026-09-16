@@ -141,6 +141,13 @@ export type SavedNightCard = {
 };
 
 /** One opened archived night (V8-R-ACC-002). */
+/** S-08a: one snapshotted stop — a bar and the owner's rating tier at save time. */
+export type SavedNightBar = {
+  barId: string;
+  sortOrder: number;
+  rating: 'loved' | 'liked' | 'pass' | null;
+};
+
 export type SavedNight = {
   id: string;
   title: string | null;
@@ -148,6 +155,12 @@ export type SavedNight = {
   barCount: number;
   archivedAt: string;
   photos: ReadonlyArray<{ mediaId: string; storagePath: string }>;
+  /**
+   * S-08a: the ordered, rated stops snapshotted at archive time. Empty for a
+   * pre-0083 archive (none was captured) or when the stops read failed — the
+   * recap then shows its header and photos without stop rows, never a guess.
+   */
+  bars: ReadonlyArray<SavedNightBar>;
 };
 
 /**

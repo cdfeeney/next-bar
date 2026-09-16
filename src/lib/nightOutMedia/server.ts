@@ -330,6 +330,11 @@ export async function fetchSavedNight(
   if (error || !Array.isArray(data)) return { kind: 'failed' };
   if (data.length === 0) return { kind: 'missing' };
 
+  // S-08a: the stops are their own owner-scoped read (0083). A failure or a
+  // pre-0083 database yields an empty list — the recap shows its header and
+  // photos without stop rows rather than failing the whole night.
+  const bars = await fetchSavedNightBars(supabase, savedNightId);
+
   const rows = data as SavedNightDetailRow[];
   const head = rows[0];
   // The server answered with a row we cannot parse. That is a failed read, not
@@ -356,6 +361,37 @@ export async function fetchSavedNight(
           ? [{ mediaId: row.media_id, storagePath: row.storage_path }]
           : [],
       ),
+      bars,
     },
   };
+}
+
+type SavedNightBarRow = { bar_id?: unknown; sort_order?: unknown; rating?: unknown };
+const RATINGS: ReadonlySet<string> = new Set(['loved', 'liked', 'pass']);
+
+/**
+ * S-08a: the ordered, rated stops of the caller's own saved night (0083).
+ * Returns [] on any failure or a pre-0083 database — never throws, so a missing
+ * snapshot degrades the recap to header + photos rather than failing it.
+ */
+async function fetchSavedNightBars(
+  supabase: SupabaseClient,
+  savedNightId: string,
+): Promise<SavedNight['bars']> {
+  try {
+    const { data, error } = await supabase.rpc('get_saved_night_bars', { p_id: savedNightId });
+    if (error || !Array.isArray(data)) return [];
+    return (data as SavedNightBarRow[])
+      .filter((row) => isNonEmptyString(row.bar_id))
+      .map((row) => ({
+        barId: row.bar_id as string,
+        sortOrder: Number.isFinite(Number(row.sort_order)) ? Math.trunc(Number(row.sort_order)) : 0,
+        rating: typeof row.rating === 'string' && RATINGS.has(row.rating)
+          ? (row.rating as 'loved' | 'liked' | 'pass')
+          : null,
+      }))
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+  } catch {
+    return [];
+  }
 }

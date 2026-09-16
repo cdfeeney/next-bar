@@ -2187,6 +2187,95 @@ test.describe('Night Out media and Saved Nights Out (V8-R-NO-008/009, V8-R-ACC-0
 });
 
 /**
+ * S-08 — the saved-night recap as drawn (README §8), on the snapshot that
+ * S-08a/0083 captures. The archive holds the ordered, rated stops; the recap
+ * composes them with the header, the rank action, the photos and the map.
+ */
+test.describe('S-08: the saved night recap', () => {
+  const S8_SAVED = '723e4567-e89b-42d3-a456-426614174111';
+  const S8_MEDIA = '823e4567-e89b-42d3-a456-426614174111';
+
+  async function openRecap(
+    page: Page,
+    context: BrowserContext,
+    baseURL: string | undefined,
+    bars: Array<{ bar_id: string; sort_order: number; rating: string | null }>,
+    opts: { photo?: boolean } = {},
+  ): Promise<void> {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([{ ...sessionCookie(SUPABASE_URL as string), url: baseURL as string }]);
+    await stubNightOutRest(page);
+    await page.route('**/auth/v1/**', fulfillJson(200, {}));
+    await page.route('**/api/media/*/url', fulfillJson(404, { ok: false }));
+    const photo = opts.photo !== false;
+    // get_saved_night* also matches _bars; register the detail first, the bars
+    // read LAST so Playwright's newest-first match routes _bars to it.
+    await page.route(
+      '**/rest/v1/rpc/get_saved_night*',
+      fulfillJson(200, [
+        {
+          id: S8_SAVED, title: 'Birthday crawl', night: CLOSED_WINDOW_NIGHT,
+          bar_count: bars.length, archived_at: '2020-01-02T05:00:00.000Z',
+          media_id: photo ? S8_MEDIA : null,
+          storage_path: photo ? `${USER_ID}/${S8_MEDIA}` : null,
+          sort_order: photo ? 1 : null,
+        },
+      ]),
+    );
+    await page.route('**/rest/v1/rpc/get_saved_night_bars*', fulfillJson(200, bars));
+    await page.goto(`/nights/${S8_SAVED}`);
+    await expect(page.getByTestId('saved-night-open')).toBeVisible();
+  }
+
+  test('two stops in order with the right badge on each, and the headline names the Loved bar', async ({ page, context, baseURL }) => {
+    await openRecap(page, context, baseURL, [
+      { bar_id: 'attaboy', sort_order: 1, rating: 'loved' },
+      { bar_id: 'please-dont-tell', sort_order: 2, rating: 'pass' },
+    ]);
+    const stops = page.getByTestId('saved-night-stop');
+    await expect(stops).toHaveCount(2);
+    await expect(stops.nth(0)).toContainText(/attaboy/i);
+    await expect(stops.nth(0)).toContainText(/Loved/i);
+    await expect(stops.nth(1)).toContainText(/pass/i); // "Please Don't Tell" also matches; assert the badge too
+    await expect(stops.nth(1)).toContainText(/Pass/);
+    await expect(page.getByTestId('saved-night-headline')).toContainText(/2 stops · you loved Attaboy/i);
+    // Both stops are rated, so the action points at the rankings.
+    await expect(page.getByTestId('saved-night-rank')).toContainText(/See your rankings/i);
+  });
+
+  test('a night with an unrated stop shows "Rank last night" and it navigates', async ({ page, context, baseURL }) => {
+    await openRecap(page, context, baseURL, [
+      { bar_id: 'attaboy', sort_order: 1, rating: 'liked' },
+      { bar_id: 'please-dont-tell', sort_order: 2, rating: null },
+    ]);
+    // A liked stop, one unrated → rank what is still unrated.
+    await expect(page.getByTestId('saved-night-headline')).toContainText(/2 stops$/);
+    const rank = page.getByTestId('saved-night-rank');
+    await expect(rank).toContainText(/Rank last night/i);
+    await rank.click();
+    await expect(page).toHaveURL(/\/rankings$/);
+  });
+
+  test('nothing on this screen writes, and tapping a stop row does not navigate away', async ({ page, context, baseURL }) => {
+    await openRecap(page, context, baseURL, [
+      { bar_id: 'attaboy', sort_order: 1, rating: 'loved' },
+    ]);
+    const url = page.url();
+    await page.getByTestId('saved-night-stop').first().click();
+    await expect(page).toHaveURL(url);
+    await expect(page.getByTestId('saved-night-open')).toBeVisible();
+  });
+
+  test('a night with no snapshot bars (a pre-0083 archive) shows the header and photos, no empty stop list', async ({ page, context, baseURL }) => {
+    await openRecap(page, context, baseURL, []);
+    await expect(page.getByTestId('saved-night-stops')).toHaveCount(0);
+    await expect(page.getByTestId('saved-night-headline')).toHaveCount(0);
+    await expect(page.getByTestId('saved-night-photos')).toBeVisible();
+  });
+});
+
+
+/**
  * THE START A NIGHT OUT FORM — When, Area and Voting closes (V8-R-NO-002,
  * V8-R-NO-003, V8-R-NO-005).
  *
