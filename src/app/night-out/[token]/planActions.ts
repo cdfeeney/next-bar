@@ -118,25 +118,20 @@ export async function fetchNightOutVoting(
 }
 
 /**
- * V8-R-INV-003: how many people answered from the invitation link.
- *
- * COUNTS, NOT NAMES — a token-scoped recipient has no account and gave none.
- * Null when the read failed; zeroes are a real answer meaning nobody replied
- * from the link, and the two must not render the same way.
+ * G-01 / R-04: one share-link reply, as members see it. `guestName` is null for
+ * a nameless one (a "can't make it", or a Going/Maybe written before 0080).
  */
-export type AnonRsvpCounts = {
-  going: number;
-  maybe: number;
-  declined: number;
-};
+export type AnonGuest = { guestName: string | null; response: 'going' | 'maybe' | 'declined' };
 
-/** G-01: a NAMED share-link guest, as members see them. */
-export type AnonGuest = { guestName: string; response: 'going' | 'maybe' | 'declined' };
+const ANON_RESPONSES: ReadonlySet<string> = new Set(['going', 'maybe', 'declined']);
 
 /**
- * G-01: the named guests on a plan, members only (`get_night_out_anon_guests`).
- * Null = the read failed or the database predates 0080 — never "nobody", which
- * the counts already say.
+ * G-01 / R-04: EVERY reply on a plan, members only (`get_night_out_anon_guests`,
+ * widened in 0081 to carry the nameless rows). One read, one snapshot — the
+ * board derives the named rows and the nameless remainder from this alone, so
+ * a guest can never be a Maybe row and a Going count at once (R-04 item 3).
+ * Null = the read failed or the database predates 0080 — a failed read says
+ * nothing rather than reporting zero replies.
  */
 export async function fetchAnonGuests(
   supabase: SupabaseClient,
@@ -148,38 +143,12 @@ export async function fetchAnonGuests(
     });
     if (error || !Array.isArray(data)) return null;
     return (data as Array<{ guest_name?: unknown; response?: unknown }>)
-      .filter((row) => typeof row.guest_name === 'string' && typeof row.response === 'string')
+      .filter((row) => typeof row.response === 'string' && ANON_RESPONSES.has(row.response))
       .map((row) => ({
-        guestName: row.guest_name as string,
+        guestName: typeof row.guest_name === 'string' && row.guest_name !== '' ? row.guest_name : null,
         response: row.response as AnonGuest['response'],
       }));
   } catch {
     return null;
   }
-}
-
-export async function fetchAnonRsvpCounts(
-  supabase: SupabaseClient,
-  nightOutId: string,
-): Promise<AnonRsvpCounts | null> {
-  if (!UUID_RE.test(nightOutId)) return null;
-  const { data, error } = await callRpc(supabase, 'get_night_out_anon_rsvps', {
-    p_night_out: nightOutId,
-  });
-  if (error) return null;
-  const row = (Array.isArray(data) ? data[0] : data) as
-    | { going?: unknown; maybe?: unknown; declined?: unknown }
-    | null
-    | undefined;
-  if (!row) return null;
-  return {
-    going: count(row.going),
-    maybe: count(row.maybe),
-    declined: count(row.declined),
-  };
-}
-
-function count(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : 0;
 }

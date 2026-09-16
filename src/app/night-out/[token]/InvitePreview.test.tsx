@@ -396,7 +396,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     await waitFor(() => expect(clearQueuedRsvp).toHaveBeenCalledWith(TOKEN));
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(
-        /going/i,
+        /in as Alex/i,
       ),
     );
     expect(screen.queryByTestId('invite-rsvp-queued')).toBeNull();
@@ -994,7 +994,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
 
     releaseWrite('sent');
     await waitFor(() =>
-      expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(/going/i),
+      expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(/in as Alex/i),
     );
 
     releaseRead({ kind: 'none' });
@@ -1002,7 +1002,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     expect(
       screen.getByTestId('invite-rsvp-sent').textContent,
       'the delayed re-entry read overwrote an answer the server already held',
-    ).toMatch(/going/i);
+    ).toMatch(/in as Alex/i);
   });
 
   /**
@@ -1086,13 +1086,13 @@ describe('the offline queue (V8-R-INV-003)', () => {
       expect(
         screen.getByTestId('invite-rsvp-sent').textContent,
         'the settle painted into the dead instance and the remount learned nothing',
-      ).toMatch(/going/i),
+      ).toMatch(/in as Alex/i),
     );
 
     // ...and the older read may not undo it.
     releaseRead({ kind: 'none' });
     await waitFor(() => expect(screen.getByTestId('invite-rsvp-sent')).toBeTruthy());
-    expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(/going/i);
+    expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(/in as Alex/i);
   });
 
   /**
@@ -1163,5 +1163,63 @@ describe('the optional signup upsell (V8-R-INV-004)', () => {
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(screen.getByTestId('invite-rsvp-sent')).toBeTruthy());
     expect(screen.queryByTestId('invite-upsell')).toBeNull();
+  });
+});
+
+/** R-04 — follow-ups out of the G-01 round-2 panel, each pinned where it was found. */
+describe('R-04: the confirmation names the SENT guest, and signing in fetches the names', () => {
+  test('the confirmation keeps the name that was sent while the field is edited afterwards', async () => {
+    renderPreview();
+    typeGuestName('Alex');
+    screen.getByTestId('invite-rsvp-going').click();
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(/in as Alex/i),
+    );
+    expect(submitAnonRsvp).toHaveBeenLastCalledWith(expect.anything(), TOKEN, KEY, 'going', 'Alex');
+
+    // The field stays enabled; typing into it must not rewrite the record.
+    typeGuestName('Bob');
+    expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(/in as Alex/i);
+    expect(screen.getByTestId('invite-rsvp-sent').textContent).not.toMatch(/Bob/);
+  });
+
+  test('a queued named answer rehydrates the field and confirms under the queued name', async () => {
+    readRsvpKey.mockReturnValue(KEY);
+    readQueuedRsvp.mockReturnValue('going');
+    readQueuedRsvpName.mockReturnValue('Alex');
+    renderPreview();
+    // The name the offline answer was given comes back with it after a reload.
+    expect((screen.getByLabelText('Your name') as HTMLInputElement).value).toBe('Alex');
+    await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
+    expect(submitAnonRsvp).toHaveBeenLastCalledWith(expect.anything(), TOKEN, KEY, 'going', 'Alex');
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(/in as Alex/i),
+    );
+  });
+
+  test('a stale queued name without a queued answer is not rehydrated', () => {
+    readQueuedRsvp.mockReturnValue(null);
+    readQueuedRsvpName.mockReturnValue('Alex');
+    renderPreview();
+    expect((screen.getByLabelText('Your name') as HTMLInputElement).value).toBe('');
+  });
+
+  test('a guest never triggers the attendee read; becoming signed in without a remount does', async () => {
+    const { rerender } = renderPreview(false);
+    await waitFor(() => expect(fetchBearerDetail).toHaveBeenCalledTimes(1));
+    expect(fetchBearerAttendees).not.toHaveBeenCalled();
+    expect(screen.getByTestId('invite-whos-in-locked')).toBeTruthy();
+
+    // A sign-in in another tab flips useAuth in place: same token, no remount.
+    rerender(
+      <InvitePreview token={TOKEN} preview={PREVIEW} signedIn={true} onSignIn={() => undefined} />,
+    );
+    await waitFor(() => expect(fetchBearerAttendees).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-attendees').textContent).toContain('Sam'),
+    );
+    expect(screen.queryByText(/couldn't load who's coming/i)).toBeNull();
+    // The plan's own reads were not re-issued for a sign-in.
+    expect(fetchBearerDetail).toHaveBeenCalledTimes(1);
   });
 });

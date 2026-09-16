@@ -9,6 +9,7 @@ export default function InviteRsvp({
   nameMissing,
   setNameMissing,
   rsvp,
+  sentName,
   queued,
   rsvpBusy,
   rsvpError,
@@ -20,6 +21,8 @@ export default function InviteRsvp({
   nameMissing: boolean;
   setNameMissing: (next: boolean) => void;
   rsvp: RsvpChoice | null;
+  /** R-04 item 2: the name the ACCEPTED answer carried — never the live field. */
+  sentName: string | null;
   queued: RsvpChoice | null;
   rsvpBusy: boolean;
   rsvpError: string | null;
@@ -92,14 +95,16 @@ export default function InviteRsvp({
             >
               {/* G-01 acceptance 1: the confirmation names the guest when we
                   have one (Going / Maybe always do; a nameless "can't make it"
-                  keeps the old wording). */}
+                  keeps the old wording). R-04 item 2: it names the guest the
+                  SERVER has — the name sent with the accepted answer — not
+                  whatever the still-enabled field says now. */}
               {rsvp === 'going'
-                ? guestName.trim() !== ''
-                  ? `You're in as ${guestName.trim()}. Change it any time.`
+                ? sentName !== null
+                  ? `You're in as ${sentName}. Change it any time.`
                   : "You're down as going. Change it any time."
                 : rsvp === 'maybe'
-                  ? guestName.trim() !== ''
-                    ? `You're a maybe as ${guestName.trim()}. Change it any time.`
+                  ? sentName !== null
+                    ? `You're a maybe as ${sentName}. Change it any time.`
                     : "You're down as a maybe. Change it any time."
                   : "You're down as can't make it. Change it any time."}
             </p>

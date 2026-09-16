@@ -3367,21 +3367,28 @@ test.describe('S-07: the plan board as drawn', () => {
     await expect(page.getByTestId('night-out-lock')).toBeDisabled();
   });
 
-  test('4: one vote that moves — voting on a second bar issues one call and the refreshed board holds ONE vote on it; tapping the held bar clears it', async ({
+  test('4: one vote that moves — vote A, vote B: one call each, exactly one vote remains and it is on B; tapping the held bar clears it', async ({
     page,
     context,
     baseURL,
   }) => {
-    const votes: unknown[] = [];
+    const votes: Array<Record<string, unknown>> = [];
     const unvotes: unknown[] = [];
-    // The board the server hands back after each write: the vote MOVED, then cleared.
-    let phase: 'start' | 'moved' | 'cleared' = 'start';
+    // R-04 item 1: acceptance 1 is "vote A, vote B, exactly one vote remains —
+    // on B", so the board starts with NO vote held (the earlier version began
+    // from a held vote and only ever proved "vote B, then clear B"). The board
+    // the server hands back after each write: A held, then B held, then none.
+    let phase: 'start' | 'heldA' | 'heldB' | 'cleared' = 'start';
     const boards = {
       start: [
+        { bar_id: PDT, suggested_by_handle: 'sam', votes: 4, caller_voted: false },
+        { bar_id: 'attaboy', suggested_by_handle: 'conor', votes: 1, caller_voted: false },
+      ],
+      heldA: [
         { bar_id: PDT, suggested_by_handle: 'sam', votes: 5, caller_voted: true },
         { bar_id: 'attaboy', suggested_by_handle: 'conor', votes: 1, caller_voted: false },
       ],
-      moved: [
+      heldB: [
         { bar_id: PDT, suggested_by_handle: 'sam', votes: 4, caller_voted: false },
         { bar_id: 'attaboy', suggested_by_handle: 'conor', votes: 2, caller_voted: true },
       ],
@@ -3401,8 +3408,9 @@ test.describe('S-07: the plan board as drawn', () => {
       return route.fallback();
     });
     await page.route('**/rest/v1/rpc/vote_night_out_bar*', async (route) => {
-      votes.push(route.request().postDataJSON());
-      phase = 'moved';
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      votes.push(body);
+      phase = body.p_bar === PDT ? 'heldA' : 'heldB';
       await fulfillJson(200, true)(route);
     });
     await page.route('**/rest/v1/rpc/unvote_night_out_bar*', async (route) => {
@@ -3413,22 +3421,31 @@ test.describe('S-07: the plan board as drawn', () => {
     await page.goto(`/night-out/${TOKEN}`);
     const rows = page.getByTestId('shortlist-row');
     await expect(rows.first()).toHaveAttribute('data-bar-id', PDT);
+    await expect(page.getByTestId('shortlist-voted')).toHaveCount(0);
+
+    // Vote A: one call, and the refreshed board holds exactly one vote — on A.
+    await rows.first().getByRole('button', { name: /^Vote for/ }).click();
+    await expect.poll(() => votes.length).toBe(1);
+    expect(votes[0]).toEqual({ p_night_out: PLAN_ID, p_bar: PDT });
+    await expect(page.getByTestId('shortlist-voted')).toHaveCount(1);
     await expect(rows.first().getByTestId('shortlist-voted')).toBeVisible();
 
-    // Vote for the OTHER bar: one call, and the refreshed board holds exactly one vote — on it.
+    // Vote B: a second call for B, and the vote MOVED — one held row, and it is B; A's row is no longer held.
     await rows.nth(1).getByRole('button', { name: /^Vote for Attaboy/ }).click();
-    await expect.poll(() => votes.length).toBe(1);
-    expect(votes[0]).toEqual({ p_night_out: PLAN_ID, p_bar: 'attaboy' });
+    await expect.poll(() => votes.length).toBe(2);
+    expect(votes[1]).toEqual({ p_night_out: PLAN_ID, p_bar: 'attaboy' });
     await expect(page.getByTestId('shortlist-voted')).toHaveCount(1);
     await expect(page.getByTestId('shortlist-voted')).toHaveAttribute('aria-label', /^Your vote on Attaboy/);
+    await expect(rows.first().getByTestId('shortlist-voted')).toHaveCount(0);
     await expect(page.getByTestId('shortlist-row').filter({ hasText: /your vote/i })).toHaveCount(1);
+    expect(unvotes.length, 'moving a vote is one cast, never an unvote').toBe(0);
 
     // Tap the held bar: one unvote call, no vote left.
     await page.getByTestId('shortlist-voted').click();
     await expect.poll(() => unvotes.length).toBe(1);
     expect(unvotes[0]).toEqual({ p_night_out: PLAN_ID, p_bar: 'attaboy' });
     await expect(page.getByTestId('shortlist-voted')).toHaveCount(0);
-    expect(votes.length, 'clearing never casts').toBe(1);
+    expect(votes.length, 'clearing never casts').toBe(2);
   });
 });
 
@@ -3590,6 +3607,9 @@ test.describe('G-01: the guest RSVP and the sign-up funnel', () => {
     await expect(page.getByTestId('invite-whos-in-signup')).toBeVisible();
     await expect(page.getByTestId('invite-attendees')).toHaveCount(0);
     await expect(page.getByTestId('invite-limitation')).toContainText(/who else is going/i);
+    // R-04 item 5: counted since G-01, asserted now — a guest never asks.
+    await expect(page.getByTestId('invite-shortlist')).toBeVisible();
+    expect(attendeeReads, 'a guest must not issue the attendee read').toBe(0);
   });
 
   test("Can't make it may stay anonymous, and the prompt leads to /auth with the invite kept", async ({
@@ -3626,12 +3646,17 @@ test.describe('G-01: the guest RSVP and the sign-up funnel', () => {
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
     await stubOwnerRpcs(page);
-    await page.route('**/rest/v1/rpc/get_night_out_anon_rsvps*', fulfillJson(200, [
-      { going: 2, maybe: 1, declined: 0 },
-    ]));
+    let countReads = 0;
+    await page.route('**/rest/v1/rpc/get_night_out_anon_rsvps*', async (route) => {
+      countReads += 1;
+      await fulfillJson(200, [{ going: 9, maybe: 9, declined: 9 }])(route);
+    });
+    // R-04 item 3: ONE read carries every reply; the nameless come with a null name.
     await page.route('**/rest/v1/rpc/get_night_out_anon_guests*', fulfillJson(200, [
       { guest_name: 'Alex', response: 'going' },
       { guest_name: 'Jo', response: 'maybe' },
+      { guest_name: null, response: 'going' },
+      { guest_name: null, response: 'declined' },
     ]));
     await page.goto(`/night-out/${TOKEN}`);
     const guests = page.getByTestId('anon-guest');
@@ -3641,11 +3666,14 @@ test.describe('G-01: the guest RSVP and the sign-up funnel', () => {
     await expect(guests.first()).toContainText(/via the invite link/i);
     await expect(guests.nth(1)).toContainText('Jo');
     await expect(guests.nth(1)).toContainText('Maybe');
-    // 2 going + 1 maybe, two of them named: one reply is nameless.
+    // Two named rows, one nameless Going, one nameless decline — from the same snapshot.
     await expect(page.getByTestId('anon-guests-nameless')).toContainText('1 more reply');
+    await expect(page.getByTestId('night-out-link-replies')).toContainText(/1 going, 0 maybe, 1 can.t make it/);
+    // The separate counts read is gone; a 9/9/9 answer to it changes nothing.
+    expect(countReads, 'the board no longer subtracts two independent reads').toBe(0);
   });
 
-  test('a pre-0080 database (the guests read fails) shows the counts and no guest rows', async ({
+  test('a failed replies read (a pre-0080 database) says nothing rather than zero, and the board still renders', async ({
     page,
     context,
     baseURL,
@@ -3655,16 +3683,13 @@ test.describe('G-01: the guest RSVP and the sign-up funnel', () => {
       { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
     ]);
     await stubOwnerRpcs(page);
-    await page.route('**/rest/v1/rpc/get_night_out_anon_rsvps*', fulfillJson(200, [
-      { going: 1, maybe: 0, declined: 0 },
-    ]));
     await page.route('**/rest/v1/rpc/get_night_out_anon_guests*', fulfillJson(404, { message: 'no such function' }));
     await page.goto(`/night-out/${TOKEN}`);
     await expect(page.getByTestId('member-board')).toBeVisible();
     await expect(page.getByTestId('anon-guest')).toHaveCount(0);
-    // The counts still read: one going, nobody named — so it is stated as an
-    // unnamed reply rather than lost.
-    await expect(page.getByTestId('anon-guests-nameless')).toContainText('1 more reply');
-    await expect(page.getByTestId('night-out-link-replies')).toContainText(/1 going/);
+    // R-04 item 3: with one read there is no second source to fall back on, and
+    // a failed read must not be reported as "nobody replied".
+    await expect(page.getByTestId('anon-guests-nameless')).toHaveCount(0);
+    await expect(page.getByTestId('night-out-link-replies')).toHaveCount(0);
   });
 });

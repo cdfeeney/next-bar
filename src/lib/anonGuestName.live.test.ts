@@ -16,6 +16,8 @@ const describeLive = TARGET ? describe : describe.skip;
 describeLive('0080 night_out_anon_rsvps — a guest RSVPs with a name', () => {
   let db: Client;
   let applied = false;
+  /** R-04 (0081): the trim became a regex and the guests read carries nameless rows. */
+  let applied81 = false;
 
   beforeAll(async () => {
     db = new Client({
@@ -29,6 +31,12 @@ describeLive('0080 night_out_anon_rsvps — a guest RSVPs with a name', () => {
       "select count(*)::int as n from pg_proc where proname = 'get_night_out_anon_guests'",
     );
     applied = rows[0].n > 0;
+    if (applied) {
+      const { rows: def } = await db.query(
+        "select pg_get_functiondef('public.rsvp_night_out_by_token(uuid, uuid, text, text)'::regprocedure) as src",
+      );
+      applied81 = /regexp_replace\(p_guest_name/.test(def[0].src as string);
+    }
   });
 
   afterAll(async () => {
@@ -141,6 +149,36 @@ describeLive('0080 night_out_anon_rsvps — a guest RSVPs with a name', () => {
 
       await asRole('anon');
       await expectDenied('select * from public.get_night_out_anon_guests($1)', [planId]);
+    });
+  });
+
+  it('R-04 (0081): a name of non-breaking spaces is no name; the guests read carries the nameless too', async ({ skip }) => {
+    if (!applied81) skip('0081 not applied on staging yet — the owner runs apply-migration-set');
+    await inRollback(async () => {
+      const { owner, planId, token } = await ownerWithPlan();
+      await asRole('anon');
+
+      // U+00A0 only: String.trim() leaves nothing, and so must the server.
+      const nbsp = await db.query(
+        "select public.rsvp_night_out_by_token($1, $2, 'going', $3) as ok", [token, randomUUID(), '  '],
+      );
+      expect(nbsp.rows[0].ok, 'a Going under a name of U+00A0 must be refused').toBe(false);
+
+      // The same padding around a real name is stripped, U+FEFF included.
+      const key = randomUUID();
+      const padded = await db.query(
+        "select public.rsvp_night_out_by_token($1, $2, 'going', $3) as ok", [token, key, '  Al ﻿'],
+      );
+      expect(padded.rows[0].ok).toBe(true);
+      // ...and a nameless "can't make it" sits beside it.
+      await db.query("select public.rsvp_night_out_by_token($1, $2, 'declined', null)", [token, randomUUID()]);
+
+      await asRole('authenticated', owner);
+      const { rows } = await db.query('select * from public.get_night_out_anon_guests($1)', [planId]);
+      expect(rows).toEqual([
+        { guest_name: 'Al', response: 'going' },
+        { guest_name: null, response: 'declined' },
+      ]);
     });
   });
 

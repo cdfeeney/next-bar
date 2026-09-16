@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  fetchAnonRsvpCounts,
   fetchNightOutVoting,
   lockNightOut,
   removeNightOutSuggestion,
@@ -117,39 +116,5 @@ describe('fetchNightOutVoting (V8-R-NO-005)', () => {
     });
     await expect(fetchNightOutVoting(junk.client, PLAN)).resolves.toBeNull();
     await expect(fetchNightOutVoting(throwingClient(), PLAN)).resolves.toBeNull();
-  });
-});
-
-describe('fetchAnonRsvpCounts (V8-R-INV-003)', () => {
-  it('carries the three counts the members are allowed to see', async () => {
-    const { client, rpc } = rpcClient({
-      data: [{ going: 2, maybe: 1, declined: 0 }],
-      error: null,
-    });
-    await expect(fetchAnonRsvpCounts(client, PLAN)).resolves.toEqual({
-      going: 2,
-      maybe: 1,
-      declined: 0,
-    });
-    expect(rpc).toHaveBeenCalledWith('get_night_out_anon_rsvps', {
-      p_night_out: PLAN,
-    });
-  });
-
-  it('keeps "nobody replied" and "we could not ask" apart', async () => {
-    const none = rpcClient({
-      data: [{ going: 0, maybe: 0, declined: 0 }],
-      error: null,
-    });
-    await expect(fetchAnonRsvpCounts(none.client, PLAN)).resolves.toEqual({
-      going: 0,
-      maybe: 0,
-      declined: 0,
-    });
-    const failed = rpcClient({ data: null, error: { message: 'boom' } });
-    await expect(fetchAnonRsvpCounts(failed.client, PLAN)).resolves.toBeNull();
-    await expect(
-      fetchAnonRsvpCounts(throwingClient(), PLAN),
-    ).resolves.toBeNull();
   });
 });

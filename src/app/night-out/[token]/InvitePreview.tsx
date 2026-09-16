@@ -122,6 +122,13 @@ export default function InvitePreview({
    */
   const [guestName, setGuestName] = useState('');
   const [nameMissing, setNameMissing] = useState(false);
+  /**
+   * R-04 item 2: the name that went WITH the accepted write. The confirmation
+   * reads this and never the still-editable field — "You're in as Alex" must
+   * not turn into "as Bob" because the viewer kept typing while the database
+   * holds Alex. Null = the sent answer carried no name.
+   */
+  const [sentName, setSentName] = useState<string | null>(null);
 
   /**
    * Which token's reads may paint. Next reuses this component across
@@ -211,8 +218,12 @@ export default function InvitePreview({
     // G-01 (round-1 Codex): this component is REUSED across /night-out/A ->
     // /night-out/B, so a name typed for one invitation must not be carried —
     // and submitted — on the next.
-    setGuestName('');
+    // ...but a name still QUEUED for this invitation comes back with it, so
+    // an offline reply replays — and confirms — under the name it was given
+    // (R-04 item 2). Gated on the queued answer: a name without one is litter.
+    setGuestName(readQueuedRsvp(token) !== null ? (readQueuedRsvpName(token) ?? '') : '');
     setNameMissing(false);
+    setSentName(null);
     setRsvpUnreadable(false);
     setRsvpError(null);
     setUpsellDismissed(false);
@@ -252,13 +263,9 @@ export default function InvitePreview({
       // READ ONLY WITH A KEY WE ALREADY HAVE. Minting one here would create a
       // recipient identity for somebody who only ever looked at the page.
       const key = readRsvpKey(token);
-      const [nextDetail, nextAttendees, nextShortlist, storedRsvp] =
+      const [nextDetail, nextShortlist, storedRsvp] =
         await Promise.all([
           fetchBearerDetail(supabase, token),
-          // G-01: only a signed-in viewer may read the NAMES (0080 revoked
-          // preview_night_out_attendees from anon), so a guest never asks —
-          // a guaranteed 403 on every link load is not a read, it is noise.
-          signedIn ? fetchBearerAttendees(supabase, token) : Promise.resolve(null),
           fetchBearerShortlist(supabase, token),
           key === null
             ? Promise.resolve({ kind: 'none' as const })
@@ -266,7 +273,6 @@ export default function InvitePreview({
         ]);
       if (startedAt !== epoch.current) return;
       setDetail(nextDetail);
-      setAttendees(nextAttendees);
       setShortlist(nextShortlist);
       // The plan's own facts always apply; the RSVP does not, if the recipient
       // has answered since this read was issued. See `answered` above.
@@ -282,6 +288,37 @@ export default function InvitePreview({
       }
     })();
   }, [token]);
+
+  /**
+   * WHO IS GOING, BY NAME — a signed-in read in its own effect (R-04 item 5).
+   *
+   * G-01 gated this on `signedIn` inside the load effect above, which depends
+   * only on `[token]`: a viewer who became signed in WITHOUT a remount (a
+   * sign-in in another tab flips useAuth's status in place, and page.tsx
+   * re-resolves a non-member to `preview` without unmounting) kept
+   * `attendees === null` and read "Couldn't load who's coming" until a token
+   * change or a reload. Keyed on both, so signing in is what fetches.
+   *
+   * A guest never asks — 0080 revoked preview_night_out_attendees from anon,
+   * and a guaranteed 403 on every link load is noise, not a read.
+   */
+  useEffect(() => {
+    if (!signedIn) {
+      setAttendees(null);
+      return;
+    }
+    const supabase = getBrowserSupabase();
+    if (supabase === null) return;
+    let cancelled = false;
+    const startedAt = epoch.current;
+    void fetchBearerAttendees(supabase, token).then((next) => {
+      if (cancelled || startedAt !== epoch.current) return;
+      setAttendees(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, signedIn]);
 
   /**
    * `rsvpBusy` follows the module lock, for THIS invite, whoever changed it.
@@ -310,7 +347,8 @@ export default function InvitePreview({
     const landed = rsvpSettled.get(token);
     if (landed !== undefined) {
       answered.current = true;
-      setRsvp(landed);
+      setRsvp(landed.choice);
+      setSentName(landed.guestName);
       setRsvpUnreadable(false);
     }
   }, [rsvpFlightTick, token]);
@@ -382,6 +420,7 @@ export default function InvitePreview({
             // settled is exactly that.
             answered.current = true;
             setRsvp(choice);
+            setSentName(typedName === '' ? null : typedName);
             setRsvpUnreadable(false);
           }
         }
@@ -395,7 +434,7 @@ export default function InvitePreview({
         // screen, so the queue it satisfies is spent here too.
         if (result === 'sent') {
           clearQueuedRsvp(heldToken);
-          noteRsvpLanded(heldToken, choice);
+          noteRsvpLanded(heldToken, choice, typedName === '' ? null : typedName);
         }
         // AND AN OFFLINE ANSWER IS STILL QUEUED (round-10 round 8, Codex).
         // "An offline response is QUEUED and explicitly labelled as not yet
@@ -438,10 +477,11 @@ export default function InvitePreview({
         answered.current = true;
         // Recorded for the JS context, not just this instance — an unmount
         // between the tap and the settle lands here, not in the stale branch.
-        noteRsvpLanded(heldToken, choice);
+        noteRsvpLanded(heldToken, choice, typedName === '' ? null : typedName);
         clearQueuedRsvp(token);
         setQueued(null);
         setRsvp(choice);
+        setSentName(typedName === '' ? null : typedName);
         setUpsellDismissed(false);
       } else if (result === 'unreachable') {
         // "An offline response is QUEUED and explicitly labelled as not yet
@@ -527,12 +567,15 @@ export default function InvitePreview({
       if (supabase === null || key === null) return;
       const heldToken = token;
       const startedAt = epoch.current;
+      // The name goes out with the answer and, once accepted, into the
+      // confirmation — read once, so both say the same thing (R-04 item 2).
+      const pendingName = readQueuedRsvpName(token);
       holdRsvpWrite(heldToken);
       // Visibly in flight, exactly as a tap is: the controls disable for the
       // moment the delivery holds the lock, so the recipient is never offered a
       // tap that the guard would silently swallow.
       setRsvpBusy(true);
-      const result = await submitAnonRsvp(supabase, token, key, pending, readQueuedRsvpName(token));
+      const result = await submitAnonRsvp(supabase, token, key, pending, pendingName);
       // Same rule as `answer()` above: a delivery that settles after the invite
       // changed paints nothing and releases only its OWN hold, never whatever
       // the invite now on screen may be holding.
@@ -548,12 +591,13 @@ export default function InvitePreview({
           if (result === 'sent') {
             answered.current = true;
             setRsvp(pending);
+            setSentName(pendingName);
             setQueued(null);
           }
         }
         if (result === 'sent') {
           clearQueuedRsvp(heldToken);
-          noteRsvpLanded(heldToken, pending);
+          noteRsvpLanded(heldToken, pending, pendingName);
         }
         // A refusal is durable here too, so the held answer is spent rather
         // than left promising a delivery that cannot happen — the same rule the
@@ -580,10 +624,11 @@ export default function InvitePreview({
       }
       if (result === 'sent') {
         answered.current = true;
-        noteRsvpLanded(heldToken, pending);
+        noteRsvpLanded(heldToken, pending, pendingName);
         clearQueuedRsvp(token);
         setQueued(null);
         setRsvp(pending);
+        setSentName(pendingName);
         setRsvpError(null);
       } else if (result === 'refused') {
         // The plan moved on — cancelled, or the link expired. Holding this
@@ -658,6 +703,7 @@ export default function InvitePreview({
         nameMissing={nameMissing}
         setNameMissing={setNameMissing}
         rsvp={rsvp}
+        sentName={sentName}
         queued={queued}
         rsvpBusy={rsvpBusy}
         rsvpError={rsvpError}

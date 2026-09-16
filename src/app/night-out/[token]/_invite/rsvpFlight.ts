@@ -43,7 +43,8 @@ export const rsvpWritesInFlight = new Set<string>();
  * Bounded by the invites visited in one page life, exactly like the lock above,
  * and cleared for the same reason by `resetRsvpWritesInFlight`.
  */
-export const rsvpSettled = new Map<string, RsvpChoice>();
+/** What landed, and under which name (R-04 item 2: the confirmation names the SENT guest). */
+export const rsvpSettled = new Map<string, { choice: RsvpChoice; guestName: string | null }>();
 
 /**
  * Live instances have to be TOLD when a hold is taken or released.
@@ -102,8 +103,8 @@ export function releaseRsvpWrite(inviteToken: string): void {
  * tap or automatic delivery — because which branch runs depends only on where
  * the recipient happens to be standing, and the answer does not.
  */
-export function noteRsvpLanded(inviteToken: string, choice: RsvpChoice): void {
-  rsvpSettled.set(inviteToken, choice);
+export function noteRsvpLanded(inviteToken: string, choice: RsvpChoice, guestName: string | null): void {
+  rsvpSettled.set(inviteToken, { choice, guestName });
   markRsvpFlightChanged();
 }
 
