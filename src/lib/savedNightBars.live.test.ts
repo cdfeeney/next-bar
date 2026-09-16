@@ -103,12 +103,15 @@ describeLive('0083 saved_night_bars — the owner reads their ordered, rated sto
       await asRole('authenticated', stranger);
       const theirs = await db.query('select * from public.get_saved_night_bars($1)', [savedId]);
       expect(theirs.rows, 'a non-owner reads none of another account\'s stops').toEqual([]);
-      // ...and RLS refuses a direct table select of a row they do not own.
-      const direct = await db.query(
-        'select count(*)::int as n from public.saved_night_bars where saved_night_id = $1',
-        [savedId],
-      );
-      expect(direct.rows[0].n, 'own-row RLS hides the rows from a direct select').toBe(0);
+      // ...and a DIRECT table read is refused outright: 0083 revokes all table
+      // privileges from authenticated (reads go through the definer RPC), and
+      // Postgres checks table privileges BEFORE RLS, so this is permission
+      // denied, not an empty result (round-1, both lanes).
+      await db.query('SAVEPOINT direct');
+      await expect(
+        db.query('select count(*) from public.saved_night_bars where saved_night_id = $1', [savedId]),
+      ).rejects.toMatchObject({ message: expect.stringMatching(/permission denied/i) });
+      await db.query('ROLLBACK TO SAVEPOINT direct');
     });
   });
 

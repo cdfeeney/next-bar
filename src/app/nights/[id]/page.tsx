@@ -8,7 +8,7 @@ import { getBrowserSupabase } from '@/lib/supabase/client';
 import MediaThumb from '@/lib/nightOutMedia/MediaThumb';
 import { savedNightSummary } from '@/lib/nightOutMedia';
 import { fetchSavedNight, type SavedNightRead } from '@/lib/nightOutMedia/server';
-import { getBarById } from '@/lib/catalog';
+import { useBars } from '@/lib/useBars';
 import BarVisualTile from '@/components/BarVisualTile';
 import { RatingBadgeLabel } from '@/components/RatingBadge';
 import type { Bar } from '@/types';
@@ -114,16 +114,21 @@ export default function SavedNightPage({
 
 /** The recap body — pure composition of the snapshot (README §8). */
 function Recap({ night }: { night: import('@/lib/nightOutMedia').SavedNight }): JSX.Element {
-  // Resolve each snapshotted stop to a catalog bar. An id the catalog no longer
-  // carries is dropped from the rows and the map (like composeRecap), never
-  // guessed; the headline's stop count stays the snapshot's own count.
+  // Resolve each snapshotted stop to a catalog bar, REACTIVELY: useBars re-renders
+  // when CatalogRefresh swaps the small core catalog for the full 2,107-bar set,
+  // so a stop outside the core set appears once the catalog lands rather than
+  // being dropped until an unrelated remount (round-1, both lanes). An id the
+  // catalog never carries is dropped (like composeRecap); the headline's count
+  // stays the snapshot's own count.
+  const catalog = useBars();
+  const byId = useMemo(() => new Map(catalog.map((b) => [b.id, b])), [catalog]);
   const stops = useMemo(
     () =>
       night.bars.flatMap((b) => {
-        const bar = getBarById(b.barId);
+        const bar = byId.get(b.barId);
         return bar ? [{ bar, rating: b.rating }] : [];
       }),
-    [night.bars],
+    [night.bars, byId],
   );
   const mapBars: Bar[] = useMemo(() => stops.map((s) => s.bar), [stops]);
   const lovedName = stops.find((s) => s.rating === 'loved')?.bar.name ?? null;
