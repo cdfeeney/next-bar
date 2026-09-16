@@ -60,21 +60,21 @@ export default function CaptureModeSheet({
         <div className="mt-5 space-y-3">
           <ModeRow
             testId="capture-mode-single"
-            glyph="●"
+            icon="camera"
             label="Take one photo"
             hint="One fresh shot — rear or front camera."
             onClick={onSingle}
           />
           <ModeRow
             testId="capture-mode-dual"
-            glyph="●●"
+            icon="frames"
             label="Front + back"
             hint="Two shots, paired: the room and you."
             onClick={onDual}
           />
           <ModeRow
             testId="capture-mode-library"
-            glyph="▤"
+            icon="picture"
             label="Choose from library"
             hint="Use a photo you already have."
             onClick={onLibrary}
@@ -99,15 +99,59 @@ export default function CaptureModeSheet({
   );
 }
 
+type ModeIcon = 'camera' | 'frames' | 'picture';
+
+/**
+ * README §9.1: a 40px accent-tinted tile holding a 21px STROKED icon — a
+ * camera, two paired frames, a picture. Inline so the sheet ships no asset and
+ * the stroke takes the accent token through `currentColor`.
+ */
+function ModeGlyph({ icon }: { icon: ModeIcon }): JSX.Element {
+  const common = {
+    width: 21,
+    height: 21,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.75,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+  };
+  if (icon === 'camera') {
+    return (
+      <svg {...common}>
+        <path d="M4 8.5A1.5 1.5 0 0 1 5.5 7H8l1.4-2h5.2L16 7h2.5A1.5 1.5 0 0 1 20 8.5v9A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5z" />
+        <circle cx="12" cy="13" r="3.25" />
+      </svg>
+    );
+  }
+  if (icon === 'frames') {
+    return (
+      <svg {...common}>
+        <rect x="3.5" y="6.5" width="11" height="13" rx="1.5" />
+        <rect x="9.5" y="4" width="11" height="13" rx="1.5" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common}>
+      <rect x="4" y="5" width="16" height="14" rx="1.5" />
+      <circle cx="9" cy="10" r="1.5" />
+      <path d="M20 15.5 15.5 11 8 18.5" />
+    </svg>
+  );
+}
+
 function ModeRow({
   testId,
-  glyph,
+  icon,
   label,
   hint,
   onClick,
 }: {
   testId: string;
-  glyph: string;
+  icon: ModeIcon;
   label: string;
   hint: string;
   onClick: () => void;
@@ -121,9 +165,9 @@ function ModeRow({
     >
       <span
         aria-hidden="true"
-        className="w-9 h-9 shrink-0 rounded-full bg-surface text-accent flex items-center justify-center text-[10px] tracking-tighter"
+        className="w-10 h-10 shrink-0 rounded-xl bg-accent/10 text-accent flex items-center justify-center"
       >
-        {glyph}
+        <ModeGlyph icon={icon} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-sm">{label}</span>

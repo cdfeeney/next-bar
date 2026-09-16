@@ -76,24 +76,29 @@ export default function CaptureReview({
         </span>
       </div>
 
-      <div className="relative flex-1 mt-3 mx-4 rounded-2xl overflow-hidden border border-border bg-surface">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={pair.main}
-          alt="Captured photo"
-          data-testid="capture-main"
-          className="w-full h-full object-cover"
-        />
-        {pair.inset !== null ? (
-          // eslint-disable-next-line @next/next/no-img-element
+      {/* README §9.2: the main photo at 3:4 (an explicit box, not whatever the
+          flex column has left), the inset 92px wide at 3:4 with a 12px radius,
+          bottom-right. The scroll wrapper keeps the composition buttons and the
+          Retake/Use row reachable on a short viewport. */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="relative mt-3 mx-4 aspect-[3/4] rounded-2xl overflow-hidden border border-border bg-surface">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={pair.inset}
-            alt="Second captured photo"
-            data-testid="capture-inset"
-            className="absolute bottom-3 right-3 w-28 aspect-[3/4] object-cover rounded-xl border border-border"
+            src={pair.main}
+            alt="Captured photo"
+            data-testid="capture-main"
+            className="absolute inset-0 w-full h-full object-cover"
           />
-        ) : null}
-      </div>
+          {pair.inset !== null ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={pair.inset}
+              alt="Second captured photo"
+              data-testid="capture-inset"
+              className="absolute bottom-3 right-3 w-[92px] aspect-[3/4] object-cover rounded-xl border border-border"
+            />
+          ) : null}
+        </div>
 
       {/* Every composition edit and the approve action are held while a
           rotation is decoding. `rotate` closes over the pair it started with,
@@ -133,6 +138,7 @@ export default function CaptureReview({
           />
         </div>
       ) : null}
+      </div>
 
       <div className="flex items-center gap-3 px-4 py-4 pb-[calc(env(safe-area-inset-bottom)+16px)]">
         {/* Retake is held during a decode for the same reason approve is: it

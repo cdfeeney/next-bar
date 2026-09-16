@@ -1,7 +1,6 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { useModalDialog } from '@/hooks/useModalDialog';
 import CameraStage from './CameraStage';
 import CaptureModeSheet from './CaptureModeSheet';
 import CaptureReview from './CaptureReview';
@@ -26,10 +25,15 @@ import type { Pair } from './pairing';
 export const LIBRARY_FAILURE =
   'That photo could not be read. Nothing was added — try another one.';
 
+/**
+ * "Front + back" has NO explainer step (owner, 2026-09-14): choosing it opens
+ * the rear camera at once with a shutter, and the first shot flips the stage
+ * to the front camera for the second. The two `CameraStage`s label themselves
+ * ("1 of 2 · Outward", "2 of 2 · Selfie"), which is all the telling needed.
+ */
 export type CaptureStep =
   | 'modes'
   | 'single'
-  | 'dual-explain'
   | 'dual-outward'
   | 'dual-selfie'
   | 'review';
@@ -120,7 +124,7 @@ export default function CaptureFlow({
           subtitle={subtitle}
           failure={pickFailed ? LIBRARY_FAILURE : null}
           onSingle={() => setStep('single')}
-          onDual={() => setStep('dual-explain')}
+          onDual={() => setStep('dual-outward')}
           onLibrary={() => fileRef.current?.click()}
           onCancel={onCancel}
         />
@@ -141,14 +145,6 @@ export default function CaptureFlow({
             setPair({ main: url, inset: null });
             setStep('review');
           }}
-        />
-      ) : null}
-
-      {step === 'dual-explain' ? (
-        <DualExplainer
-          onStart={() => setStep('dual-outward')}
-          onSingleInstead={() => setStep('single')}
-          onCancel={onCancel}
         />
       ) : null}
 
@@ -191,97 +187,3 @@ export default function CaptureFlow({
   );
 }
 
-/**
- * "Explain first" — the dual-shot mode says what the two counted steps are
- * before the camera opens, because the user has to know a second shot is
- * coming before the first one is taken.
- *
- * The third line describes exactly the three composition edits this pipeline
- * has (swap main, keep only one, rotate either) plus the one Retake it has.
- * It used to promise "retake either one", a per-side recapture that the
- * locked composition set does not include and `retake()` — which discards
- * BOTH frames by design, so nothing rejected survives — never offered.
- */
-function DualExplainer({
-  onStart,
-  onSingleInstead,
-  onCancel,
-}: {
-  onStart: () => void;
-  onSingleInstead: () => void;
-  onCancel: () => void;
-}): JSX.Element {
-  const steps = [
-    ['Outward photo', 'The room, the bar, the drink — rear camera.'],
-    ['Selfie', 'Front camera, taken right after.'],
-    ['You approve both', 'Swap, rotate, keep only one — or retake both.'],
-  ] as const;
-  const ref = useModalDialog<HTMLDivElement>(onCancel);
-
-  return (
-    <div
-      ref={ref}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Front + back"
-      data-testid="capture-dual-explainer"
-      tabIndex={-1}
-      className="fixed inset-0 z-[1100] bg-bg flex flex-col px-6 pt-[calc(env(safe-area-inset-top)+16px)] outline-none"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <h2 className="font-display text-xl">Front + back</h2>
-        <button
-          type="button"
-          data-testid="capture-dual-cancel"
-          onClick={onCancel}
-          aria-label="Close capture"
-          className="w-11 h-11 -mr-2 -mt-1 shrink-0 flex items-center justify-center rounded-full text-muted touch-manipulation"
-        >
-          ✕
-        </button>
-      </div>
-      <p className="text-muted text-sm mt-1">
-        Two shots, paired. You approve both before anything is shared.
-      </p>
-
-      <ol className="mt-6 space-y-3">
-        {steps.map(([label, hint], index) => (
-          <li
-            key={label}
-            className="flex items-start gap-3 rounded-2xl border border-border bg-surface px-4 py-3"
-          >
-            <span
-              aria-hidden="true"
-              className="w-6 h-6 shrink-0 rounded-full bg-accent text-bg flex items-center justify-center text-xs font-display"
-            >
-              {index + 1}
-            </span>
-            <span className="min-w-0">
-              <span className="block text-sm">{label}</span>
-              <span className="block text-muted text-[11px]">{hint}</span>
-            </span>
-          </li>
-        ))}
-      </ol>
-
-      <div className="mt-auto pb-[calc(env(safe-area-inset-bottom)+24px)] space-y-3">
-        <button
-          type="button"
-          data-testid="capture-dual-start"
-          onClick={onStart}
-          className="w-full min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation hover:bg-accentDim transition-colors"
-        >
-          Start — outward photo first
-        </button>
-        <button
-          type="button"
-          data-testid="capture-dual-single-instead"
-          onClick={onSingleInstead}
-          className="w-full min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
-        >
-          Take one photo instead
-        </button>
-      </div>
-    </div>
-  );
-}

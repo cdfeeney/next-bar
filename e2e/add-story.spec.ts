@@ -47,6 +47,7 @@
  */
 
 import { test, expect, type Page } from './helpers/test';
+import { cameraCalls, stubCamera, waitForCameraFrame } from './helpers/camera';
 import {
   CLAIRE,
   CLAIRE_ID,
@@ -167,7 +168,13 @@ test.describe('Add to Story — signed in', () => {
 
     // The receipt claims the story is live for 24 hours, so it appears only
     // once BOTH the upload and the metadata publish actually succeeded.
-    await expect(page.getByTestId('story-shared-receipt')).toBeVisible();
+    const receipt = page.getByTestId('story-shared-receipt');
+    await expect(receipt).toBeVisible();
+    // README §9.5: "Shared." + one consequence line, "See it" + Undo.
+    await expect(receipt.getByRole('heading')).toHaveText('Shared.');
+    await expect(receipt).toContainText(/Live for 24 hours\./);
+    await expect(page.getByTestId('story-receipt-view')).toHaveText('See it');
+    await expect(page.getByTestId('story-receipt-undo')).toHaveText('Undo');
     expect(stub.published).toHaveLength(1);
     expect(stub.uploads).toHaveLength(1);
     // Upload comes FIRST and under the author's own prefix — the key
@@ -378,6 +385,85 @@ test.describe('Add to Story — signed in', () => {
       page.getByText('Camera access is off for Next Bar.', { exact: false }),
     ).toBeVisible();
     await expect(page.getByText('Choose from library')).toBeVisible();
+  });
+
+  // S-10 (README §9.1 + owner 2026-09-14): the live camera modes, driven end to
+  // end through a fake stream that works on BOTH engines (helpers/camera.ts),
+  // which closes the "capture modes NOT covered" gap the file header recorded.
+  test('"Front + back" opens the rear camera at once, flips to the front, and lands on a paired review', async ({
+    page,
+  }) => {
+    await stubStories(page, { following: [CLAIRE] });
+    await stubCamera(page);
+    const consoleErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+
+    await page.goto('/friends');
+    await page.getByTestId('add-story').click();
+    const sheet = page.getByTestId('capture-modes');
+    await expect(sheet).toBeVisible();
+    // §9.1: three rows, each with a stroked icon tile; a ✕ labelled "Close
+    // capture" and no back chevron on this step.
+    await expect(sheet.locator('svg')).toHaveCount(3);
+    await expect(sheet.getByRole('button', { name: 'Close capture' })).toBeVisible();
+    await expect(sheet.getByRole('button', { name: /back/i })).toHaveCount(0);
+
+    await page.getByTestId('capture-mode-dual').click();
+    // No explainer interstitial: the rear camera opens at once.
+    await expect(page.getByTestId('capture-dual-explainer')).toHaveCount(0);
+    await expect(page.getByTestId('camera-stage')).toBeVisible();
+    await expect(page.getByTestId('camera-step')).toHaveText(/1 of 2/);
+    await waitForCameraFrame(page);
+    expect(await cameraCalls(page)).toEqual(['environment']);
+
+    // First shutter → the stage flips to the FRONT camera for the second shot.
+    await page.getByTestId('camera-shutter').click();
+    await expect(page.getByTestId('camera-step')).toHaveText(/2 of 2/);
+    await waitForCameraFrame(page);
+    expect(await cameraCalls(page)).toEqual(['environment', 'user']);
+
+    // Second shutter → the paired review: inset present at 92px, 2×2 buttons.
+    await page.getByTestId('camera-shutter').click();
+    const review = page.getByTestId('capture-review');
+    await expect(review).toBeVisible();
+    await expect(review).toHaveAttribute('data-pair-kind', 'dual');
+    const inset = page.getByTestId('capture-inset');
+    await expect(inset).toBeVisible();
+    const box = await inset.boundingBox();
+    expect(Math.round(box?.width ?? 0)).toBe(92);
+    await expect(page.getByTestId('capture-swap-main')).toBeVisible();
+    await expect(page.getByTestId('capture-rotate-inset')).toBeVisible();
+    await expect(page.getByTestId('capture-approve')).toHaveText('Use photos');
+
+    expect(consoleErrors, `console errors: ${consoleErrors.join(' | ')}`).toEqual([]);
+  });
+
+  test('"Take one photo" reaches a review with no inset and no composition buttons', async ({
+    page,
+  }) => {
+    await stubStories(page, { following: [CLAIRE] });
+    await stubCamera(page);
+    await page.goto('/friends');
+    await page.getByTestId('add-story').click();
+    await page.getByTestId('capture-mode-single').click();
+    await expect(page.getByTestId('camera-stage')).toBeVisible();
+    // The single path has no step chip and keeps its own Front/Rear flip.
+    await expect(page.getByTestId('camera-step')).toHaveCount(0);
+    await expect(page.getByTestId('camera-flip')).toBeVisible();
+    await waitForCameraFrame(page);
+    await page.getByTestId('camera-shutter').click();
+
+    const review = page.getByTestId('capture-review');
+    await expect(review).toBeVisible();
+    await expect(review).toHaveAttribute('data-pair-kind', 'single');
+    await expect(page.getByTestId('capture-inset')).toHaveCount(0);
+    await expect(page.getByTestId('capture-swap-main')).toHaveCount(0);
+    await expect(page.getByTestId('capture-approve')).toHaveText('Use photo');
+    // And the approved single frame lands on compose like a library pick does.
+    await page.getByTestId('capture-approve').click();
+    await expect(page.getByTestId('story-compose')).toBeVisible();
   });
 });
 

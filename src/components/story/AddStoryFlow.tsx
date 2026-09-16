@@ -442,7 +442,7 @@ function SharedReceipt({
       ref={ref}
       role="dialog"
       aria-modal="true"
-      aria-label="Added to your story"
+      aria-label="Shared"
       data-testid="story-shared-receipt"
       tabIndex={-1}
       className="fixed inset-0 z-[1100] bg-bg flex flex-col overflow-y-auto px-5 pt-[calc(env(safe-area-inset-top)+16px)] outline-none"
@@ -459,18 +459,22 @@ function SharedReceipt({
         </button>
       </div>
 
-      <h2 className="font-display text-2xl text-center mt-2">
-        Added to your story.
+      {/* README §9.5: "Shared." 26px/700, then ONE consequence line. This path
+          publishes to Story only, so the consequence is the 24h window.
+          S-11: the line names every destination once the composer publishes
+          to Feed / Night Out / Group as well. */}
+      <h2 className="font-display text-[26px] font-bold leading-tight text-center mt-2">
+        Shared.
       </h2>
       <p className="text-muted text-sm text-center mt-1">
-        {bar ? `${bar.name} · ` : ''}Live for 24 hours
+        {bar ? `${bar.name} · ` : ''}Live for 24 hours.
       </p>
 
       <StoryFrame
         photo={photo}
         barId={barId}
         className="mt-5 rounded-2xl border border-border aspect-[4/5]"
-        insetClassName="w-24"
+        insetClassName="w-[92px]"
       />
 
       <div className="mt-auto pb-[calc(env(safe-area-inset-bottom)+20px)] pt-4 flex items-center gap-3">
@@ -478,9 +482,9 @@ function SharedReceipt({
           type="button"
           data-testid="story-receipt-view"
           onClick={onViewStory}
-          className="flex-1 min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation hover:border-accent transition-colors"
+          className="flex-1 min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation hover:bg-accentDim transition-colors"
         >
-          View story
+          See it
         </button>
         <button
           type="button"
