@@ -2228,6 +2228,13 @@ test.describe('S-08: the saved night recap', () => {
   }
 
   test('two stops in order with the right badge on each, and the headline names the Loved bar', async ({ page, context, baseURL }) => {
+    // S-08c acceptance #2 (was S-08b acceptance #4): no new console errors on
+    // /nights/[id]. Attach BEFORE the goto inside openRecap so mount-time errors
+    // are caught too; same error filter as app-shell-smoke's expectNoConsoleErrors.
+    const consoleErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
     await openRecap(page, context, baseURL, [
       { bar_id: 'attaboy', sort_order: 1, rating: 'loved' },
       { bar_id: 'dead-rabbit', sort_order: 2, rating: 'pass' },
@@ -2248,6 +2255,15 @@ test.describe('S-08: the saved night recap', () => {
     await expect(map.locator('[data-stop]')).toHaveCount(2);
     await expect(map.locator('[data-stop="loved"]')).toHaveCount(1);
     await expect(map.locator('.leaflet-control-zoom')).toHaveCount(0);
+    // S-08c #1: the inert pins must not be keyboard tab stops. leaflet's marker
+    // icon (the parent of our [data-stop] div) gets tabindex=0 + role=button when
+    // `keyboard` is truthy; keyboard={false} must strip both.
+    const markerIcons = map.locator('.leaflet-marker-icon');
+    await expect(markerIcons).toHaveCount(2);
+    await expect(map.locator('.leaflet-marker-icon[tabindex="0"]')).toHaveCount(0);
+    await expect(map.locator('.leaflet-marker-icon[role="button"]')).toHaveCount(0);
+    // S-08c #2: no console errors surfaced while the recap + map rendered.
+    expect(consoleErrors, `console errors on /nights/[id]: ${consoleErrors.join(' | ')}`).toEqual([]);
   });
 
   test('a night with an unrated stop shows "Rank last night" and it navigates', async ({ page, context, baseURL }) => {

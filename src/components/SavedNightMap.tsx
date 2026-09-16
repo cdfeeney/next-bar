@@ -106,6 +106,10 @@ export default function SavedNightMap({
           position={[bar.lat, bar.lng]}
           icon={highlight.has(bar.id) ? lovedIcon : stopIcon}
           interactive={false}
+          // leaflet sets tabIndex=0 + role="button" whenever `keyboard` is truthy
+          // (default true), gated on `keyboard` alone, NOT on `interactive`. Without
+          // this the inert pins become tab stops announced as buttons that do nothing.
+          keyboard={false}
         />
       ))}
     </MapContainer>
