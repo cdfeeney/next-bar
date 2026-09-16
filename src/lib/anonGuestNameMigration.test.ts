@@ -30,7 +30,9 @@ describe('0080_anon_rsvp_guest_name.sql shape', () => {
     // Going / Maybe need a name — typed now or already on the row.
     expect(w).toMatch(/if p_response in \('going', 'maybe'\) and v_name is null and coalesce\(v_has_name, false\) = false then\s+return false;/);
     // A name is trimmed, bounded, and never erased by a later nameless answer.
-    expect(w).toMatch(/v_name := nullif\(btrim\(p_guest_name\), ''\);/);
+    // Round-1 Codex: btrim() with no argument strips spaces only, so the
+    // whitespace set is explicit and matches the client's String.trim().
+    expect(w).toMatch(/v_name := nullif\(btrim\(p_guest_name, E' \\t\\n\\r\\f\\v'\), ''\);/);
     expect(w).toMatch(/char_length\(v_name\) > 40/);
     expect(w).toMatch(/guest_name = coalesce\(v_name, guest_name\)/);
     expect(SQL).toMatch(/grant execute on function public\.rsvp_night_out_by_token\(uuid, uuid, text, text\) to anon, authenticated;/);

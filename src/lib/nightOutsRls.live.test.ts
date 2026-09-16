@@ -247,10 +247,12 @@ describeLive('0044 night_outs — live RLS/RPC denials', () => {
       'get_anon_rsvp_by_token(uuid, uuid)',
       'night_out_scheduled_start(date)',
       'preview_night_out(uuid)',
-      'preview_night_out_attendees(uuid)',
+      // G-01 (0080): anon LOST preview_night_out_attendees — names are what an
+      // account is for (owner, 2026-09-16) — and the bearer writer gained the
+      // guest's name, so its signature is the four-argument one.
       'preview_night_out_detail(uuid)',
       'preview_night_out_shortlist(uuid)',
-      'rsvp_night_out_by_token(uuid, uuid, text)',
+      'rsvp_night_out_by_token(uuid, uuid, text, text)',
     ];
     const { rows } = await db.query(`
       select p.proname || '('

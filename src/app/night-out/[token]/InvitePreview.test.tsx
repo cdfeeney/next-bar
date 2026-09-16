@@ -1153,7 +1153,8 @@ describe('the optional signup upsell (V8-R-INV-004)', () => {
     await waitFor(() => expect(screen.queryByTestId('invite-upsell')).toBeNull());
     // THE RSVP SURVIVES THE DISMISSAL. "Maybe later dismisses it without losing
     // the RSVP" is the requirement's own sentence.
-    expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(/going/i);
+    // G-01: the confirmation names the guest ("You're in as Alex").
+    expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(/in as Alex/i);
   });
 
   test('is never shown to a signed-in visitor, who already has the account', async () => {

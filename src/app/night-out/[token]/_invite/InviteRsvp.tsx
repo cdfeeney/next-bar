@@ -90,10 +90,17 @@ export default function InviteRsvp({
               role="status"
               data-testid="invite-rsvp-sent"
             >
+              {/* G-01 acceptance 1: the confirmation names the guest when we
+                  have one (Going / Maybe always do; a nameless "can't make it"
+                  keeps the old wording). */}
               {rsvp === 'going'
-                ? "You're down as going. Change it any time."
+                ? guestName.trim() !== ''
+                  ? `You're in as ${guestName.trim()}. Change it any time.`
+                  : "You're down as going. Change it any time."
                 : rsvp === 'maybe'
-                  ? "You're down as a maybe. Change it any time."
+                  ? guestName.trim() !== ''
+                    ? `You're a maybe as ${guestName.trim()}. Change it any time.`
+                    : "You're down as a maybe. Change it any time."
                   : "You're down as can't make it. Change it any time."}
             </p>
           ) : null}

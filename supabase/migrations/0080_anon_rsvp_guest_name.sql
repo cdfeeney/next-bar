@@ -58,7 +58,11 @@ begin
     return false;
   end if;
 
-  v_name := nullif(btrim(p_guest_name), '');
+  -- btrim() with no second argument strips ORDINARY SPACES only, while the
+  -- client's String.trim() strips tabs, newlines and other whitespace too
+  -- (round-1 Codex): a name of tabs would have passed the "is not null" test
+  -- and been stored as invisible whitespace. Strip the same set here.
+  v_name := nullif(btrim(p_guest_name, E' \t\n\r\f\v'), '');
   if v_name is not null and char_length(v_name) > 40 then
     return false;
   end if;

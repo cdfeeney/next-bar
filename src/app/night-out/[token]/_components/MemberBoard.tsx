@@ -93,10 +93,13 @@ export default function MemberBoard({
           names — a token-scoped recipient has no account and gave none, and
           inventing one would be worse than the silence this replaces. A
           failed read says nothing rather than reporting zero replies. */}
-      {anonRsvps !== null &&
-      anonRsvps.going + anonRsvps.maybe + anonRsvps.declined > 0 ? (
+      {/* G-01 (round-1 Codex): the named guests above are ALREADY rows, so this
+          aggregate counts only what has no row — the nameless replies and every
+          "can't make it" — or nobody would be able to reconcile the two. */}
+      {anonRsvps !== null && namelessCount + anonRsvps.declined > 0 ? (
         <p className="mt-3 text-sm text-muted" data-testid="night-out-link-replies">
-          From the invite link: {anonRsvps.going} going, {anonRsvps.maybe}{' '}
+          From the invite link: {Math.max(0, anonRsvps.going - namedGoing.filter((g) => g.response === 'going').length)} going,{' '}
+          {Math.max(0, anonRsvps.maybe - namedGoing.filter((g) => g.response === 'maybe').length)}{' '}
           maybe, {anonRsvps.declined} can&apos;t make it.
         </p>
       ) : null}
