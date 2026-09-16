@@ -197,6 +197,9 @@ async function stubNightOutRest(page: Page): Promise<void> {
   // an empty ratings set are the honest fixtures, registered ONCE here so every
   // site that used to carry a catch-all gets them.
   await page.route('**/rest/v1/rpc/get_follow_requests*', fulfillJson(200, []));
+  // G-01: the member view reads named share-link guests; strict-REST harnesses
+  // 500 anything unstubbed, so every plan surface needs it.
+  await page.route('**/rest/v1/rpc/get_night_out_anon_guests*', fulfillJson(200, []));
   await page.route('**/rest/v1/ratings?*', async route => {
     if (route.request().method() !== 'GET') return route.fallback();
     await fulfillJson(200, [])(route);
@@ -445,7 +448,10 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
     // V8-R-INV-002: time, who is going, and the shortlist so far — the halves
     // that were absent until round 3.
     await expect(page.getByTestId('invite-when')).toContainText(/9:00\s*PM/i);
-    await expect(page.getByTestId('invite-attendees')).toContainText('Sam');
+    // G-01: a link holder gets the accepted COUNT and an account prompt; the
+    // names are what the account is for (owner, 2026-09-16).
+    await expect(page.getByTestId('invite-attendees')).toHaveCount(0);
+    await expect(page.getByTestId('invite-whos-in-locked')).toBeVisible();
     await expect(page.getByTestId('invite-shortlist')).toContainText(/1 vote/);
 
     // ...and the exclusions still hold. A bearer may not vote or suggest, so
@@ -544,12 +550,15 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
       async route => {
         expect(route.request().postDataJSON()).toEqual({
           p_token: TOKEN, p_key: expect.any(String), p_response: 'going',
+          p_guest_name: 'Alex',
         });
         await fulfillJson(500, { message: 'boom' })(route);
       },
     );
 
     await page.goto(`/night-out/${TOKEN}`);
+    // G-01: Going carries the guest's name.
+    await page.getByLabel('Your name').fill('Alex');
     await page.getByTestId('invite-rsvp-going').click();
     await expect(page.getByTestId('invite-rsvp-error')).toContainText(
       /let the host know/i,
@@ -3603,7 +3612,7 @@ test.describe('G-01: the guest RSVP and the sign-up funnel', () => {
 
     await page.getByTestId('invite-whos-in-signup').click();
     await expect(page).toHaveURL(/\/auth$/);
-    const stored = await page.evaluate((key) => window.localStorage.getItem(key), PENDING_KEY);
+    const stored = await page.evaluate((key) => window.sessionStorage.getItem(key), PENDING_KEY);
     expect(stored, 'the invite context survives the trip to /auth').toBe(TOKEN);
   });
 
@@ -3653,7 +3662,9 @@ test.describe('G-01: the guest RSVP and the sign-up funnel', () => {
     await page.goto(`/night-out/${TOKEN}`);
     await expect(page.getByTestId('member-board')).toBeVisible();
     await expect(page.getByTestId('anon-guest')).toHaveCount(0);
-    await expect(page.getByTestId('anon-guests-nameless')).toHaveCount(0);
+    // The counts still read: one going, nobody named — so it is stated as an
+    // unnamed reply rather than lost.
+    await expect(page.getByTestId('anon-guests-nameless')).toContainText('1 more reply');
     await expect(page.getByTestId('night-out-link-replies')).toContainText(/1 going/);
   });
 });
