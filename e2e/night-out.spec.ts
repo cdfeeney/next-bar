@@ -2241,6 +2241,13 @@ test.describe('S-08: the saved night recap', () => {
     await expect(page.getByTestId('saved-night-headline')).toContainText(/2 stops · you loved Attaboy/i);
     // Both stops are rated, so the action points at the rankings.
     await expect(page.getByTestId('saved-night-rank')).toContainText(/See your rankings/i);
+    // S-08b: a small inert map with one marker per resolvable stop, the Loved
+    // one highlighted, and no zoom control (assert the DOM, not the basemap).
+    const map = page.getByTestId('saved-night-map');
+    await expect(map).toBeVisible();
+    await expect(map.locator('[data-stop]')).toHaveCount(2);
+    await expect(map.locator('[data-stop="loved"]')).toHaveCount(1);
+    await expect(map.locator('.leaflet-control-zoom')).toHaveCount(0);
   });
 
   test('a night with an unrated stop shows "Rank last night" and it navigates', async ({ page, context, baseURL }) => {
@@ -2271,6 +2278,8 @@ test.describe('S-08: the saved night recap', () => {
     await expect(page.getByTestId('saved-night-stops')).toHaveCount(0);
     await expect(page.getByTestId('saved-night-headline')).toHaveCount(0);
     await expect(page.getByTestId('saved-night-photos')).toBeVisible();
+    // S-08b: no resolvable stop → no map.
+    await expect(page.getByTestId('saved-night-map')).toHaveCount(0);
   });
 });
 
