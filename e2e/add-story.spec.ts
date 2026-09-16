@@ -408,7 +408,9 @@ test.describe('Add to Story — signed in', () => {
     // capture" and no back chevron on this step.
     await expect(sheet.locator('svg')).toHaveCount(3);
     await expect(sheet.getByRole('button', { name: 'Close capture' })).toBeVisible();
-    await expect(sheet.getByRole('button', { name: /back/i })).toHaveCount(0);
+    // No back chevron on this step (exact name — the "Front + back" row is not it).
+    await expect(sheet.getByRole('button', { name: 'Back', exact: true })).toHaveCount(0);
+    await expect(sheet.getByText('‹')).toHaveCount(0);
 
     await page.getByTestId('capture-mode-dual').click();
     // No explainer interstitial: the rear camera opens at once.

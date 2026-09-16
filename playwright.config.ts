@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { defineConfig, devices } from '@playwright/test';
 import { config as loadEnvFile } from 'dotenv';
 
@@ -90,8 +91,17 @@ export default defineConfig({
     },
   ],
   webServer: {
+    // PLAYWRIGHT_SKIP_BUILD=1 (release mode only, opt-in): serve the .next that
+    // is already on disk instead of rebuilding. `next build` is the memory peak
+    // of the whole gate, and on a 16GB host with a browser and a desktop app
+    // open the low-memory monitor kills the run mid-build (2026-09-16, three
+    // times). The operator builds once, alone, then runs the browsers against
+    // it. FRESHNESS IS THE CALLER'S RESPONSIBILITY: the flag is refused when
+    // there is no build at all, but it cannot know whether src changed since.
     command: releaseMode
-      ? `npm run build && npm run start -- --port ${port}`
+      ? process.env.PLAYWRIGHT_SKIP_BUILD === '1' && existsSync('.next/BUILD_ID')
+        ? `npm run start -- --port ${port}`
+        : `npm run build && npm run start -- --port ${port}`
       : `npm run dev -- --port ${port}`,
     url: baseURL,
     // The suite tests the SHIPPED media policy, so the server under test is
