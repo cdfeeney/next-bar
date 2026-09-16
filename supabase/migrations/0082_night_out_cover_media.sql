@@ -32,8 +32,10 @@
 --
 --   2. media_read_window (0076) — a fourth answer beside story, feed and group:
 --      the object a live plan's cover names is readable (unbounded, like a
---      group photo) to that plan's owner and accepted members
---      (`night_out_role(n.id) is not null`), never to anyone else. The reporter
+--      group photo) to that plan's owner and any member — the same audience as
+--      night_outs_select_member (0044), so a PENDING invitee who already reads
+--      the plan row and its cover value sees the picture too — never to a
+--      non-member. The reporter
 --      veto stands down for it, exactly as it does for a group message the
 --      caller can see; a live cover also outranks a story's clock. Everything
 --      0076 decided is otherwise byte-identical.
@@ -200,11 +202,13 @@ begin
 
   -- THE COVER ANSWER (S-06c, 0082), COMPUTED ONCE, the same way as the group
   -- answer above. A night out whose `cover` names this object makes it readable
-  -- to the plan's owner and accepted members while the plan is not cancelled.
-  -- `night_out_role` is 0044's single definition of "owner or accepted member"
-  -- — the predicate 0068's night_out branch and the anon-guest reads already
-  -- use — so a member who DECLINED reads null and is refused here as there. The
-  -- object must still be registered and unremoved: a reference does not
+  -- to the plan's owner and ANY member while the plan is not cancelled. The
+  -- audience is night_outs_select_member (0044) — owner or any night_out_members
+  -- row — NOT night_out_role, which is accepted-only: a PENDING invitee already
+  -- reads the plan row and its cover value through that policy and the invitation
+  -- card renders the cover, so the bytes must be readable to them too (round-1
+  -- HIGH). A declined member is admitted for the same reason the policy admits
+  -- them. The object must still be registered and unremoved: a reference does not
   -- resurrect reclaimed bytes. A cancelled plan withdraws the authorisation, and
   -- `media_live_reference_count` stops counting the reference at the same
   -- moment, so "readable" and "kept" agree.
@@ -561,7 +565,7 @@ end;
 $$;
 
 comment on function public.media_read_window(text) is
-  '0066''s read decision as consolidated in 0076, widened in 0082 (S-06c): the object a live (non-cancelled) night out''s cover names is readable, unbounded, to that plan''s owner and accepted members; the reporter veto stands down for it as it does for a visible group message.';
+  '0066''s read decision as consolidated in 0076, widened in 0082 (S-06c): the object a live (non-cancelled) night out''s cover names is readable, unbounded, to that plan''s owner and any member (night_outs_select_member — including a pending invitee); the reporter veto stands down for it as it does for a visible group message.';
 
 ------------------------------------------------------------------------------
 -- 3. set_night_out_cover — media:<uuid> beside template:<key>, owner-owned only.
