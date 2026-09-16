@@ -123,23 +123,57 @@ describeLive('0082 night_outs.cover = media:<id> — readable to members, kept f
     });
   });
 
-  it('a member can read the cover object; a non-member cannot; the plan\'s cancellation withdraws it', async ({ skip }) => {
+  it('every audience the plan\'s own read policy admits can read the cover; a true non-member cannot; cancel withdraws it', async ({ skip }) => {
     if (!applied) skip('0082 not applied on staging yet — the owner runs apply-migration-set');
     await inRollback(async () => {
       const { owner, member, stranger, planId, mediaId, storagePath } = await fixture();
+      // R-04 round-1 HIGH (Fable): a PENDING invitee can read night_outs.cover
+      // via night_outs_select_member, so the invitation card shows the cover
+      // before acceptance — the read window must admit them too.
+      const pending = await account();
+      await asPostgres();
+      await db.query(
+        `insert into public.night_out_members (night_out_id, user_id, role, invite_status)
+         values ($1, $2, 'member', 'pending')`,
+        [planId, pending],
+      );
       await asRole('authenticated', owner);
       await db.query('select public.set_night_out_cover($1, $2)', [planId, `media:${mediaId}`]);
 
       await asRole('authenticated', member);
       expect(await readable(storagePath), 'an accepted member reads the cover').toBe(true);
+      await asRole('authenticated', pending);
+      expect(await readable(storagePath), 'a PENDING invitee reads it too (matches the card)').toBe(true);
       await asRole('authenticated', stranger);
-      expect(await readable(storagePath), 'a non-member does not').toBe(false);
+      expect(await readable(storagePath), 'a true non-member does not').toBe(false);
       await asRole('authenticated', owner);
       expect(await readable(storagePath), 'the uploader always could').toBe(true);
 
       await db.query('select public.cancel_night_out($1)', [planId]);
       await asRole('authenticated', member);
       expect(await readable(storagePath), 'a cancelled plan authorises nobody').toBe(false);
+    });
+  });
+
+  it('the cover write takes the media row lock, so a concurrent reclaim cannot leave a cover on dead bytes', async ({ skip }) => {
+    if (!applied) skip('0082 not applied on staging yet — the owner runs apply-migration-set');
+    await inRollback(async () => {
+      const { owner, planId, mediaId, storagePath } = await fixture();
+      await asRole('authenticated', owner);
+      // If the sweep reclaimed the object FIRST (bytes_removed_at stamped), the
+      // locked check drops the row and the cover write is refused rather than
+      // binding a cover to reclaimed bytes.
+      await asPostgres();
+      await db.query('update public.media_objects set bytes_removed_at = now() where id = $1', [mediaId]);
+      await asRole('authenticated', owner);
+      const refused = await db.query('select public.set_night_out_cover($1, $2) as ok', [planId, `media:${mediaId}`]);
+      expect(refused.rows[0].ok, 'a reclaimed object cannot become a cover').toBe(false);
+      await asPostgres();
+      const { rows } = await db.query('select cover from public.night_outs where id = $1', [planId]);
+      expect(rows[0].cover, 'no cover was written').toBeNull();
+      // And the window refuses the dead bytes for everyone.
+      await asRole('authenticated', owner);
+      expect(await readable(storagePath)).toBe(false);
     });
   });
 

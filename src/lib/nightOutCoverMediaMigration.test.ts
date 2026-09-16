@@ -65,8 +65,11 @@ describe('0082_night_out_cover_media.sql shape', () => {
     expect(survivesInOrder(src, SQL, [])).toEqual([]);
     const fn = SQL.slice(SQL.indexOf('create or replace function public.media_read_window('));
     expect(fn).toMatch(/v_cover_readable boolean := false;/);
-    // Members only, live plan only, registered and unremoved bytes only.
-    expect(fn).toMatch(/join public\.media_objects mo on n\.cover = 'media:' \|\| mo\.id::text\s+where mo\.storage_path = p_name\s+and mo\.bucket_id = 'story-media'\s+and mo\.bytes_removed_at is null\s+and n\.status <> 'cancelled'\s+and public\.night_out_role\(n\.id\) is not null\s+\) into v_cover_readable;/);
+    // R-04... audience is night_outs_select_member (owner or ANY membership row),
+    // matching the plan's own read policy, NOT accepted-only night_out_role.
+    expect(fn).toMatch(/where mo\.storage_path = p_name\s+and mo\.bucket_id = 'story-media'\s+and mo\.bytes_removed_at is null\s+and n\.status <> 'cancelled'/);
+    expect(fn).toMatch(/and \(n\.owner_id = auth\.uid\(\)\s+or exists \(\s+select 1\s+from public\.night_out_members m\s+where m\.night_out_id = n\.id\s+and m\.user_id = auth\.uid\(\)\s+\)\)\s+\) into v_cover_readable;/);
+    expect(fn).not.toMatch(/night_out_role\(n\.id\) is not null\s+\) into v_cover_readable;/);
     expect(fn).toMatch(/and not v_group_readable\n(?:\s+--.*\n)*\s+and not v_cover_readable\n\s+then/);
     expect(fn).toMatch(/if v_prior\.readable and v_cover_readable then\s+return query select true, null::timestamptz;/);
     expect(fn).toMatch(/if v_cover_readable then\s+return query select true, null::timestamptz;\s+return;\s+end if;\s+(?:--.*\s+)*return query select false, null::timestamptz;/);
@@ -78,7 +81,9 @@ describe('0082_night_out_cover_media.sql shape', () => {
     expect(survivesInOrder(src, SQL, ["  if p_cover is not null and p_cover !~ '^template:[a-z0-9-]{1,40}$' then"])).toEqual([]);
     const fn = SQL.slice(SQL.indexOf('create or replace function public.set_night_out_cover('));
     expect(fn).toMatch(/\^\(template:\[a-z0-9-\]\{1,40\}\|media:\[0-9a-f-\]\{36\}\)\$/);
-    expect(fn).toMatch(/mo\.id::text = substring\(p_cover from 7\)\s+and mo\.owner_id = v_uid\s+and mo\.bucket_id = 'story-media'\s+and mo\.bytes_removed_at is null/);
+    // R-04... the media check takes the row lock (for update), so a concurrent
+    // claim_media_for_removal cannot reclaim the bytes between check and write.
+    expect(fn).toMatch(/perform 1\s+from public\.media_objects mo\s+where mo\.id::text = substring\(p_cover from 7\)\s+and mo\.owner_id = v_uid\s+and mo\.bucket_id = 'story-media'\s+and mo\.bytes_removed_at is null\s+for update;\s+if not found then\s+return false;/);
     expect(fn).toMatch(/owner_id = v_uid/);
     expect(fn).toMatch(/status in \('draft', 'open'\)/);
     expect(SQL).toMatch(/revoke all on function public\.set_night_out_cover\(uuid, text\) from public, anon;/);

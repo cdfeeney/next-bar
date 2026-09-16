@@ -216,7 +216,20 @@ begin
        and mo.bucket_id = 'story-media'
        and mo.bytes_removed_at is null
        and n.status <> 'cancelled'
-       and public.night_out_role(n.id) is not null
+       -- S-06c round-1 HIGH (Fable): the AUDIENCE is night_outs_select_member —
+       -- owner or ANY membership row — not night_out_role, which is accepted-only.
+       -- RLS (0044:night_outs_select_member) already lets a PENDING invitee read
+       -- night_outs.cover, so PlanCover renders on the invitation card before the
+       -- invite is accepted; gating the bytes on accepted-only left that viewer a
+       -- broken "cover" (a 404 from this window) while a template cover showed.
+       -- Read the plan's own read policy verbatim so the picture matches the row.
+       and (n.owner_id = auth.uid()
+            or exists (
+              select 1
+                from public.night_out_members m
+               where m.night_out_id = n.id
+                 and m.user_id = auth.uid()
+            ))
   ) into v_cover_readable;
 
   -- THE FEED ANSWER, COMPUTED ONCE. It is both the fallback branch at the bottom
@@ -579,17 +592,27 @@ begin
   -- /api/media/upload — registered, in the media bucket, bytes still present.
   -- Anyone else's object, or an id that names nothing, is refused with false,
   -- so a cover can never point at bytes its owner could not read themselves.
-  if p_cover is not null
-     and p_cover like 'media:%'
-     and not exists (
-       select 1
-         from public.media_objects mo
-        where mo.id::text = substring(p_cover from 7)
-          and mo.owner_id = v_uid
-          and mo.bucket_id = 'story-media'
-          and mo.bytes_removed_at is null
-     ) then
-    return false;
+  -- S-06c round-1 HIGH (Codex) / MEDIUM (Fable): LOCK the media row while binding
+  -- it as a cover. claim_media_for_removal (0066) recounts references and stamps
+  -- bytes_removed_at under `for update of m skip locked`, so a plain `exists`
+  -- snapshot that predates the stamp reads "still live" and would attach a cover
+  -- to bytes already committed to deletion — the exact defect 0068 fixed the same
+  -- way (round-6 panel, HIGH). Holding the row lock makes a concurrent sweep skip
+  -- this row; and if the sweep locked and stamped first, `for update` waits and
+  -- then the `bytes_removed_at is null` filter drops the row, so we refuse. Once
+  -- the cover commits, media_live_reference_count returns 1 and no later sweep
+  -- considers it.
+  if p_cover is not null and p_cover like 'media:%' then
+    perform 1
+       from public.media_objects mo
+      where mo.id::text = substring(p_cover from 7)
+        and mo.owner_id = v_uid
+        and mo.bucket_id = 'story-media'
+        and mo.bytes_removed_at is null
+      for update;
+    if not found then
+      return false;
+    end if;
   end if;
 
   update public.night_outs
