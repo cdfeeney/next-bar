@@ -83,7 +83,7 @@ export default function FollowersPage(): JSX.Element {
               stories, and show up in your Tonight.
             </p>
             <Link
-              href="/friends"
+              href="/friends/people"
               className="mt-3 inline-flex items-center min-h-[44px] text-accent underline-offset-4 hover:underline touch-manipulation"
             >
               Find friends →

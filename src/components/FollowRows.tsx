@@ -29,7 +29,7 @@ export function CircleRow({
 }): JSX.Element {
   return (
     <div className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3">
-      <Link href={`/u/${profile.handle}`} className="flex min-w-0 flex-1 items-center gap-3">
+      <Link href={`/u/${profile.handle}`} className="flex min-h-[44px] min-w-0 flex-1 items-center gap-3 touch-manipulation">
         <Avatar initials={initialsOf(profile)} seed={profile.handle} size="sm" />
         <span className="min-w-0">
           <span className="block font-display text-[15px] font-semibold truncate">
@@ -68,7 +68,7 @@ export function FollowerRow({
 }): JSX.Element {
   return (
     <div className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3">
-      <Link href={`/u/${profile.handle}`} className="flex min-w-0 flex-1 items-center gap-3">
+      <Link href={`/u/${profile.handle}`} className="flex min-h-[44px] min-w-0 flex-1 items-center gap-3 touch-manipulation">
         <Avatar initials={initialsOf(profile)} seed={profile.handle} size="sm" />
         <span className="min-w-0">
           <span className="block font-display text-[15px] font-semibold truncate">
@@ -85,7 +85,8 @@ export function FollowerRow({
           'shrink-0 min-h-[44px] touch-manipulation px-4 rounded-full text-sm font-display border transition-colors',
           following || requested
             ? 'bg-transparent border-border text-muted hover:text-text'
-            : 'bg-accent border-accent text-bg',
+            : // S-09 / README §10: "Follow back" is accent-OUTLINED, not filled.
+              'bg-transparent border-accent text-accent hover:bg-accent hover:text-bg',
         ].join(' ')}
       >
         {following ? 'Following' : requested ? 'Requested' : 'Follow back'}

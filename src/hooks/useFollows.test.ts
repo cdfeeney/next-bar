@@ -296,6 +296,50 @@ describe('useFollows — server (signed-in) mode', () => {
 
     await waitFor(() => expect(result.current.isFollowing('Claire_R')).toBe(true));
   });
+
+  it('S-09: a failed outgoing-requests read marks the whole hydrate failed, not empty', async () => {
+    // The three halves are one hydrate; a null outgoing must surface as
+    // circleFailed so /friends/following shows the failure state, not the
+    // "not following anyone" consequence state (the G-01 shape, round-1 HIGH).
+    fetchFollowsMock.mockResolvedValue([]);
+    fetchFollowersMock.mockResolvedValue([]);
+    fetchOutgoingRequestsMock.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.circleFailed).toBe(true);
+  });
+
+  it('S-09: a write that SUCCEEDS does not clear a refusal notice from a DIFFERENT overlapping write', async () => {
+    fetchFollowsMock.mockResolvedValue([]);
+    // Both taps happen while both writes are in flight (the real overlap): A
+    // will refuse, B will succeed. B's success must not erase A's rollback
+    // notice (round-1, both lanes). Deferred promises model the overlap.
+    let resolveA: (v: null) => void = () => undefined;
+    let resolveB: (v: { status: 'followed'; profile: { id: string; handle: string; displayName: string | null } }) => void = () => undefined;
+    followByHandleMock
+      .mockReturnValueOnce(new Promise((r) => { resolveA = r; }))
+      .mockReturnValueOnce(new Promise((r) => { resolveB = r; }));
+
+    const { result } = renderHook(() => useFollows());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    // Both taps fire before either write resolves.
+    act(() => result.current.toggleFollow('mara'));
+    act(() => result.current.toggleFollow('devon'));
+
+    // A refuses → its notice is set.
+    await act(async () => { resolveA(null); });
+    await waitFor(() => expect(result.current.followNotice).not.toBeNull());
+    const notice = result.current.followNotice;
+
+    // B succeeds afterward → it must NOT clear A's still-standing notice.
+    await act(async () => {
+      resolveB({ status: 'followed', profile: { id: 'p-b', handle: 'devon', displayName: 'Devon' } });
+      await Promise.resolve();
+    });
+    expect(result.current.followNotice).toBe(notice);
+  });
 });
 
 describe('useFollows — follow requests (B3b)', () => {

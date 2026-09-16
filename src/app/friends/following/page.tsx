@@ -41,7 +41,7 @@ export default function FollowingPage(): JSX.Element {
         follow a few people — that&apos;s who it&apos;s built from.
       </p>
       <Link
-        href="/friends"
+        href="/friends/people"
         className="mt-3 inline-flex items-center min-h-[44px] text-accent underline-offset-4 hover:underline touch-manipulation"
       >
         Find friends →
@@ -118,18 +118,36 @@ export default function FollowingPage(): JSX.Element {
         ) : circle.length === 0 && requested.length === 0 ? (
           emptyState
         ) : (
-          <div className="space-y-3" data-testid="following-list">
-            {circle.map((p) => (
-              <CircleRow key={p.handle} profile={p} onUnfollow={toggleFollow} />
-            ))}
-            {requested.map((p) => (
-              <CircleRow
-                key={`req-${p.handle}`}
-                profile={p}
-                pending
-                onUnfollow={toggleFollow}
-              />
-            ))}
+          <div className="space-y-6">
+            {/* The Following ROWS are the follows — the same set the People
+                tile counts (requests are not follows, Instagram semantics). An
+                outgoing request is a separate, withdrawable state, so it sits
+                under its own heading rather than inflating the Following list
+                past its count (S-09 round-1: tile-vs-rows must agree). */}
+            {circle.length > 0 ? (
+              <div className="space-y-3" data-testid="following-list">
+                {circle.map((p) => (
+                  <CircleRow key={p.handle} profile={p} onUnfollow={toggleFollow} />
+                ))}
+              </div>
+            ) : null}
+            {requested.length > 0 ? (
+              <div>
+                <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mb-3">
+                  Requested · {requested.length}
+                </h2>
+                <div className="space-y-3" data-testid="following-requested">
+                  {requested.map((p) => (
+                    <CircleRow
+                      key={`req-${p.handle}`}
+                      profile={p}
+                      pending
+                      onUnfollow={toggleFollow}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
       </section>

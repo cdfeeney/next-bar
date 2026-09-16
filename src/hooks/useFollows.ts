@@ -390,7 +390,10 @@ export function useFollows(): UseFollowsReturn {
           setCircle(server);
           if (outgoing !== null) setRequested(outgoing);
           if (followerList !== null) setFollowers(followerList);
-          setFetchFailed(false);
+          // Even on this first-answer paint, a null followers/outgoing half is a
+          // failed read (S-09 round-1, Fable): clearing it unconditionally hid a
+          // partial failure behind the empty state here too.
+          setFetchFailed(followerList === null || outgoing === null);
           setLoading(false);
         }
         return;
@@ -402,7 +405,12 @@ export function useFollows(): UseFollowsReturn {
       // invites mutuals — so a failed followers read left `circleReady` true
       // over an EMPTY guest list with nothing on screen saying why: the exact
       // "real plan with no guests, one error away" defect, on the other half.
-      setFetchFailed(server === null || followerList === null);
+      // Any half of the ONE hydrate failing degrades the circle view (S-09
+      // round-1, both lanes): a null get_outgoing_requests left the Following
+      // page showing the empty consequence state to someone who has pending
+      // requests — the exact G-01 shape, on the third half. All three are
+      // fetched together, so a missing one is a failed read, not "nothing here".
+      setFetchFailed(server === null || followerList === null || outgoing === null);
 
       // null = fetch FAILED (not "zero friends") — keep prior state rather
       // than blanking a circle on a transient failure. Never fall back to
@@ -582,9 +590,12 @@ export function useFollows(): UseFollowsReturn {
               : without;
           });
           // A null outcome is a server refusal, not a throw: the placeholder is
-          // dropped above, so SAY SO here too (R-02b) — otherwise the pill
-          // reverts to Follow with nothing explaining why.
-          setFollowNotice(outcome ? null : FOLLOW_REFUSED);
+          // dropped above, so SAY SO (R-02b) — otherwise the pill reverts to
+          // Follow with nothing explaining why. Only SET on refusal, never clear
+          // on success (S-09 round-1, both lanes): a success clearing the notice
+          // erased a DIFFERENT overlapping write's still-standing rollback. The
+          // notice is cleared by the next tap, dismiss, or retry, never here.
+          if (!outcome) setFollowNotice(FOLLOW_REFUSED);
           if (outcome?.status === 'requested') {
             setRequested((prev) =>
               prev.some((p) => p.handle.toLowerCase() === target)

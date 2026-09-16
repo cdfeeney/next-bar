@@ -85,7 +85,7 @@ export default function GroupsAndPeople(): JSX.Element {
           className="bg-surface border border-border rounded-3xl py-[18px] text-center touch-manipulation hover:border-accent transition-colors"
         >
           <p className="font-display text-[28px] font-bold tabular-nums leading-none">
-            {loading || circleFailed ? '–' : followerCount}
+            {loading ? '–' : circleFailed ? '' : followerCount}
           </p>
           <p className="text-[11px] uppercase tracking-widest text-muted mt-1.5">
             Followers
@@ -96,7 +96,7 @@ export default function GroupsAndPeople(): JSX.Element {
           className="bg-surface border border-border rounded-3xl py-[18px] text-center touch-manipulation hover:border-accent transition-colors"
         >
           <p className="font-display text-[28px] font-bold tabular-nums leading-none">
-            {loading || circleFailed ? '–' : followingCount}
+            {loading ? '–' : circleFailed ? '' : followingCount}
           </p>
           <p className="text-[11px] uppercase tracking-widest text-muted mt-1.5">
             Following

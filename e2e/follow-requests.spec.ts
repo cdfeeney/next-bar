@@ -775,8 +775,39 @@ test.describe('S-09 — Followers and Following lists', () => {
     const empty = page.getByTestId('followers-empty');
     await expect(empty).toBeVisible();
     await expect(empty).toContainText(/pins and stories/i);
-    await expect(empty.getByRole('link', { name: /Find friends/i })).toBeVisible();
+    // The Find-friends control lives on /friends/people, not the /friends hub.
+    await expect(empty.getByRole('link', { name: /Find friends/i })).toHaveAttribute('href', '/friends/people');
     await expect(page.getByTestId('followers-error')).toHaveCount(0);
+  });
+
+  test('AC1 + tile/rows agree with an outgoing request: the Following count is the follow rows; requests sit apart', async ({ page }) => {
+    // The tile counts follows only (Instagram semantics); the request is a
+    // separate withdrawable state, so tile count === following-list rows and the
+    // request is under its own heading (round-1: tile-vs-rows must not disagree).
+    await stubSupabase(page, {
+      following: [S09_A],
+      followers: [],
+      outgoingRequests: [S09_B],
+    });
+    await page.goto('/friends/people');
+    await expect(page.getByRole('link', { name: /1\s+Following/i })).toBeVisible();
+    await page.getByRole('link', { name: /1\s+Following/i }).click();
+    await expect(page).toHaveURL(/\/friends\/following$/);
+    // One FOLLOW row (matches the tile's 1), and the request is elsewhere.
+    await expect(page.getByTestId('following-list').locator('> *')).toHaveCount(1);
+    await expect(page.getByTestId('following-requested').locator('> *')).toHaveCount(1);
+  });
+
+  test('the G-01 shape does not recur: a failed outgoing-requests read shows the failure state, not "not following anyone"', async ({ page }) => {
+    await stubSupabase(page, { following: [], followers: [] });
+    // following + followers succeed empty, but the outgoing read fails: the page
+    // must show the failure state, never the empty consequence copy.
+    await page.route('**/rest/v1/rpc/get_outgoing_requests**', (route) =>
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'boom' }) }),
+    );
+    await page.goto('/friends/following');
+    await expect(page.getByTestId('following-error')).toBeVisible();
+    await expect(page.getByTestId('following-empty')).toHaveCount(0);
   });
 
   test('AC5: a failed read shows the failure copy + retry, distinct from empty, and the retry recovers', async ({ page }) => {
