@@ -1,16 +1,21 @@
 'use client';
 
 import { useState } from 'react';
-import { coverTemplateOf } from '@/lib/nightOutCovers';
+import { coverSourceOf } from '@/lib/nightOutCovers';
+import { useMediaUrl } from '@/lib/nightOutMedia/useMediaUrl';
 
 /**
- * S-06b — a plan's cover, wherever it shows (form tile, plan board header,
- * invitation card). Renders nothing for no cover OR an unrecognised value.
+ * S-06b / S-06c — a plan's cover, wherever it shows (form tile, plan board
+ * header, invitation card). Renders nothing for no cover OR an unrecognised
+ * value. A template is a bundled asset; a library photo (`media:<id>`) resolves
+ * through `/api/media/:id/url` — the boundary route that asks
+ * `media_read_window` as the caller — never off Storage.
  *
  * A FAILED IMAGE LOAD IS NOT AN EMPTY COVER: the states stay apart, as the
  * media components already do. On load failure the picture is dropped and the
- * template's name stays on the chip, so the owner still sees which cover the
- * plan carries; `data-cover-state` says which of the three it is.
+ * label stays on the chip, so the owner still sees which cover the plan
+ * carries; `data-cover-state` says which it is: `ok`, `failed`, or — for a
+ * photo whose URL has not resolved yet — `loading`.
  */
 export default function CoverImage({
   cover,
@@ -27,30 +32,41 @@ export default function CoverImage({
   // MEDIUM): the same instance is reused when the owner picks another
   // template, and a boolean would keep the new picture gated off forever.
   const [failedFor, setFailedFor] = useState<string | null>(null);
-  const template = coverTemplateOf(cover);
-  if (template === null) return null;
-  const failed = failedFor === cover;
+  const source = coverSourceOf(cover);
+  // Hooks run unconditionally; a template asks the route for nothing.
+  const media = useMediaUrl(source?.kind === 'media' ? source.mediaId : null);
+  if (source === null) return null;
+
+  const isMedia = source.kind === 'media';
+  // The route's 404 is its one authoritative "no" (deleted, or not ours to
+  // read); anything else is the network having a bad moment, shown as loading.
+  const failed = failedFor === cover || (isMedia && media.status === 'gone');
+  const src = isMedia
+    ? media.status === 'ready' ? media.url : null
+    : source.template.src;
+  const label = isMedia ? 'Your photo' : source.template.label;
+  const state = failed ? 'failed' : src === null ? 'loading' : 'ok';
   return (
     <div
       data-testid={testId}
-      data-cover={template.key}
-      data-cover-state={failed ? 'failed' : 'ok'}
+      data-cover={isMedia ? 'media' : source.template.key}
+      data-cover-state={state}
       className={`relative overflow-hidden bg-surface ${className}`}
     >
-      {!failed ? (
-        // A bundled static asset under public/; next/image would only add an
-        // optimizer hop in front of an SVG.
+      {src !== null && !failed ? (
+        // A bundled static asset or a signed URL; next/image would only add an
+        // optimizer hop in front of it.
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={template.src}
-          alt={`${template.label} cover`}
+          src={src}
+          alt={`${label} cover`}
           className="absolute inset-0 h-full w-full object-cover"
           onError={() => setFailedFor(cover ?? null)}
         />
       ) : null}
       {showLabel ? (
         <span className="absolute bottom-3 left-3 rounded-full bg-text/85 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-bg">
-          {template.label}
+          {label}
         </span>
       ) : null}
     </div>

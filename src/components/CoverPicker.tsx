@@ -1,16 +1,21 @@
 'use client';
 
+import { useRef, useState } from 'react';
 import Sheet from '@/components/story/Sheet';
-import { COVER_TEMPLATES, templateCoverValue } from '@/lib/nightOutCovers';
+import { COVER_TEMPLATES, mediaCoverValue, templateCoverValue } from '@/lib/nightOutCovers';
+import { uploadImageThroughBoundary } from '@/lib/media/uploadClient';
+import { getBrowserSupabase } from '@/lib/supabase/client';
 
 /**
- * S-06b — the cover sheet: the six bundled templates in a two-column grid.
+ * S-06b / S-06c — the cover sheet: "Choose from library" on top, then the six
+ * bundled templates in a two-column grid.
  *
- * "Choose from library" is NOT here yet, deliberately: a library upload has to
- * be readable through `media_read_window` and kept out of `claim_orphan_paths`,
- * which is a change to the media boundary (0066/0077) that needs its own
- * authorised migration. A row that opened a picker whose result the server
- * refuses would be a dead end, and the README rules those out.
+ * The library row is a native `<input type="file" accept="image/*">` — on a
+ * phone that is the photo library. The file goes through `/api/media/upload`
+ * (the one path bytes take to the media bucket); the picker then hands back
+ * `media:<id>`, which 0082 taught `set_night_out_cover`, `media_read_window`
+ * and the sweeps to understand. A refused or failed upload says so in the
+ * sheet and leaves the current cover untouched — never a dead end.
  */
 export default function CoverPicker({
   value,
@@ -23,11 +28,71 @@ export default function CoverPicker({
   onPick: (cover: string | null) => void;
   onClose: () => void;
 }): JSX.Element {
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const chooseFromLibrary = async (file: File | undefined): Promise<void> => {
+    if (!file || uploading) return;
+    const supabase = getBrowserSupabase();
+    if (supabase === null) {
+      setUploadError("That photo didn't upload — try again in a moment.");
+      return;
+    }
+    setUploading(true);
+    setUploadError(null);
+    const result = await uploadImageThroughBoundary(supabase, file);
+    setUploading(false);
+    if (result.kind === 'ok') {
+      onPick(mediaCoverValue(result.mediaId));
+      return;
+    }
+    setUploadError(
+      result.kind === 'too_large'
+        ? 'That photo is too large to upload. Try a smaller one.'
+        : "That photo didn't upload — try again in a moment.",
+    );
+  };
+
   return (
     <Sheet label="Cover photo" testId="cover-picker" onClose={onClose}>
       <p className="mb-3 text-sm text-muted">
         Pick a cover for the invite. You can change it until the plan is locked.
       </p>
+      <input
+        ref={fileInput}
+        type="file"
+        accept="image/*"
+        className="sr-only"
+        data-testid="cover-library-input"
+        aria-label="Choose a cover from your photo library"
+        disabled={uploading}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          // Reset so picking the same file again re-fires the change event.
+          event.target.value = '';
+          void chooseFromLibrary(file);
+        }}
+      />
+      <button
+        type="button"
+        data-testid="cover-choose-library"
+        aria-pressed={value !== null && value.startsWith('media:')}
+        disabled={uploading}
+        onClick={() => fileInput.current?.click()}
+        className={[
+          'mb-3 flex w-full min-h-[44px] items-center justify-between rounded-full border px-4 text-sm touch-manipulation disabled:opacity-60',
+          value !== null && value.startsWith('media:') ? 'border-accent ring-2 ring-accent/40' : 'border-border',
+        ].join(' ')}
+      >
+        <span>{uploading ? 'Uploading…' : 'Choose from library'}</span>
+        <span aria-hidden="true" className="text-muted">›</span>
+      </button>
+      {uploadError !== null ? (
+        <p className="mb-3 text-sm text-red-400" role="status" data-testid="cover-library-error">
+          {uploadError}
+        </p>
+      ) : null}
       <div className="grid grid-cols-2 gap-3" role="group" aria-label="Cover templates">
         {COVER_TEMPLATES.map((t) => {
           const on = value === templateCoverValue(t.key);
@@ -38,6 +103,7 @@ export default function CoverPicker({
               aria-pressed={on}
               aria-label={`${t.label} cover`}
               data-testid={`cover-template-${t.key}`}
+              disabled={uploading}
               onClick={() => onPick(templateCoverValue(t.key))}
               className={[
                 'relative aspect-[8/5] min-h-[44px] overflow-hidden rounded-2xl border text-left touch-manipulation',
@@ -62,6 +128,7 @@ export default function CoverPicker({
         <button
           type="button"
           onClick={() => onPick(null)}
+          disabled={uploading}
           className="mt-4 w-full min-h-[44px] rounded-full border border-border text-sm text-muted touch-manipulation"
         >
           Remove the cover

@@ -3110,6 +3110,108 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       expect(coverWrites, 'NULL is the default; no write for no cover').toBe(0);
     });
 
+    /** S-06c — "Choose from library": the file goes through /api/media/upload, the plan carries media:<id>, the board shows the signed picture. */
+    test('S-06c 2+4: a library photo uploads through the boundary, fills the tile, the plan carries media:<id>, and the board shows it via /api/media/:id/url', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      const MEDIA_ID = '9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d';
+      await openDrawnForm(page, context, baseURL);
+      await stubOwnerRpcs(page);
+      await page.route('**/rest/v1/rpc/create_night_out*', fulfillJson(200, PLAN_ID));
+      await page.route('**/rest/v1/rpc/invite_one_to_night_out*', fulfillJson(200, true));
+      await page.route('**/rest/v1/rpc/get_my_night_outs*', fulfillJson(200, []));
+      const coverWrites: unknown[] = [];
+      await page.route('**/rest/v1/rpc/set_night_out_cover*', async (route) => {
+        coverWrites.push(route.request().postDataJSON());
+        await fulfillJson(200, true)(route);
+      });
+      // The ONLY way bytes reach the media bucket: one multipart POST with a bearer token.
+      const uploads: Array<{ auth: string | undefined; hasFile: boolean }> = [];
+      await page.route('**/api/media/upload', async (route) => {
+        const headers = route.request().headers();
+        uploads.push({
+          auth: headers['authorization'],
+          hasFile: /name="file"/.test(route.request().postData() ?? ''),
+        });
+        await fulfillJson(200, { ok: true, mediaId: MEDIA_ID, storagePath: `${USER_ID}/${MEDIA_ID}` })(route);
+      });
+      // The picture resolves through the boundary route, never off Storage.
+      const urlReads: string[] = [];
+      await page.route('**/api/media/*/url', async (route) => {
+        urlReads.push(route.request().url());
+        await fulfillJson(200, { ok: true, url: '/covers/birthday.svg', expiresInSeconds: 300 })(route);
+      });
+      await page.route('**/rest/v1/night_outs?*', async (route) => {
+        if (route.request().method() !== 'GET') return route.fallback();
+        await fulfillJson(200, [{ id: PLAN_ID, cover: `media:${MEDIA_ID}` }])(route);
+      });
+
+      const tile = page.getByTestId('cover-tile');
+      await tile.click();
+      const picker = page.getByTestId('cover-picker');
+      await expect(picker).toBeVisible();
+      const library = picker.getByTestId('cover-choose-library');
+      await expect(library).toContainText(/choose from library/i);
+      expect((await library.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      // A native file input: on a phone this is the photo library.
+      await picker.getByTestId('cover-library-input').setInputFiles({
+        name: 'me.jpg',
+        mimeType: 'image/jpeg',
+        buffer: Buffer.from('not-really-a-jpeg'),
+      });
+      await expect(picker).toHaveCount(0);
+      await expect.poll(() => uploads.length).toBe(1);
+      expect(uploads[0].auth).toMatch(/^Bearer /);
+      expect(uploads[0].hasFile).toBe(true);
+      await expect(tile).toHaveAttribute('data-cover', `media:${MEDIA_ID}`);
+      const tileImage = page.getByTestId('cover-tile-image');
+      await expect(tileImage).toHaveAttribute('data-cover', 'media');
+      await expect(tileImage).toHaveAttribute('data-cover-state', 'ok');
+      await expect(tileImage).toContainText(/your photo/i);
+      expect(urlReads[0]).toContain(`/api/media/${MEDIA_ID}/url`);
+
+      await page.getByTestId('create-night-out').click();
+      await expect(page).toHaveURL(new RegExp(`/night-out/${TOKEN}$`));
+      expect(coverWrites).toEqual([{ p_night_out: PLAN_ID, p_cover: `media:${MEDIA_ID}` }]);
+
+      // The board header shows the same photo, read back from the plan and resolved through the route.
+      const boardCover = page.getByTestId('plan-cover');
+      await expect(boardCover).toBeVisible();
+      await expect(boardCover).toHaveAttribute('data-cover', 'media');
+      await expect(boardCover).toHaveAttribute('data-cover-state', 'ok');
+      await expect(boardCover.locator('img')).toHaveAttribute('src', /covers\/birthday\.svg$/);
+
+      // It survives a reload of the board.
+      await page.reload();
+      await expect(page.getByTestId('plan-cover')).toHaveAttribute('data-cover-state', 'ok');
+    });
+
+    test('S-06c: a refused upload says so in the sheet and leaves the cover untouched — never a dead end', async ({
+      page,
+      context,
+      baseURL,
+    }) => {
+      await openDrawnForm(page, context, baseURL);
+      await stubOwnerRpcs(page);
+      await page.route('**/api/media/upload', fulfillJson(413, { ok: false, error: 'too_large' }));
+      const tile = page.getByTestId('cover-tile');
+      await tile.click();
+      const picker = page.getByTestId('cover-picker');
+      await picker.getByTestId('cover-library-input').setInputFiles({
+        name: 'huge.jpg',
+        mimeType: 'image/jpeg',
+        buffer: Buffer.from('x'),
+      });
+      await expect(picker.getByTestId('cover-library-error')).toContainText(/too large/i);
+      await expect(picker).toBeVisible();
+      await expect(tile).toHaveAttribute('data-cover', '');
+      // The templates are still there to fall back on.
+      await picker.getByTestId('cover-template-rooftop').click();
+      await expect(tile).toHaveAttribute('data-cover', 'template:rooftop');
+    });
+
     test('S-06b 3+4 (invitation): the Plans card shows the cover only when the plan has one', async ({
       page,
       context,
