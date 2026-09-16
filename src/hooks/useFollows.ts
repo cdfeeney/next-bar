@@ -20,6 +20,8 @@ const KEY = 'next-bar:follows:v1';
 
 /** Cross-tab "the circle moved" ping. The value only has to CHANGE. */
 const DIRTY_KEY = 'next-bar:follows:dirty';
+/** S-09 / R-02b: shown when an optimistic follow write is rolled back. */
+const FOLLOW_REFUSED = "That didn't go through — we've put it back. Try again in a moment.";
 
 /**
  * Is the circle snapshot we are holding still current?
@@ -192,6 +194,18 @@ export type UseFollowsReturn = {
    * invitee list must require this, not `!loading`.
    */
   circleReady: boolean;
+  /**
+   * S-09: the last optimistic follow write the server refused, or null. The
+   * pill is always rolled back; this is the copy that says so (R-02b). Always
+   * null in local mode. Callers clear it with `dismissFollowNotice`.
+   */
+  followNotice: string | null;
+  dismissFollowNotice: () => void;
+  /**
+   * S-09: force a fresh hydrate — the retry behind "Couldn't load your
+   * followers." A no-op in local mode (there is no fetch to fail).
+   */
+  retry: () => void;
 };
 
 export function useFollows(): UseFollowsReturn {
@@ -211,6 +225,14 @@ export function useFollows(): UseFollowsReturn {
   const readyGenerationRef = useRef<number | null>(null);
   readyGenerationRef.current = readyGeneration;
   const [fetchFailed, setFetchFailed] = useState(false);
+  /**
+   * S-09: the last optimistic follow write the server REFUSED (or that threw).
+   * The pill is always rolled back below; R-02b's rule is that the rollback
+   * must also SAY SO, so a viewer never sees a state silently reverted. Generic
+   * copy on purpose — followByHandle / unfollowById return a boolean or throw,
+   * never a message, so there is nothing server-authored to quote.
+   */
+  const [followNotice, setFollowNotice] = useState<string | null>(null);
   // Writes THIS instance has open. `readyGeneration === null` does not mean
   // "this mount has not written" — a mount can follow someone while its very
   // first hydrate is still in the air, and that hydrate would then erase the
@@ -442,6 +464,8 @@ export function useFollows(): UseFollowsReturn {
     if (modeRef.current === 'server') {
       const supabase = getBrowserSupabase();
       if (!supabase) return;
+      // A fresh action clears any prior refusal notice; a new refusal re-sets it.
+      setFollowNotice(null);
       const target = normalize(handle);
       const epoch = getCacheEpoch();
       const existing = circleRef.current.find(
@@ -465,12 +489,14 @@ export function useFollows(): UseFollowsReturn {
           prev.filter((p) => p.handle.toLowerCase() !== target),
         );
         const finishUnfollow = trackInstanceWrite(beginCircleWrite());
-        const restore = (): void =>
+        const restore = (): void => {
           setCircle((prev) =>
             prev.some((p) => p.handle.toLowerCase() === target)
               ? prev
               : [...prev, existing],
           );
+          setFollowNotice(FOLLOW_REFUSED);
+        };
         void unfollowById(supabase, existing.id)
           .then((removed) => {
             if (removed || getCacheEpoch() !== epoch) return;
@@ -508,12 +534,14 @@ export function useFollows(): UseFollowsReturn {
         // reachable only because THIS candidate added the revalidation path —
         // at the base commit the hydrate ran on auth change alone.
         const finishCancel = trackInstanceWrite(beginCircleWrite());
-        const restoreRequest = (): void =>
+        const restoreRequest = (): void => {
           setRequested((prev) =>
             prev.some((p) => p.handle.toLowerCase() === target)
               ? prev
               : [...prev, pending],
           );
+          setFollowNotice(FOLLOW_REFUSED);
+        };
         void cancelFollowRequest(supabase, pending.id)
           .then((removed) => {
             if (removed || getCacheEpoch() !== epoch) return;
@@ -553,6 +581,10 @@ export function useFollows(): UseFollowsReturn {
               ? [...without, outcome.profile]
               : without;
           });
+          // A null outcome is a server refusal, not a throw: the placeholder is
+          // dropped above, so SAY SO here too (R-02b) — otherwise the pill
+          // reverts to Follow with nothing explaining why.
+          setFollowNotice(outcome ? null : FOLLOW_REFUSED);
           if (outcome?.status === 'requested') {
             setRequested((prev) =>
               prev.some((p) => p.handle.toLowerCase() === target)
@@ -565,6 +597,7 @@ export function useFollows(): UseFollowsReturn {
         .catch(() => {
           if (getCacheEpoch() !== epoch) return;
           dropPlaceholder();
+          setFollowNotice(FOLLOW_REFUSED);
         })
         .finally(finishFollow); // see the unfollow path
       return;
@@ -586,6 +619,16 @@ export function useFollows(): UseFollowsReturn {
       writeFollows(next);
       return next;
     });
+  }, []);
+
+  const dismissFollowNotice = useCallback(() => setFollowNotice(null), []);
+  // S-09: the retry behind the failed-read state. `invalidateCircle` bumps the
+  // module generation, which every mounted hook re-hydrates on; after a failed
+  // fetch readyGeneration is still null, so the effect treats this as a first
+  // load (spinner + refetch) rather than a quiet background revalidation.
+  const retry = useCallback(() => {
+    setFollowNotice(null);
+    invalidateCircle();
   }, []);
 
   // Friends = mutuals (B3c). Cheap derivation; only meaningful in server
@@ -613,5 +656,8 @@ export function useFollows(): UseFollowsReturn {
           && readyGeneration === circleState.generation
           && circleState.pending === 0
         : true,
+    followNotice: mode === 'server' ? followNotice : null,
+    dismissFollowNotice,
+    retry,
   };
 }

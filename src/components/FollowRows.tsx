@@ -1,7 +1,15 @@
 'use client';
 
 import Link from 'next/link';
+import Avatar from '@/components/Avatar';
 import type { FollowRequest, PublicProfile } from '@/lib/follows.server';
+
+/** Two-letter initials from a display name or handle, for the row avatar. */
+function initialsOf(profile: { displayName?: string | null; handle: string }): string {
+  const source = profile.displayName ?? profile.handle;
+  const words = source.replace(/^@/, '').split(/\s+/).filter(Boolean);
+  return words.slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('') || '?';
+}
 
 /**
  * Shared follow-graph rows (UX-A): the same three row shapes render on
@@ -21,11 +29,14 @@ export function CircleRow({
 }): JSX.Element {
   return (
     <div className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3">
-      <Link href={`/u/${profile.handle}`} className="min-w-0 flex-1">
-        <p className="font-display text-sm truncate">
-          {profile.displayName ?? `@${profile.handle}`}
-        </p>
-        <p className="text-muted text-xs truncate">@{profile.handle}</p>
+      <Link href={`/u/${profile.handle}`} className="flex min-w-0 flex-1 items-center gap-3">
+        <Avatar initials={initialsOf(profile)} seed={profile.handle} size="sm" />
+        <span className="min-w-0">
+          <span className="block font-display text-[15px] font-semibold truncate">
+            {profile.displayName ?? `@${profile.handle}`}
+          </span>
+          <span className="block text-muted text-xs truncate">@{profile.handle}</span>
+        </span>
       </Link>
       <button
         type="button"
@@ -57,11 +68,14 @@ export function FollowerRow({
 }): JSX.Element {
   return (
     <div className="flex items-center justify-between gap-3 bg-surface border border-border rounded-2xl p-3">
-      <Link href={`/u/${profile.handle}`} className="min-w-0 flex-1">
-        <p className="font-display text-sm truncate">
-          {profile.displayName ?? `@${profile.handle}`}
-        </p>
-        <p className="text-muted text-xs truncate">@{profile.handle}</p>
+      <Link href={`/u/${profile.handle}`} className="flex min-w-0 flex-1 items-center gap-3">
+        <Avatar initials={initialsOf(profile)} seed={profile.handle} size="sm" />
+        <span className="min-w-0">
+          <span className="block font-display text-[15px] font-semibold truncate">
+            {profile.displayName ?? `@${profile.handle}`}
+          </span>
+          <span className="block text-muted text-xs truncate">@{profile.handle}</span>
+        </span>
       </Link>
       <button
         type="button"

@@ -116,6 +116,8 @@ type StubOptions = {
   followers?: ProfileRow[];
   /** B3c: get_follower_count result (null = hidden). */
   followerCount?: number | null;
+  /** unfollow_user result (default true). */
+  unfollowResult?: boolean;
 };
 
 /**
@@ -127,10 +129,18 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
   await page.route('**/rest/v1/**', fulfillJson(200, []));
   await page.route('**/auth/v1/**', fulfillJson(200, {}));
 
-  await page.route(
-    '**/rest/v1/rpc/get_following**',
-    fulfillJson(200, opts.following ?? []),
-  );
+  // STATEFUL following, for the same reason the outgoing list is: after a
+  // follow-back useFollows revalidates, so a 'followed' write must be reflected
+  // by the next get_following or the person vanishes from the Following list
+  // the moment the hook re-reads (S-09 cross-list consistency).
+  let following: ProfileRow[] = [...(opts.following ?? [])];
+  await page.route('**/rest/v1/rpc/get_following**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(following),
+    });
+  });
   await page.route(
     '**/rest/v1/rpc/search_handles**',
     fulfillJson(200, opts.searchResults ?? []),
@@ -151,10 +161,27 @@ async function stubSupabase(page: Page, opts: StubOptions): Promise<void> {
       const filed = (opts.profileByHandle ?? [])[0];
       if (filed && !outgoing.some((p) => p.id === filed.id)) outgoing = [...outgoing, filed];
     }
+    if (result === 'followed') {
+      const filed = (opts.profileByHandle ?? [])[0];
+      if (filed && !following.some((p) => p.id === filed.id)) following = [...following, filed];
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify(result),
+    });
+  });
+  // Unfollow removes the edge from the stateful following list (default success).
+  await page.route('**/rest/v1/rpc/unfollow_user**', async (route) => {
+    const ok = opts.unfollowResult ?? true;
+    if (ok) {
+      const body = route.request().postDataJSON() as { target?: string };
+      following = following.filter((p) => p.id !== body?.target);
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(ok),
     });
   });
   // STATEFUL inbox: resolving a request removes it from later fetches —
@@ -670,5 +697,108 @@ test.describe('/friends — the approved Social surface, signed in', () => {
     await control.click();
     await expect(page).toHaveURL(/\/friends\/people$/);
     await expect(page.getByText(/Requests · 1/)).toBeVisible();
+  });
+});
+
+const S09_A: ProfileRow = { id: '10000000-0000-4000-8000-000000000001', handle: 'mara', display_name: 'Mara' };
+const S09_B: ProfileRow = { id: '10000000-0000-4000-8000-000000000002', handle: 'devon', display_name: 'Devon' };
+const S09_FOLLOWER: ProfileRow = { id: '10000000-0000-4000-8000-000000000003', handle: 'priya', display_name: 'Priya' };
+
+test.describe('S-09 — Followers and Following lists', () => {
+  test.beforeEach(async ({ page }) => {
+    test.skip(SUPABASE_URL === null, 'NEXT_PUBLIC_SUPABASE_URL not found in .env.local');
+    await signIn(page);
+  });
+
+  test('AC1: the tiles carry the live counts and each navigates to its list', async ({ page }) => {
+    await stubSupabase(page, { following: [S09_A, S09_B], followers: [S09_FOLLOWER] });
+    await page.goto('/friends/people');
+    await expect(page.getByRole('link', { name: /2\s+Following/i })).toBeVisible();
+    await expect(page.getByRole('link', { name: /1\s+Followers/i })).toBeVisible();
+
+    await page.getByRole('link', { name: /1\s+Followers/i }).click();
+    await expect(page).toHaveURL(/\/friends\/followers$/);
+    await expect(page.getByTestId('followers-list').locator('> *')).toHaveCount(1);
+
+    await page.goto('/friends/people');
+    await page.getByRole('link', { name: /2\s+Following/i }).click();
+    await expect(page).toHaveURL(/\/friends\/following$/);
+    await expect(page.getByTestId('following-list').locator('> *')).toHaveCount(2);
+  });
+
+  test('AC2: a follower you do not follow shows "Follow back"; tapping it follows, and the Following list agrees', async ({ page }) => {
+    await stubSupabase(page, {
+      following: [],
+      followers: [S09_FOLLOWER],
+      profileByHandle: [S09_FOLLOWER],
+      followResult: 'followed',
+    });
+    await page.goto('/friends/followers');
+    const row = page.getByTestId('followers-list').locator('> *').filter({ hasText: '@priya' });
+    await expect(row.getByRole('button', { name: /^Follow back$/ })).toBeVisible();
+    // Wait for the WRITE itself to land, not just the optimistic pill: the pill
+    // flips to "Following" the instant it is tapped, and navigating before the
+    // request settles would abort it, so the stub never records the follow.
+    await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/rpc/follow_user')),
+      row.getByRole('button', { name: /^Follow back$/ }).click(),
+    ]);
+    // Optimistic + confirmed: the pill settles on the quiet Following state.
+    await expect(row.getByRole('button', { name: /^Following$/ })).toBeVisible();
+
+    // The same person now appears on the Following list (the write reached get_following).
+    await page.goto('/friends/following');
+    await expect(
+      page.getByTestId('following-list').locator('> *').filter({ hasText: '@priya' }),
+    ).toHaveCount(1);
+  });
+
+  test('AC3: a refused follow-back restores the pill AND surfaces the refusal', async ({ page }) => {
+    await stubSupabase(page, {
+      following: [],
+      followers: [S09_FOLLOWER],
+      profileByHandle: [S09_FOLLOWER],
+      followResult: 'rejected',
+    });
+    await page.goto('/friends/followers');
+    const row = page.getByTestId('followers-list').locator('> *').filter({ hasText: '@priya' });
+    await row.getByRole('button', { name: /^Follow back$/ }).click();
+    // The server said no: the pill goes back to Follow back, and a notice says so.
+    await expect(page.getByTestId('follow-notice')).toBeVisible();
+    await expect(row.getByRole('button', { name: /^Follow back$/ })).toBeVisible();
+    await expect(row.getByRole('button', { name: /^Following$/ })).toHaveCount(0);
+  });
+
+  test('AC4: zero followers renders the consequence copy and the invite link, not a bare "No followers"', async ({ page }) => {
+    await stubSupabase(page, { following: [], followers: [] });
+    await page.goto('/friends/followers');
+    const empty = page.getByTestId('followers-empty');
+    await expect(empty).toBeVisible();
+    await expect(empty).toContainText(/pins and stories/i);
+    await expect(empty.getByRole('link', { name: /Find friends/i })).toBeVisible();
+    await expect(page.getByTestId('followers-error')).toHaveCount(0);
+  });
+
+  test('AC5: a failed read shows the failure copy + retry, distinct from empty, and the retry recovers', async ({ page }) => {
+    await stubSupabase(page, { following: [], followers: [S09_FOLLOWER] });
+    // Fail the following read once, then let the retry succeed.
+    let calls = 0;
+    await page.route('**/rest/v1/rpc/get_following**', async (route) => {
+      calls += 1;
+      if (calls === 1) {
+        await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'boom' }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([S09_A]) });
+    });
+    await page.goto('/friends/following');
+    const error = page.getByTestId('following-error');
+    await expect(error).toBeVisible();
+    await expect(error).toContainText(/Couldn.t load who you follow/i);
+    await expect(page.getByTestId('following-empty')).toHaveCount(0);
+
+    await error.getByRole('button', { name: /Try again/i }).click();
+    await expect(page.getByTestId('following-list').locator('> *')).toHaveCount(1);
+    await expect(page.getByTestId('following-error')).toHaveCount(0);
   });
 });

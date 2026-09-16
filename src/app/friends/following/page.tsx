@@ -10,15 +10,63 @@ import { demoFriends } from '@/lib/demo';
  * /friends/following — the Instagram-style following list (UX-A).
  * Outgoing requests to private accounts show "Requested" (tap
  * withdraws). Signed-out shows the followed demo curators.
+ *
+ * S-09: a FAILED read says so with a retry, distinct from the empty state
+ * (the G-01 defect); the empty state names the consequence; and a refused
+ * unfollow is surfaced rather than silently reverted.
  */
 export default function FollowingPage(): JSX.Element {
-  const { circle, requested, mode, isFollowing, toggleFollow, loading } =
-    useFollows();
+  const {
+    circle,
+    requested,
+    mode,
+    isFollowing,
+    toggleFollow,
+    loading,
+    circleFailed,
+    followNotice,
+    dismissFollowNotice,
+    retry,
+  } = useFollows();
 
   const demoFollowed = useMemo(
     () => demoFriends.filter((f) => isFollowing(f.handle)),
     [isFollowing],
   );
+
+  const emptyState = (
+    <div data-testid="following-empty">
+      <p className="text-muted text-sm">
+        You&apos;re not following anyone yet. Your Tonight stays empty until you
+        follow a few people — that&apos;s who it&apos;s built from.
+      </p>
+      <Link
+        href="/friends"
+        className="mt-3 inline-flex items-center min-h-[44px] text-accent underline-offset-4 hover:underline touch-manipulation"
+      >
+        Find friends →
+      </Link>
+    </div>
+  );
+
+  const notice =
+    followNotice !== null ? (
+      <div
+        role="status"
+        data-testid="follow-notice"
+        className="mb-4 flex items-center justify-between gap-3 rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-text"
+      >
+        <span>{followNotice}</span>
+        <button
+          type="button"
+          onClick={dismissFollowNotice}
+          aria-label="Dismiss"
+          className="shrink-0 min-h-[44px] px-2 text-muted hover:text-text touch-manipulation"
+        >
+          ✕
+        </button>
+      </div>
+    ) : null;
 
   return (
     <main className="min-h-screen pb-28">
@@ -33,19 +81,12 @@ export default function FollowingPage(): JSX.Element {
       </header>
 
       <section className="max-w-md mx-auto px-6">
+        {notice}
         {mode !== 'server' ? (
           demoFollowed.length === 0 ? (
-            <p className="text-muted text-sm">
-              Not following anyone yet.{' '}
-              <Link
-                href="/friends"
-                className="text-accent underline-offset-4 hover:underline"
-              >
-                Find friends →
-              </Link>
-            </p>
+            emptyState
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-3" data-testid="following-list">
               {demoFollowed.map((f) => (
                 <CircleRow
                   key={f.handle}
@@ -63,18 +104,21 @@ export default function FollowingPage(): JSX.Element {
           <p className="text-muted text-sm" role="status">
             Loading…
           </p>
-        ) : circle.length === 0 && requested.length === 0 ? (
-          <p className="text-muted text-sm">
-            Not following anyone yet.{' '}
-            <Link
-              href="/friends"
-              className="text-accent underline-offset-4 hover:underline"
+        ) : circleFailed ? (
+          <div data-testid="following-error" role="status">
+            <p className="text-muted text-sm">Couldn&apos;t load who you follow.</p>
+            <button
+              type="button"
+              onClick={retry}
+              className="mt-3 inline-flex items-center min-h-[44px] px-5 rounded-full border border-accent text-accent font-display text-sm touch-manipulation hover:bg-accent hover:text-bg transition-colors"
             >
-              Find friends →
-            </Link>
-          </p>
+              Try again
+            </button>
+          </div>
+        ) : circle.length === 0 && requested.length === 0 ? (
+          emptyState
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-3" data-testid="following-list">
             {circle.map((p) => (
               <CircleRow key={p.handle} profile={p} onUnfollow={toggleFollow} />
             ))}
