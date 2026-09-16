@@ -47,6 +47,8 @@ vi.mock('@/lib/pendingInvite', () => ({
   storePendingInvite: vi.fn(),
 }));
 vi.mock('./planActions', () => ({
+  // G-01: the plan page reads named share-link guests too.
+  fetchAnonGuests: async () => [],
   fetchNightOutVoting: (...a: unknown[]) => fetchNightOutVoting(...a),
   fetchAnonRsvpCounts: vi.fn().mockResolvedValue(null),
   lockNightOut: vi.fn(),

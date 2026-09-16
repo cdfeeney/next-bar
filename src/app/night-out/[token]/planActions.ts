@@ -130,6 +130,34 @@ export type AnonRsvpCounts = {
   declined: number;
 };
 
+/** G-01: a NAMED share-link guest, as members see them. */
+export type AnonGuest = { guestName: string; response: 'going' | 'maybe' | 'declined' };
+
+/**
+ * G-01: the named guests on a plan, members only (`get_night_out_anon_guests`).
+ * Null = the read failed or the database predates 0080 — never "nobody", which
+ * the counts already say.
+ */
+export async function fetchAnonGuests(
+  supabase: SupabaseClient,
+  nightOutId: string,
+): Promise<AnonGuest[] | null> {
+  try {
+    const { data, error } = await supabase.rpc('get_night_out_anon_guests', {
+      p_night_out: nightOutId,
+    });
+    if (error || !Array.isArray(data)) return null;
+    return (data as Array<{ guest_name?: unknown; response?: unknown }>)
+      .filter((row) => typeof row.guest_name === 'string' && typeof row.response === 'string')
+      .map((row) => ({
+        guestName: row.guest_name as string,
+        response: row.response as AnonGuest['response'],
+      }));
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchAnonRsvpCounts(
   supabase: SupabaseClient,
   nightOutId: string,

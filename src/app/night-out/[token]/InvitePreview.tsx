@@ -11,7 +11,9 @@ import { getBrowserSupabase } from '@/lib/supabase/client';
 import { getBarById } from '@/lib/catalog';
 import type { NightOutPreview } from '@/lib/nightOuts.server';
 import {
+  GUEST_NAME_MAX,
   RSVP_LABELS,
+  rsvpNeedsName,
   RSVP_ORDER,
   clearQueuedRsvp,
   ensureRsvpKey,
@@ -20,6 +22,7 @@ import {
   fetchBearerDetail,
   fetchBearerShortlist,
   queueRsvp,
+  readQueuedRsvpName,
   readQueuedRsvp,
   readRsvpKey,
   submitAnonRsvp,
@@ -28,6 +31,9 @@ import {
   type BearerShortlistEntry,
   type RsvpChoice,
 } from './bearer';
+import InviteRsvp from './_invite/InviteRsvp';
+import InviteUpsell from './_invite/InviteUpsell';
+import InviteWhosIn from './_invite/InviteWhosIn';
 
 /**
  * The bearer invitation surface (V8-R-INV-001 … V8-R-INV-004, D-C-23).
@@ -212,6 +218,13 @@ export default function InvitePreview({
   const [rsvpBusy, setRsvpBusy] = useState(false);
   const [rsvpError, setRsvpError] = useState<string | null>(null);
   const [upsellDismissed, setUpsellDismissed] = useState(false);
+  /**
+   * G-01: the name this guest gives. Going and Maybe carry it (the server
+   * requires one too); "Can't make it" may stay anonymous. Seeded from a
+   * queued answer so an offline reply replays with the name it was given.
+   */
+  const [guestName, setGuestName] = useState('');
+  const [nameMissing, setNameMissing] = useState(false);
 
   /**
    * Which token's reads may paint. Next reuses this component across
@@ -403,6 +416,13 @@ export default function InvitePreview({
       // lock and does not go through a render to take it. Compared against THIS
       // invite, so a write still out for a different one never blocks this.
       if (rsvpBusy || rsvpWritesInFlight.has(token)) return;
+      // G-01: Going and Maybe need a name — said in the field, before the write.
+      const typedName = guestName.trim();
+      if (rsvpNeedsName(choice) && typedName === '') {
+        setNameMissing(true);
+        return;
+      }
+      setNameMissing(false);
       const heldToken = token;
       const startedAt = epoch.current;
       const supabase = getBrowserSupabase();
@@ -429,7 +449,7 @@ export default function InvitePreview({
           ? // No client is the same shape of failure as no network: nothing
             // reached the server, so the answer is held rather than lost.
             ('unreachable' as const)
-          : await submitAnonRsvp(supabase, token, key, choice);
+          : await submitAnonRsvp(supabase, token, key, choice, typedName);
       if (startedAt !== epoch.current) {
         // A STALE WRITE RELEASES ONLY ITS OWN HOLD, and paints nothing. It has
         // genuinely settled, so a later write for the SAME invite is safe to
@@ -482,7 +502,8 @@ export default function InvitePreview({
         // needs no instance at all; only the LABEL does, which is why the
         // notice is painted just for the invite on screen.
         if (result === 'unreachable') {
-          const held = queueRsvp(heldToken, choice);
+          // G-01: the stale-instance branch queues the SAME name the write carried.
+          const held = queueRsvp(heldToken, choice, typedName);
           if (liveToken.current === heldToken) {
             setQueued(held ? choice : null);
             setRsvpError(
@@ -523,7 +544,7 @@ export default function InvitePreview({
         // the `online` listener below — and never shown as the recipient's
         // answer, because the host cannot see it yet.
         answered.current = true;
-        const held = queueRsvp(token, choice);
+        const held = queueRsvp(token, choice, typedName);
         setQueued(held ? choice : null);
         setRsvpError(
           held
@@ -557,7 +578,7 @@ export default function InvitePreview({
       }
       setRsvpBusy(false);
     },
-    [rsvpBusy, token],
+    [rsvpBusy, token, guestName],
   );
 
   /**
@@ -606,7 +627,7 @@ export default function InvitePreview({
       // moment the delivery holds the lock, so the recipient is never offered a
       // tap that the guard would silently swallow.
       setRsvpBusy(true);
-      const result = await submitAnonRsvp(supabase, token, key, pending);
+      const result = await submitAnonRsvp(supabase, token, key, pending, readQueuedRsvpName(token));
       // Same rule as `answer()` above: a delivery that settles after the invite
       // changed paints nothing and releases only its OWN hold, never whatever
       // the invite now on screen may be holding.
@@ -726,193 +747,38 @@ export default function InvitePreview({
           It&apos;s decided: {decidedBar.name}
         </p>
       ) : null}
-
-      {/* THE RSVP — the whole point of D-C-23, and it comes before the account
-          conversation rather than behind it. */}
-      <section className="mt-6" data-testid="invite-rsvp">
-        <h2 className="text-center text-sm font-semibold">Can you make it?</h2>
-        <div
-          className="mt-3 flex flex-wrap justify-center gap-2"
-          role="group"
-          aria-label="Can you make it?"
-        >
-          {RSVP_ORDER.map((choice) => (
-            <button
-              key={choice}
-              type="button"
-              // PRESSED means SENT. A queued answer is shown separately, in
-              // words, because the host cannot see it yet.
-              aria-pressed={rsvp === choice}
-              disabled={rsvpBusy}
-              onClick={() => void answer(choice)}
-              data-testid={`invite-rsvp-${choice}`}
-              className={[
-                'inline-flex min-h-[44px] touch-manipulation items-center rounded-full border px-5 text-sm disabled:opacity-60',
-                rsvp === choice
-                  ? 'border-white font-semibold'
-                  : queued === choice
-                    ? 'border-dashed'
-                    : 'opacity-80',
-              ].join(' ')}
-            >
-              {RSVP_LABELS[choice]}
-            </button>
-          ))}
-        </div>
-        {rsvp !== null ? (
-          <p
-            className="mt-3 text-center text-sm opacity-70"
-            role="status"
-            data-testid="invite-rsvp-sent"
-          >
-            {rsvp === 'going'
-              ? "You're down as going. Change it any time."
-              : rsvp === 'maybe'
-                ? "You're down as a maybe. Change it any time."
-                : "You're down as can't make it. Change it any time."}
-          </p>
-        ) : null}
-        {/* WE COULD NOT CHECK whether you already answered — which is not the
-            same as your not having answered, and saying nothing would ask you
-            to reply again to a plan you may have replied to. */}
-        {rsvpUnreadable && rsvp === null && queued === null ? (
-          <p
-            className="mt-3 text-center text-sm opacity-70"
-            role="status"
-            data-testid="invite-rsvp-unreadable"
-          >
-            Couldn&apos;t check whether you already replied. Answering again is
-            fine — it replaces your last one.
-          </p>
-        ) : null}
-
-        {/* HELD, AND SAID SO IN WORDS. V8-R-INV-003's failure clause is that an
-            offline response is "queued and explicitly labelled as not yet
-            sent" — the label is the requirement, not a nicety.
-
-            IT IS SHOWN WHENEVER THE HELD ANSWER DIFFERS FROM THE ONE ON RECORD,
-            not only when there is none (round-10 round 9, Codex). The condition
-            was `rsvp === null`, which is right for a first answer and silently
-            wrong for a CHANGED one: a recipient whose server answer is Maybe
-            and who then queues Going offline saw Maybe pressed, Going marked by
-            a dashed border alone, and no words anywhere saying Going had not
-            been sent. "Explicitly labelled" is not satisfied by a border, and
-            colour-or-shape alone is exactly what the requirement rules out.
-            When the two agree there is nothing outstanding to narrate. */}
-        {queued !== null && queued !== rsvp ? (
-          <p
-            className="mt-3 text-center text-sm opacity-70"
-            role="status"
-            data-testid="invite-rsvp-queued"
-          >
-            {RSVP_LABELS[queued]} — not sent yet. We&apos;ll send it as soon as
-            you&apos;re back online.
-          </p>
-        ) : null}
-        {rsvpError !== null ? (
-          <p
-            className="mt-3 text-center text-sm text-red-400"
-            role="status"
-            data-testid="invite-rsvp-error"
-          >
-            {rsvpError}
-          </p>
-        ) : null}
-      </section>
-
-      {/* V8-R-INV-004. Explicitly optional, and it says the RSVP is safe either
-          way — an upsell that leaves the recipient unsure whether dismissing it
-          costs them their reply is not optional in practice. Signed-in visitors
-          never see it: they already have the account it is selling. */}
-      {rsvp !== null && !signedIn && !upsellDismissed ? (
-        <section
-          className="mt-6 rounded-2xl border px-4 py-4 text-center"
-          data-testid="invite-upsell"
-        >
-          <p className="text-sm">
-            You&apos;re RSVP&apos;d either way. An account adds voting on the
-            shortlist, suggesting a bar, and live updates as the plan changes.
-          </p>
-          <div className="mt-3 flex flex-col items-center gap-2">
-            <button
-              type="button"
-              onClick={onSignIn}
-              data-testid="invite-upsell-signup"
-              className="inline-flex min-h-[44px] touch-manipulation items-center rounded-full bg-white px-6 font-semibold text-black"
-            >
-              Create an account
-            </button>
-            <button
-              type="button"
-              onClick={() => setUpsellDismissed(true)}
-              data-testid="invite-upsell-dismiss"
-              className="inline-flex min-h-[44px] touch-manipulation items-center text-sm underline underline-offset-4"
-            >
-              Maybe later
-            </button>
-          </div>
-        </section>
-      ) : null}
-
-      {/* WHO IS GOING (V8-R-INV-002). Display identities only — the RPC returns
-          no account ids at all. */}
-      <section className="mt-8">
-        <h2 className="font-semibold">
-          Who&apos;s in ({preview.acceptedCount})
-        </h2>
-        {attendees === null ? (
-          <p className="mt-2 text-sm opacity-60" role="status">
-            Couldn&apos;t load who&apos;s coming.
-          </p>
-        ) : attendees.length === 0 ? (
-          <p className="mt-2 text-sm opacity-60">Nobody has said yes yet.</p>
-        ) : (
-          <ul className="mt-2 space-y-1" data-testid="invite-attendees">
-            {attendees.map((person, index) => (
-              <li
-                key={`${person.handle ?? person.displayName ?? 'someone'}-${index}`}
-                className="text-sm"
-              >
-                {person.displayName ?? person.handle ?? 'Someone'}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* THE SHORTLIST SO FAR (V8-R-INV-002) — read-only. There is no Vote
-          control here and there is no anon grant behind one: "no voting, no
-          suggesting" is V8-R-INV-001's own exclusion. */}
-      <section className="mt-8">
-        <h2 className="font-semibold">Where they&apos;re thinking</h2>
-        {shortlist === null ? (
-          <p className="mt-2 text-sm opacity-60" role="status">
-            Couldn&apos;t load the shortlist.
-          </p>
-        ) : shortlist.length === 0 ? (
-          <p className="mt-2 text-sm opacity-60">No bars suggested yet.</p>
-        ) : (
-          <ul className="mt-2 space-y-2" data-testid="invite-shortlist">
-            {shortlist.map((entry) => (
-              <li
-                key={entry.barId}
-                className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm"
-              >
-                <span>{getBarById(entry.barId)?.name ?? entry.barId}</span>
-                <span className="opacity-70">
-                  {entry.votes} {entry.votes === 1 ? 'vote' : 'votes'}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      <InviteRsvp
+        guestName={guestName}
+        setGuestName={setGuestName}
+        nameMissing={nameMissing}
+        setNameMissing={setNameMissing}
+        rsvp={rsvp}
+        queued={queued}
+        rsvpBusy={rsvpBusy}
+        rsvpError={rsvpError}
+        rsvpUnreadable={rsvpUnreadable}
+        answer={answer}
+      />
+      <InviteUpsell
+        rsvp={rsvp}
+        signedIn={signedIn}
+        upsellDismissed={upsellDismissed}
+        setUpsellDismissed={setUpsellDismissed}
+        onSignIn={onSignIn}
+      />
+      <InviteWhosIn
+        preview={preview}
+        attendees={attendees}
+        shortlist={shortlist}
+        signedIn={signedIn}
+        onSignIn={onSignIn}
+      />
 
       {/* THE LIMITATION, IN WORDS, ON THE SCREEN. */}
       <p className="mt-8 text-sm opacity-60" data-testid="invite-limitation">
-        Until you join, you can see this plan and answer it — voting on the
-        shortlist, suggesting a bar, and everyone&apos;s saved bars, ratings and
-        full profiles stay inside the app.
+        Until you join, you can see this plan and answer it — who else is going,
+        voting on the shortlist, suggesting a bar, and everyone&apos;s saved bars,
+        ratings and full profiles stay inside the app.
       </p>
 
       {signedIn ? (

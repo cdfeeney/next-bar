@@ -187,6 +187,30 @@ describe('the anonymous RSVP (V8-R-INV-001 / V8-R-INV-003, D-C-23)', () => {
       p_token: TOKEN,
       p_key: KEY,
       p_response: 'maybe',
+      // G-01: the name argument is always present; null when none was typed.
+      p_guest_name: null,
+    });
+  });
+
+  it('G-01: a typed name is sent trimmed, and an all-spaces one is sent as null', async () => {
+    const named = rpcClient({ data: true, error: null });
+    await expect(
+      submitAnonRsvp(named.client, TOKEN, KEY, 'going', '  Alex  '),
+    ).resolves.toBe('sent');
+    expect(named.rpc).toHaveBeenCalledWith('rsvp_night_out_by_token', {
+      p_token: TOKEN,
+      p_key: KEY,
+      p_response: 'going',
+      p_guest_name: 'Alex',
+    });
+
+    const blank = rpcClient({ data: true, error: null });
+    await submitAnonRsvp(blank.client, TOKEN, KEY, 'declined', '   ');
+    expect(blank.rpc).toHaveBeenCalledWith('rsvp_night_out_by_token', {
+      p_token: TOKEN,
+      p_key: KEY,
+      p_response: 'declined',
+      p_guest_name: null,
     });
   });
 

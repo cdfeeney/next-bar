@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 /**
@@ -19,6 +19,7 @@ const ensureRsvpKey = vi.fn();
 const readRsvpKey = vi.fn();
 const queueRsvp = vi.fn();
 const readQueuedRsvp = vi.fn();
+const readQueuedRsvpName = vi.fn();
 const clearQueuedRsvp = vi.fn();
 
 vi.mock('@/lib/supabase/client', () => ({ getBrowserSupabase: () => ({}) }));
@@ -44,11 +45,22 @@ vi.mock('./bearer', async (importOriginal) => {
     readRsvpKey: (...a: unknown[]) => readRsvpKey(...a),
     queueRsvp: (...a: unknown[]) => queueRsvp(...a),
     readQueuedRsvp: (...a: unknown[]) => readQueuedRsvp(...a),
+    readQueuedRsvpName: (...a: unknown[]) => readQueuedRsvpName(...a),
     clearQueuedRsvp: (...a: unknown[]) => clearQueuedRsvp(...a),
   };
 });
 
 import InvitePreview, { resetRsvpWritesInFlight } from './InvitePreview';
+
+/**
+ * G-01: Going and Maybe carry the guest's name, so a test that taps one types
+ * a name first. "Can't make it" stays nameless and needs no helper.
+ */
+function typeGuestName(name = 'Alex'): void {
+  const field = screen.getByLabelText('Your name') as HTMLInputElement;
+  fireEvent.change(field, { target: { value: name } });
+}
+
 
 const TOKEN = '11111111-1111-1111-1111-111111111111';
 const KEY = '22222222-2222-2222-2222-222222222222';
@@ -95,6 +107,8 @@ beforeEach(() => {
   ensureRsvpKey.mockReturnValue(KEY);
   submitAnonRsvp.mockResolvedValue('sent');
   readQueuedRsvp.mockReturnValue(null);
+  // G-01: a queued answer replays with the name it was given.
+  readQueuedRsvpName.mockReturnValue('Alex');
   queueRsvp.mockReturnValue(true);
 });
 
@@ -107,10 +121,22 @@ describe('what a token-scoped recipient may see (V8-R-INV-002)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('invite-when').textContent).toMatch(/9:00\s*PM/),
     );
-    expect(screen.getByTestId('invite-attendees').textContent).toContain('Sam');
+    // G-01: a link holder gets the COUNT and an account prompt; the NAMES are
+    // what the account is for (owner, 2026-09-16).
+    expect(screen.queryByTestId('invite-attendees')).toBeNull();
+    expect(screen.getByTestId('invite-whos-in-locked').textContent).toMatch(/in so far|Nobody has said yes/);
+    expect(screen.getByTestId('invite-whos-in-signup')).toBeTruthy();
     expect(screen.getByTestId('invite-shortlist').textContent).toContain(
       '1 vote',
     );
+  });
+
+  test('G-01: a SIGNED-IN viewer still sees who is going by name', async () => {
+    renderPreview(true);
+    await waitFor(() =>
+      expect(screen.getByTestId('invite-attendees').textContent).toContain('Sam'),
+    );
+    expect(screen.queryByTestId('invite-whos-in-locked')).toBeNull();
   });
 
   /**
@@ -163,7 +189,9 @@ describe('what a token-scoped recipient may see (V8-R-INV-002)', () => {
   test('a failed read says so rather than claiming an empty plan', async () => {
     fetchBearerAttendees.mockResolvedValue(null);
     fetchBearerShortlist.mockResolvedValue(null);
-    renderPreview();
+    // G-01: the attendee list (and so its failure message) belongs to a
+    // signed-in viewer; a guest sees the count and the account prompt.
+    renderPreview(true);
     await waitFor(() =>
       expect(screen.getByText(/couldn't load who's coming/i)).toBeTruthy(),
     );
@@ -188,12 +216,15 @@ describe('the anonymous RSVP (V8-R-INV-001 / V8-R-INV-003)', () => {
 
   test('sends the choice under the recipient\'s own key and confirms it', async () => {
     renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-maybe').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
     expect(submitAnonRsvp.mock.calls[0]?.slice(1)).toEqual([
       TOKEN,
       KEY,
       'maybe',
+      // G-01: the name the guest typed travels with the answer.
+      'Alex',
     ]);
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-sent').textContent).toMatch(
@@ -249,6 +280,7 @@ describe('the anonymous RSVP (V8-R-INV-001 / V8-R-INV-003)', () => {
   test('a refused RSVP says so without promising a retry, and is not shown as chosen', async () => {
     submitAnonRsvp.mockResolvedValue('refused');
     renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-error').textContent).toMatch(
@@ -272,6 +304,7 @@ describe('the anonymous RSVP (V8-R-INV-001 / V8-R-INV-003)', () => {
   test('does not send an RSVP when the key cannot be persisted', async () => {
     ensureRsvpKey.mockReturnValue(null);
     renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-error').textContent).toMatch(
@@ -295,8 +328,9 @@ describe('the offline queue (V8-R-INV-003)', () => {
     submitAnonRsvp.mockResolvedValue('unreachable');
     renderPreview();
 
+    typeGuestName();
     screen.getByTestId('invite-rsvp-maybe').click();
-    await waitFor(() => expect(queueRsvp).toHaveBeenCalledWith(TOKEN, 'maybe'));
+    await waitFor(() => expect(queueRsvp).toHaveBeenCalledWith(TOKEN, 'maybe', 'Alex'));
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-queued').textContent).toMatch(
         /not sent yet/i,
@@ -312,6 +346,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
   test('a REFUSED answer is not queued — retrying cannot make it land', async () => {
     submitAnonRsvp.mockResolvedValue('refused');
     renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(screen.getByTestId('invite-rsvp-error')).toBeTruthy());
     expect(queueRsvp).not.toHaveBeenCalled();
@@ -334,6 +369,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
 
     // ...until an explicit tap is REFUSED.
     submitAnonRsvp.mockResolvedValue('refused');
+    typeGuestName();
     screen.getByTestId('invite-rsvp-maybe').click();
 
     await waitFor(() => expect(clearQueuedRsvp).toHaveBeenCalledWith(TOKEN));
@@ -354,6 +390,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
         TOKEN,
         KEY,
         'going',
+        expect.anything(),
       ),
     );
     await waitFor(() => expect(clearQueuedRsvp).toHaveBeenCalledWith(TOKEN));
@@ -410,8 +447,9 @@ describe('the offline queue (V8-R-INV-003)', () => {
     readRsvpKey.mockReturnValue(KEY);
     renderPreview();
 
+    typeGuestName();
     screen.getByTestId('invite-rsvp-maybe').click();
-    await waitFor(() => expect(queueRsvp).toHaveBeenCalledWith(TOKEN, 'maybe'));
+    await waitFor(() => expect(queueRsvp).toHaveBeenCalledWith(TOKEN, 'maybe', 'Alex'));
     await waitFor(() => expect(screen.getByTestId('invite-rsvp-queued')).toBeTruthy());
 
     // Now the answer IS queued, and the network is back.
@@ -426,6 +464,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
         TOKEN,
         KEY,
         'maybe',
+        expect.anything(),
       ),
     );
     await waitFor(() => expect(clearQueuedRsvp).toHaveBeenCalledWith(TOKEN));
@@ -460,6 +499,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-going')).toBeDisabled(),
     );
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     expect(
       submitAnonRsvp,
@@ -486,6 +526,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     submitAnonRsvp.mockReturnValueOnce(new Promise<'sent'>(() => undefined));
 
     const { rerender } = renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
 
@@ -504,6 +545,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-going')).not.toBeDisabled(),
     );
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() =>
       expect(
@@ -516,6 +558,8 @@ describe('the offline queue (V8-R-INV-003)', () => {
       OTHER_TOKEN,
       KEY,
       'going',
+      // G-01: the name typed on the new invite.
+      'Alex',
     );
     await waitFor(() => expect(screen.getByTestId('invite-rsvp-sent')).toBeTruthy());
   });
@@ -530,6 +574,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     );
 
     const { rerender } = renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
 
@@ -546,6 +591,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-going')).not.toBeDisabled(),
     );
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(2));
 
@@ -555,6 +601,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-maybe')).toBeDisabled(),
     );
+    typeGuestName();
     screen.getByTestId('invite-rsvp-maybe').click();
     expect(
       submitAnonRsvp,
@@ -576,6 +623,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     submitAnonRsvp.mockReturnValueOnce(new Promise<'sent'>(() => undefined));
 
     const { rerender } = renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
 
@@ -611,6 +659,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-maybe')).toBeDisabled(),
     );
+    typeGuestName();
     screen.getByTestId('invite-rsvp-maybe').click();
 
     expect(
@@ -637,6 +686,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     );
 
     const { rerender } = renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
 
@@ -672,6 +722,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
 
     // And it is genuinely answerable again, not merely repainted.
     submitAnonRsvp.mockResolvedValue('sent');
+    typeGuestName();
     screen.getByTestId('invite-rsvp-maybe').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(2));
   });
@@ -689,6 +740,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     submitAnonRsvp.mockReturnValueOnce(new Promise<'sent'>(() => undefined));
 
     const first = renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
 
@@ -702,6 +754,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
         'the remounted invite offered controls while its own write was still out',
       ).toBeDisabled(),
     );
+    typeGuestName();
     screen.getByTestId('invite-rsvp-maybe').click();
     expect(
       submitAnonRsvp,
@@ -724,6 +777,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     );
 
     const { rerender } = renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
 
@@ -764,6 +818,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     submitAnonRsvp.mockReturnValueOnce(new Promise<'sent'>(() => undefined));
 
     const { rerender } = renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
 
@@ -780,6 +835,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-going')).not.toBeDisabled(),
     );
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(2));
 
@@ -795,6 +851,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-maybe')).toBeDisabled(),
     );
+    typeGuestName();
     screen.getByTestId('invite-rsvp-maybe').click();
     expect(
       submitAnonRsvp,
@@ -823,6 +880,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     );
 
     const { rerender } = renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
 
@@ -867,6 +925,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     );
 
     const first = renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
 
@@ -917,6 +976,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
       );
 
     const { rerender } = renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
 
@@ -961,6 +1021,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     );
 
     const { rerender } = renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
 
@@ -982,7 +1043,8 @@ describe('the offline queue (V8-R-INV-003)', () => {
       expect(
         queueRsvp,
         'the stale branch bypassed the offline queue, losing the answer entirely',
-      ).toHaveBeenCalledWith(TOKEN, 'going'),
+        // G-01: the name the write carried is queued with it.
+      ).toHaveBeenCalledWith(TOKEN, 'going', 'Alex'),
     );
   });
 
@@ -1011,6 +1073,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     );
 
     const first = renderPreview();
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(submitAnonRsvp).toHaveBeenCalledTimes(1));
 
@@ -1063,6 +1126,7 @@ describe('the offline queue (V8-R-INV-003)', () => {
     queueRsvp.mockReturnValue(false);
     renderPreview();
 
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() =>
       expect(screen.getByTestId('invite-rsvp-error').textContent).toMatch(
@@ -1078,6 +1142,7 @@ describe('the optional signup upsell (V8-R-INV-004)', () => {
     renderPreview();
     expect(screen.queryByTestId('invite-upsell')).toBeNull();
 
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(screen.getByTestId('invite-upsell')).toBeTruthy());
     expect(screen.getByTestId('invite-upsell').textContent).toMatch(
@@ -1093,6 +1158,7 @@ describe('the optional signup upsell (V8-R-INV-004)', () => {
 
   test('is never shown to a signed-in visitor, who already has the account', async () => {
     renderPreview(true);
+    typeGuestName();
     screen.getByTestId('invite-rsvp-going').click();
     await waitFor(() => expect(screen.getByTestId('invite-rsvp-sent')).toBeTruthy());
     expect(screen.queryByTestId('invite-upsell')).toBeNull();

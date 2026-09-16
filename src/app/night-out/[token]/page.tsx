@@ -9,7 +9,7 @@ import { consumePendingInvite, peekPendingInvite, storePendingInvite } from '@/l
 import { forgetStartedNightOut } from '@/components/StartNightOutButton';
 import NightOutMedia from './NightOutMedia';
 import InvitePreview from './InvitePreview';
-import { fetchAnonRsvpCounts, fetchNightOutVoting } from './planActions';
+import { fetchAnonGuests, fetchAnonRsvpCounts, fetchNightOutVoting } from './planActions';
 import {
   declineNightOutByToken,
   getNightOut,
@@ -206,7 +206,7 @@ export default function NightOutPage({
       if (epoch !== viewEpoch.current) return 'superseded';
       memberLoadSeq.current += 1;
       const seq = memberLoadSeq.current;
-      const [plan, members, board, voting, anonRsvps] = await Promise.all([
+      const [plan, members, board, voting, anonRsvps, anonGuests] = await Promise.all([
         getNightOut(supabase, planId),
         getNightOutMembers(supabase, planId),
         getNightOutBoard(supabase, planId),
@@ -214,6 +214,8 @@ export default function NightOutPage({
         // another lane, so these two ride alongside it rather than through it.
         fetchNightOutVoting(supabase, planId),
         fetchAnonRsvpCounts(supabase, planId),
+        // G-01: named share-link guests (members only).
+        fetchAnonGuests(supabase, planId),
       ]);
       // The ONLY genuine failure: the plan itself could not be read.
       if (plan === null) return 'failed';
@@ -232,6 +234,7 @@ export default function NightOutPage({
         board,
         voting,
         anonRsvps,
+        anonGuests,
       });
       return 'painted';
     },
@@ -591,7 +594,7 @@ export default function NightOutPage({
     );
   }
 
-  const { plan, members, board, voting, anonRsvps } = state;
+  const { plan, members, board, voting, anonRsvps, anonGuests } = state;
   const isOwner = plan.callerRole === 'owner';
   const accepted = members.filter((m) => m.inviteStatus === 'accepted');
   const isCancelled = plan.status === 'cancelled';
@@ -773,7 +776,7 @@ export default function NightOutPage({
         withRefresh={withRefresh}
       />
 
-      <MemberBoard members={members} accepted={accepted} anonRsvps={anonRsvps} />
+      <MemberBoard members={members} accepted={accepted} anonRsvps={anonRsvps} anonGuests={anonGuests} />
 
       <RsvpRow
         plan={plan}

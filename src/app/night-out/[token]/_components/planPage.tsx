@@ -11,7 +11,7 @@ import type {
   NightOutMember,
   NightOutPreview,
 } from '@/lib/nightOuts.server';
-import type { AnonRsvpCounts, NightOutVoting } from '../planActions';
+import type { AnonGuest, AnonRsvpCounts, NightOutVoting } from '../planActions';
 
 export type PageState =
   | { kind: 'loading' }
@@ -30,6 +30,8 @@ export type PageState =
       voting: NightOutVoting | null;
       /** V8-R-INV-003. Null when the read failed; zeroes mean nobody replied. */
       anonRsvps: AnonRsvpCounts | null;
+      /** G-01: named share-link guests; null = unread or a pre-0080 database. */
+      anonGuests: AnonGuest[] | null;
     };
 
 /**

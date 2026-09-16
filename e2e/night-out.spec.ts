@@ -486,6 +486,8 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
       sent.push(route.request().postDataJSON() as Record<string, unknown>);
       expect(sent.at(-1)).toEqual({
         p_token: TOKEN, p_key: expect.any(String), p_response: 'maybe',
+        // G-01: Going and Maybe carry the guest's name.
+        p_guest_name: 'Alex',
       });
       await fulfillJson(200, true)(route);
     });
@@ -499,6 +501,12 @@ test.describe('/night-out/[token] — V8-3 canonical plan', () => {
       /can't make it/i,
     );
 
+    // G-01: without a name the answer is held in the field, not sent.
+    await page.getByTestId('invite-rsvp-maybe').click();
+    await expect(page.getByTestId('invite-name-missing')).toBeVisible();
+    expect(sent).toHaveLength(0);
+    await page.getByLabel('Your name').fill('Alex');
+    await expect(page.getByTestId('invite-name-missing')).toHaveCount(0);
     await page.getByTestId('invite-rsvp-maybe').click();
     await expect(page.getByTestId('invite-rsvp-sent')).toContainText(/maybe/i);
     expect(sent).toHaveLength(1);
@@ -3552,5 +3560,100 @@ test.describe('R-03: wave-2 review follow-ups', () => {
     const open = page.getByRole('button', { name: /^Open it$/ });
     await expect(open).toBeVisible();
     expect((await open.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  });
+});
+
+/** G-01 — a share-link guest answers with a name; who else is going needs an account. */
+test.describe('G-01: the guest RSVP and the sign-up funnel', () => {
+  test('a guest sees the COUNT and a create-account prompt, never the names', async ({ page }) => {
+    await stubBearerRpcs(page);
+    let attendeeReads = 0;
+    await page.route('**/rest/v1/rpc/preview_night_out_attendees*', async (route) => {
+      attendeeReads += 1;
+      // 0080 revokes this from anon; the client no longer asks as a guest.
+      await fulfillJson(403, { message: 'permission denied' })(route);
+    });
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByTestId('invite-preview')).toBeVisible();
+    const locked = page.getByTestId('invite-whos-in-locked');
+    await expect(locked).toBeVisible();
+    await expect(locked).toContainText(/in so far|Nobody has said yes/);
+    await expect(page.getByTestId('invite-whos-in-signup')).toBeVisible();
+    await expect(page.getByTestId('invite-attendees')).toHaveCount(0);
+    await expect(page.getByTestId('invite-limitation')).toContainText(/who else is going/i);
+  });
+
+  test("Can't make it may stay anonymous, and the prompt leads to /auth with the invite kept", async ({
+    page,
+  }) => {
+    await stubBearerRpcs(page);
+    const sent: Array<Record<string, unknown>> = [];
+    await page.route('**/rest/v1/rpc/rsvp_night_out_by_token*', async (route) => {
+      sent.push(route.request().postDataJSON() as Record<string, unknown>);
+      await fulfillJson(200, true)(route);
+    });
+    await page.goto(`/night-out/${TOKEN}`);
+    await page.getByTestId('invite-rsvp-declined').click();
+    await expect(page.getByTestId('invite-rsvp-sent')).toContainText(/can.t make it/i);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toEqual({
+      p_token: TOKEN, p_key: expect.any(String), p_response: 'declined', p_guest_name: null,
+    });
+    await expect(page.getByTestId('invite-name-missing')).toHaveCount(0);
+
+    await page.getByTestId('invite-whos-in-signup').click();
+    await expect(page).toHaveURL(/\/auth$/);
+    const stored = await page.evaluate((key) => window.localStorage.getItem(key), PENDING_KEY);
+    expect(stored, 'the invite context survives the trip to /auth').toBe(TOKEN);
+  });
+
+  test('a member sees named guests as rows, and the nameless ones only as a count', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubOwnerRpcs(page);
+    await page.route('**/rest/v1/rpc/get_night_out_anon_rsvps*', fulfillJson(200, [
+      { going: 2, maybe: 1, declined: 0 },
+    ]));
+    await page.route('**/rest/v1/rpc/get_night_out_anon_guests*', fulfillJson(200, [
+      { guest_name: 'Alex', response: 'going' },
+      { guest_name: 'Jo', response: 'maybe' },
+    ]));
+    await page.goto(`/night-out/${TOKEN}`);
+    const guests = page.getByTestId('anon-guest');
+    await expect(guests).toHaveCount(2);
+    await expect(guests.first()).toContainText('Alex');
+    await expect(guests.first()).toContainText('Going');
+    await expect(guests.first()).toContainText(/via the invite link/i);
+    await expect(guests.nth(1)).toContainText('Jo');
+    await expect(guests.nth(1)).toContainText('Maybe');
+    // 2 going + 1 maybe, two of them named: one reply is nameless.
+    await expect(page.getByTestId('anon-guests-nameless')).toContainText('1 more reply');
+  });
+
+  test('a pre-0080 database (the guests read fails) shows the counts and no guest rows', async ({
+    page,
+    context,
+    baseURL,
+  }) => {
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubOwnerRpcs(page);
+    await page.route('**/rest/v1/rpc/get_night_out_anon_rsvps*', fulfillJson(200, [
+      { going: 1, maybe: 0, declined: 0 },
+    ]));
+    await page.route('**/rest/v1/rpc/get_night_out_anon_guests*', fulfillJson(404, { message: 'no such function' }));
+    await page.goto(`/night-out/${TOKEN}`);
+    await expect(page.getByTestId('member-board')).toBeVisible();
+    await expect(page.getByTestId('anon-guest')).toHaveCount(0);
+    await expect(page.getByTestId('anon-guests-nameless')).toHaveCount(0);
+    await expect(page.getByTestId('night-out-link-replies')).toContainText(/1 going/);
   });
 });

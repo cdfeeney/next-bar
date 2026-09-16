@@ -171,6 +171,14 @@ export type BearerAttendee = {
   handle: string | null;
 };
 
+/** G-01: the name a share-link guest typed, stored on their own RSVP row. */
+export const GUEST_NAME_MAX = 40;
+
+/** G-01: Going and Maybe carry a name; "Can't make it" may be anonymous. */
+export function rsvpNeedsName(choice: RsvpChoice): boolean {
+  return choice === 'going' || choice === 'maybe';
+}
+
 /**
  * Who is going. NULL means the read failed and [] means nobody has accepted —
  * the same distinction the rest of this codebase keeps, because "nobody is
@@ -305,13 +313,22 @@ export async function submitAnonRsvp(
   token: string,
   key: string,
   choice: RsvpChoice,
+  /**
+   * G-01: what the guest typed. The server requires one for Going and Maybe —
+   * either sent now or already on their row — and accepts a nameless
+   * "Can't make it". Trimmed here as well as there so an all-spaces name is
+   * refused in the field rather than by the RPC.
+   */
+  guestName?: string | null,
 ): Promise<RsvpSubmitResult> {
   if (!UUID_RE.test(token) || !UUID_RE.test(key)) return 'refused';
+  const name = typeof guestName === 'string' ? guestName.trim() : '';
   try {
     const result = await supabase.rpc('rsvp_night_out_by_token', {
       p_token: token,
       p_key: key,
       p_response: choice,
+      p_guest_name: name === '' ? null : name,
     });
     if (isUnreachable(result)) return 'unreachable';
     return !result.error && result.data === true ? 'sent' : 'refused';
@@ -340,6 +357,13 @@ function isUnreachable(result: {
 /* -------------------------------------------------------------------------- */
 
 const QUEUED_RSVP_STORAGE_PREFIX = 'next-bar:night-out-rsvp-queued:';
+/**
+ * G-01: the NAME that belongs to a queued answer. Kept beside the choice
+ * rather than inside it so the existing queued value stays a bare choice and
+ * an older queue still replays; without it a Going queued offline would be
+ * resent nameless and the server would refuse it.
+ */
+const QUEUED_RSVP_NAME_STORAGE_PREFIX = 'next-bar:night-out-rsvp-queued-name:';
 
 /**
  * "An offline response is queued and explicitly labelled as not yet sent."
@@ -352,12 +376,31 @@ const QUEUED_RSVP_STORAGE_PREFIX = 'next-bar:night-out-rsvp-queued:';
  * store simply has no queue, and the surface says the answer was not sent
  * rather than pretending it was held.
  */
-export function queueRsvp(token: string, choice: RsvpChoice): boolean {
+export function queueRsvp(
+  token: string,
+  choice: RsvpChoice,
+  /** G-01: sent with the answer when it replays. */
+  guestName?: string | null,
+): boolean {
   try {
     window.localStorage.setItem(QUEUED_RSVP_STORAGE_PREFIX + token, choice);
+    const name = typeof guestName === 'string' ? guestName.trim() : '';
+    if (name === '') window.localStorage.removeItem(QUEUED_RSVP_NAME_STORAGE_PREFIX + token);
+    else window.localStorage.setItem(QUEUED_RSVP_NAME_STORAGE_PREFIX + token, name);
     return readQueuedRsvp(token) === choice;
   } catch {
     return false;
+  }
+}
+
+/** G-01: the name stored with a queued answer, or null. */
+export function readQueuedRsvpName(token: string): string | null {
+  try {
+    const stored = window.localStorage.getItem(QUEUED_RSVP_NAME_STORAGE_PREFIX + token);
+    const name = typeof stored === 'string' ? stored.trim() : '';
+    return name === '' ? null : name;
+  } catch {
+    return null;
   }
 }
 
@@ -375,6 +418,7 @@ export function readQueuedRsvp(token: string): RsvpChoice | null {
 export function clearQueuedRsvp(token: string): void {
   try {
     window.localStorage.removeItem(QUEUED_RSVP_STORAGE_PREFIX + token);
+    window.localStorage.removeItem(QUEUED_RSVP_NAME_STORAGE_PREFIX + token);
   } catch {
     // A queue we cannot clear is a queue that will be retried, which is the
     // safe direction: the RPC is idempotent under the recipient's own key.
