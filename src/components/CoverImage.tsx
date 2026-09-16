@@ -1,8 +1,18 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { coverSourceOf } from '@/lib/nightOutCovers';
 import { useMediaUrl } from '@/lib/nightOutMedia/useMediaUrl';
+
+/**
+ * A cover has no manual retry affordance the way NightOutMedia does, so a single
+ * transient boundary blip — a 503 while the media env warms, a dropped request —
+ * must not strand it at 'loading' forever. Retry the route a bounded number of
+ * times, backing off, before giving up. The server's 404 ('gone') is terminal
+ * and never retried; only 'unavailable' (we could not ask) is.
+ */
+const MAX_COVER_RETRIES = 4;
+const COVER_RETRY_BASE_MS = 400;
 
 /**
  * S-06b / S-06c — a plan's cover, wherever it shows (form tile, plan board
@@ -33,14 +43,33 @@ export default function CoverImage({
   // template, and a boolean would keep the new picture gated off forever.
   const [failedFor, setFailedFor] = useState<string | null>(null);
   const source = coverSourceOf(cover);
+  const isMedia = source?.kind === 'media';
   // Hooks run unconditionally; a template asks the route for nothing.
-  const media = useMediaUrl(source?.kind === 'media' ? source.mediaId : null);
-  if (source === null) return null;
+  const media = useMediaUrl(isMedia ? source.mediaId : null);
 
-  const isMedia = source.kind === 'media';
+  // Bounded auto-retry over a transient 'unavailable', reset when the cover
+  // changes. 'gone' (the route's 404) and 'ready' are terminal and never retry.
+  const [retries, setRetries] = useState(0);
+  useEffect(() => {
+    setRetries(0);
+  }, [cover]);
+  useEffect(() => {
+    if (!isMedia || media.status !== 'unavailable' || retries >= MAX_COVER_RETRIES) {
+      return undefined;
+    }
+    const timer = setTimeout(() => {
+      setRetries((n) => n + 1);
+      media.retry();
+    }, COVER_RETRY_BASE_MS * (retries + 1));
+    return () => clearTimeout(timer);
+  }, [isMedia, media, retries]);
+
+  if (source === null) return null;
   // The route's 404 is its one authoritative "no" (deleted, or not ours to
-  // read); anything else is the network having a bad moment, shown as loading.
-  const failed = failedFor === cover || (isMedia && media.status === 'gone');
+  // read); a transient 'unavailable' shows as loading WHILE we retry, and only
+  // once the retries are spent does it settle to failed rather than spin forever.
+  const exhausted = isMedia && media.status === 'unavailable' && retries >= MAX_COVER_RETRIES;
+  const failed = failedFor === cover || (isMedia && media.status === 'gone') || exhausted;
   const src = isMedia
     ? media.status === 'ready' ? media.url : null
     : source.template.src;

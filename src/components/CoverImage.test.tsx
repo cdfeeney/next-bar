@@ -1,10 +1,12 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, test, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 /** S-06c: a media cover resolves through the boundary route; the hook is the seam. */
-const mediaState = { current: { status: 'loading' } as { status: string; url?: string } };
-const useMediaUrl = vi.fn((mediaId: string | null) =>
-  mediaId === null ? { status: 'gone' } : mediaState.current,
+type FakeState = { status: string; url?: string; retry?: () => void };
+const mediaState = { current: { status: 'loading' } as FakeState };
+const retry = vi.fn();
+const useMediaUrl = vi.fn((mediaId: string | null): FakeState =>
+  mediaId === null ? { status: 'gone' } : { ...mediaState.current, retry },
 );
 vi.mock('@/lib/nightOutMedia/useMediaUrl', () => ({
   useMediaUrl: (id: string | null) => useMediaUrl(id),
@@ -13,6 +15,11 @@ vi.mock('@/lib/nightOutMedia/useMediaUrl', () => ({
 import CoverImage from './CoverImage';
 
 const MEDIA_ID = '123e4567-e89b-42d3-a456-426614174000';
+
+afterEach(() => {
+  retry.mockReset();
+  vi.useRealTimers();
+});
 
 describe('CoverImage (S-06c) — a library photo', () => {
   test('a template never asks the route; a media cover resolves through it and shows the signed URL', () => {
@@ -37,6 +44,34 @@ describe('CoverImage (S-06c) — a library photo', () => {
     rerender(<CoverImage cover={`media:${MEDIA_ID}`} showLabel />);
     expect(screen.getByTestId('cover-image').getAttribute('data-cover-state')).toBe('failed');
     expect(screen.getByTestId('cover-image').textContent).toMatch(/your photo/i);
+  });
+
+  test('a transient unavailable is retried, not failed, and resolves when the route answers', async () => {
+    vi.useFakeTimers();
+    // The route is briefly unavailable (a 503 while the media env warms), then answers.
+    mediaState.current = { status: 'unavailable' };
+    retry.mockImplementation(() => {
+      mediaState.current = { status: 'ready', url: 'https://signed.example/late.jpg' };
+    });
+    const { rerender } = render(<CoverImage cover={`media:${MEDIA_ID}`} />);
+    expect(screen.getByTestId('cover-image').getAttribute('data-cover-state')).toBe('loading');
+    expect(retry).not.toHaveBeenCalled();
+    // The backoff fires; the component re-reads the hook and paints the picture.
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+    expect(retry).toHaveBeenCalledTimes(1);
+    rerender(<CoverImage cover={`media:${MEDIA_ID}`} />);
+    expect(screen.getByTestId('cover-image').getAttribute('data-cover-state')).toBe('ok');
+    expect(screen.getByRole('img').getAttribute('src')).toBe('https://signed.example/late.jpg');
+  });
+
+  test('an unavailable route reads as loading (a retry is coming), never immediately failed', () => {
+    mediaState.current = { status: 'unavailable' };
+    render(<CoverImage cover={`media:${MEDIA_ID}`} />);
+    // 'unavailable' is "we could not ask", which the cover retries — so it stays
+    // loading rather than collapsing to the terminal failed state a 404 gets.
+    expect(screen.getByTestId('cover-image').getAttribute('data-cover-state')).toBe('loading');
   });
 });
 
