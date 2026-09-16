@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import dynamic from 'next/dynamic';
 import { useAuth } from '@/hooks/useAuth';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 import MediaThumb from '@/lib/nightOutMedia/MediaThumb';
@@ -11,10 +10,6 @@ import { fetchSavedNight, type SavedNightRead } from '@/lib/nightOutMedia/server
 import { useBars } from '@/lib/useBars';
 import BarVisualTile from '@/components/BarVisualTile';
 import { RatingBadgeLabel } from '@/components/RatingBadge';
-import type { Bar } from '@/types';
-
-// Same as RecapCard: the map is client-only and heavy, so it loads on demand.
-const BarMap = dynamic(() => import('@/components/BarMap'), { ssr: false });
 
 /**
  * /nights/[id] — ONE ARCHIVED NIGHT, the saved-night recap (README §8,
@@ -130,7 +125,6 @@ function Recap({ night }: { night: import('@/lib/nightOutMedia').SavedNight }): 
       }),
     [night.bars, byId],
   );
-  const mapBars: Bar[] = useMemo(() => stops.map((s) => s.bar), [stops]);
   const lovedName = stops.find((s) => s.rating === 'loved')?.bar.name ?? null;
   const anyUnrated = night.bars.some((b) => b.rating === null);
   const stopCount = night.bars.length;
@@ -201,16 +195,13 @@ function Recap({ night }: { night: import('@/lib/nightOutMedia').SavedNight }): 
         </ul>
       )}
 
-      {/* A quiet map of the night's stops, when their coordinates resolve. */}
-      {mapBars.length > 0 ? (
-        <div className="h-48 mt-6 rounded-2xl overflow-hidden" data-testid="saved-night-map">
-          <BarMap
-            bars={mapBars}
-            fitToBars
-            highlightIds={lovedName ? mapBars.filter((_, i) => stops[i].rating === 'loved').map((b) => b.id) : []}
-          />
-        </div>
-      ) : null}
+      {/* The §8 map block is DROPPED, per item 5's own escape hatch ("if that
+          component cannot be mounted at a fixed height without a refactor beyond
+          this goal, ship the rest and say so"). BarMap only fills a fixed box in
+          `fill` mode, and that mode's globals.css control offset (6.75rem) is
+          designed for a full-page map and mispositions the zoom controls inside
+          a 192px block — fixing that is a map-CSS refactor this goal excludes
+          (round-2 panel, both lanes). The recap ships without the map. */}
     </article>
   );
 }
