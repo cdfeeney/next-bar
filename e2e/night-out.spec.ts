@@ -2230,13 +2230,13 @@ test.describe('S-08: the saved night recap', () => {
   test('two stops in order with the right badge on each, and the headline names the Loved bar', async ({ page, context, baseURL }) => {
     await openRecap(page, context, baseURL, [
       { bar_id: 'attaboy', sort_order: 1, rating: 'loved' },
-      { bar_id: 'please-dont-tell', sort_order: 2, rating: 'pass' },
+      { bar_id: 'dead-rabbit', sort_order: 2, rating: 'pass' },
     ]);
     const stops = page.getByTestId('saved-night-stop');
     await expect(stops).toHaveCount(2);
     await expect(stops.nth(0)).toContainText(/attaboy/i);
     await expect(stops.nth(0)).toContainText(/Loved/i);
-    await expect(stops.nth(1)).toContainText(/pass/i); // "Please Don't Tell" also matches; assert the badge too
+    await expect(stops.nth(1)).toContainText(/dead rabbit/i);
     await expect(stops.nth(1)).toContainText(/Pass/);
     await expect(page.getByTestId('saved-night-headline')).toContainText(/2 stops · you loved Attaboy/i);
     // Both stops are rated, so the action points at the rankings.
@@ -2246,7 +2246,7 @@ test.describe('S-08: the saved night recap', () => {
   test('a night with an unrated stop shows "Rank last night" and it navigates', async ({ page, context, baseURL }) => {
     await openRecap(page, context, baseURL, [
       { bar_id: 'attaboy', sort_order: 1, rating: 'liked' },
-      { bar_id: 'please-dont-tell', sort_order: 2, rating: null },
+      { bar_id: 'dead-rabbit', sort_order: 2, rating: null },
     ]);
     // A liked stop, one unrated → rank what is still unrated.
     await expect(page.getByTestId('saved-night-headline')).toContainText(/2 stops$/);
