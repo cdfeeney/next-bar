@@ -171,7 +171,7 @@ export default function DestinationsStep({
           // the round-4 defect.
           disabled={busy}
           aria-disabled={busy}
-          className="text-muted text-sm min-h-[44px] -ml-1 pr-3 touch-manipulation disabled:opacity-40"
+          className="text-muted text-sm min-h-[44px] -ml-1 pr-3 touch-manipulation disabled:text-border"
         >
           ‹ Back
         </button>
@@ -301,7 +301,7 @@ export default function DestinationsStep({
                             disabled={alreadySent}
                             aria-disabled={alreadySent}
                             onClick={() => onToggleGroup(group.id)}
-                            className="w-full flex items-center gap-3 min-h-[44px] border-b border-border text-left touch-manipulation disabled:opacity-40"
+                            className="w-full flex items-center gap-3 min-h-[44px] border-b border-border text-left touch-manipulation disabled:text-muted"
                           >
                             <span className="min-w-0 flex-1 text-[13px] truncate">
                               {group.name}
@@ -354,7 +354,9 @@ export default function DestinationsStep({
           onClick={onPublish}
           disabled={!ready}
           aria-disabled={!ready}
-          className="w-full min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation disabled:opacity-40 hover:bg-accentDim transition-colors"
+          // README §9.4: with nothing selected the CTA sits on the held fill in
+          // muted text — a state, not a faded button.
+          className="w-full min-h-[54px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation disabled:bg-held disabled:text-muted hover:bg-accentDim transition-colors"
         >
           {/* An unavailable CTA says WHY. A disabled button with a label that
               still promises "Share to Group" is the same silence the
@@ -365,6 +367,9 @@ export default function DestinationsStep({
               ? undeliverableLabel(undeliverable)
               : ctaLabel(destinations)}
         </button>
+        <p className="text-muted text-[11px] text-center leading-relaxed">
+          One capture, one publish — no review screen after this.
+        </p>
       </div>
     </div>
   );
@@ -394,7 +399,9 @@ function DestinationRow({
       disabled={disabled}
       aria-disabled={disabled}
       onClick={onClick}
-      className={`w-full flex items-center gap-3 min-h-[56px] px-4 rounded-2xl border text-left touch-manipulation disabled:opacity-40 ${on ? 'border-accent' : 'border-border'} bg-surface`}
+      // README §9.4: a selected row is an accent border on an 8% accent fill.
+      // Held (unavailable) rows read as such by fill, never by opacity.
+      className={`w-full flex items-center gap-3 min-h-[56px] px-4 rounded-2xl border text-left touch-manipulation disabled:bg-held disabled:text-muted ${on ? 'border-accent bg-accent/[0.08]' : 'border-border bg-surface'}`}
     >
       <span className="min-w-0 flex-1">
         <span className="block text-sm">{DESTINATION_LABELS[destination]}</span>

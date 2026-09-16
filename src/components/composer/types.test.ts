@@ -43,29 +43,46 @@ describe('V8-R-CMP-011 — exactly three receipts', () => {
   test('Feed alone reads "Posted to Feed" and offers View post', () => {
     const receipt = receiptFor(['feed']);
     expect(receipt.kind).toBe('feed');
-    expect(receipt.headline).toBe('Posted to Feed');
-    expect(receipt.primaryLabel).toBe('View post');
+    expect(receipt.headline).toBe('Shared.');
+    expect(receipt.consequence).toBe('On your feed until you delete it.');
+    expect(receipt.primaryLabel).toBe('See it');
     expect(receipt.primaryAction).toBe('view-post');
   });
 
-  test('Story alone reads "Added to your story" and offers View story', () => {
+  test('Story alone reads "Shared." with the 24-hour line, and "See it" opens the story', () => {
     const receipt = receiptFor(['story']);
     expect(receipt.kind).toBe('story');
-    expect(receipt.headline).toBe('Added to your story');
-    expect(receipt.primaryLabel).toBe('View story');
+    expect(receipt.headline).toBe('Shared.');
+    expect(receipt.consequence).toBe('Live for 24 hours.');
+    expect(receipt.primaryLabel).toBe('See it');
+    expect(receipt.primaryAction).toBe('view-story');
   });
 
-  test('several destinations read "Shared to N places" and offer Done', () => {
+  test('several destinations name every consequence in one sentence, story first', () => {
     const receipt = receiptFor(['feed', 'story', 'group']);
     expect(receipt.kind).toBe('places');
-    expect(receipt.headline).toBe('Shared to 3 places');
-    expect(receipt.primaryLabel).toBe('Done');
+    expect(receipt.headline).toBe('Shared.');
+    expect(receipt.consequence).toBe(
+      'Live for 24 hours, on your feed until you delete it, and in the group thread.',
+    );
+    // A Feed post landed, so "See it" opens it.
+    expect(receipt.primaryLabel).toBe('See it');
+    expect(receipt.primaryAction).toBe('view-post');
   });
 
-  test('a lone Night Out uses the counted receipt, singular — there is no fourth', () => {
+  test('the spec example: Story + Feed reads exactly as the README writes it', () => {
+    expect(receiptFor(['feed', 'story']).consequence).toBe(
+      'Live for 24 hours, and on your feed until you delete it.',
+    );
+  });
+
+  test('a lone Night Out has nothing to open, so the primary action is Done', () => {
     const receipt = receiptFor(['night_out']);
     expect(receipt.kind).toBe('places');
-    expect(receipt.headline).toBe('Shared to 1 place');
+    expect(receipt.headline).toBe('Shared.');
+    expect(receipt.consequence).toBe("In tonight's night out for 24 hours.");
+    expect(receipt.primaryLabel).toBe('Done');
+    expect(receipt.primaryAction).toBe('done');
   });
 });
 

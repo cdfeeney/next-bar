@@ -1,6 +1,26 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 import { config as loadEnvFile } from 'dotenv';
+
+/**
+ * True when `.next/` was built AFTER every file that feeds the build. A build
+ * that predates a source edit is a false-green gate waiting to happen (Codex,
+ * S-10 round 1), so PLAYWRIGHT_SKIP_BUILD is honoured only when this holds.
+ * `.next/BUILD_ID` is written last, so its mtime is the build's finish time.
+ */
+function buildIsFresh(): boolean {
+  if (!existsSync('.next/BUILD_ID')) return false;
+  const built = statSync('.next/BUILD_ID').mtimeMs;
+  const newerThanBuild = (path: string): boolean => {
+    const stat = statSync(path);
+    if (!stat.isDirectory()) return stat.mtimeMs > built;
+    return readdirSync(path).some((name) => newerThanBuild(join(path, name)));
+  };
+  return !['src', 'public', 'package.json', 'next.config.mjs', 'tailwind.config.ts', '.env.local']
+    .filter((path) => existsSync(path))
+    .some(newerThanBuild);
+}
 
 // Next inlines NEXT_PUBLIC_* from .env.local at build time, so a spec that
 // asserts on a flag-controlled surface has to read the same file or it is
@@ -96,10 +116,10 @@ export default defineConfig({
     // of the whole gate, and on a 16GB host with a browser and a desktop app
     // open the low-memory monitor kills the run mid-build (2026-09-16, three
     // times). The operator builds once, alone, then runs the browsers against
-    // it. FRESHNESS IS THE CALLER'S RESPONSIBILITY: the flag is refused when
-    // there is no build at all, but it cannot know whether src changed since.
+    // it. The flag is REFUSED — and the normal build runs — when there is no
+    // build, or when any source input is newer than it (`buildIsFresh`).
     command: releaseMode
-      ? process.env.PLAYWRIGHT_SKIP_BUILD === '1' && existsSync('.next/BUILD_ID')
+      ? process.env.PLAYWRIGHT_SKIP_BUILD === '1' && buildIsFresh()
         ? `npm run start -- --port ${port}`
         : `npm run build && npm run start -- --port ${port}`
       : `npm run dev -- --port ${port}`,

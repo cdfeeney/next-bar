@@ -177,36 +177,70 @@ export type RetirementReason = 'sent' | 'maybe';
 export type RetiredDestinations = Partial<Record<DestinationKey, RetirementReason>>;
 
 export type ComposerReceipt = {
+  /** Which of the three receipt SHAPES this is; the copy is the same for all. */
   kind: 'feed' | 'story' | 'places';
+  /** README §9.5: always "Shared." — the consequence line carries the specifics. */
   headline: string;
+  /** ONE sentence naming what happened, per delivered destination, in canonical order. */
+  consequence: string;
   primaryLabel: string;
   primaryAction: 'view-post' | 'view-story' | 'done';
 };
 
+/** What each destination means for the author, in the receipt's one sentence (README §9.5). */
+const CONSEQUENCE: Readonly<Record<DestinationKey, string>> = {
+  feed: 'on your feed until you delete it',
+  story: 'live for 24 hours',
+  night_out: "in tonight's night out for 24 hours",
+  group: 'in the group thread',
+};
+
+/**
+ * "Live for 24 hours, and on your feed until you delete it." — the spec's own
+ * example, generalised: the delivered destinations' consequences in canonical
+ * order, joined into one capitalised sentence.
+ */
+/** The sentence's order — the spec's example leads with the story. */
+const CONSEQUENCE_ORDER: readonly DestinationKey[] = ['story', 'feed', 'night_out', 'group'];
+
+export function consequenceLine(delivered: readonly DestinationKey[]): string {
+  const parts = CONSEQUENCE_ORDER.filter((key) => delivered.includes(key)).map(
+    (key) => CONSEQUENCE[key],
+  );
+  if (parts.length === 0) return 'Nothing was shared.';
+  const joined =
+    parts.length === 1
+      ? parts[0]
+      : `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
+  return `${joined.charAt(0).toUpperCase()}${joined.slice(1)}.`;
+}
+
+/**
+ * README §9.5 — "Shared." 26px/700, a consequence line, then "See it" and Undo.
+ * "See it" opens the Feed post when one landed, else the story; a publish that
+ * reached only a night out or a group has nothing to open, so it reads Done.
+ * `kind` keeps the three shapes V8-R-CMP-011 named for the receipt's data attribute.
+ */
 export function receiptFor(
   delivered: readonly DestinationKey[],
 ): ComposerReceipt {
-  if (delivered.length === 1 && delivered[0] === 'feed') {
-    return {
-      kind: 'feed',
-      headline: 'Posted to Feed',
-      primaryLabel: 'View post',
-      primaryAction: 'view-post',
-    };
-  }
-  if (delivered.length === 1 && delivered[0] === 'story') {
-    return {
-      kind: 'story',
-      headline: 'Added to your story',
-      primaryLabel: 'View story',
-      primaryAction: 'view-story',
-    };
-  }
+  const kind: ComposerReceipt['kind'] =
+    delivered.length === 1 && delivered[0] === 'feed'
+      ? 'feed'
+      : delivered.length === 1 && delivered[0] === 'story'
+        ? 'story'
+        : 'places';
+  const primaryAction: ComposerReceipt['primaryAction'] = delivered.includes('feed')
+    ? 'view-post'
+    : delivered.includes('story')
+      ? 'view-story'
+      : 'done';
   return {
-    kind: 'places',
-    headline: `Shared to ${delivered.length} ${delivered.length === 1 ? 'place' : 'places'}`,
-    primaryLabel: 'Done',
-    primaryAction: 'done',
+    kind,
+    headline: 'Shared.',
+    consequence: consequenceLine(delivered),
+    primaryLabel: primaryAction === 'done' ? 'Done' : 'See it',
+    primaryAction,
   };
 }
 

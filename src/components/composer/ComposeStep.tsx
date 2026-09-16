@@ -12,6 +12,9 @@ import type { Bar } from '@/types';
 
 import { MAX_COMPOSER_CAPTION } from './types';
 
+/** README §9.3: the caption counter shows only once this many characters remain. */
+const CAPTION_COUNTER_FROM = 40;
+
 /**
  * Step 1 of 3 — Compose (V8-R-CMP-001).
  *
@@ -42,6 +45,7 @@ export default function ComposeStep({
   onBarChange,
   onPeopleChange,
   onNext,
+  onRetake,
   onExit,
 }: {
   photo: StoryPhoto;
@@ -67,6 +71,8 @@ export default function ComposeStep({
   onBarChange: (next: Bar | null) => void;
   onPeopleChange: (next: readonly TaggedPerson[]) => void;
   onNext: () => void;
+  /** README §9.3's Retake pill — discards the pair and reopens the capture options. */
+  onRetake: () => void;
   onExit: () => void;
 }): JSX.Element {
   const [sheet, setSheet] = useState<'bar' | 'people' | null>(null);
@@ -84,16 +90,31 @@ export default function ComposeStep({
       className="fixed inset-0 z-[1100] bg-bg flex flex-col overflow-y-auto px-5 pt-[calc(env(safe-area-inset-top)+16px)] outline-none"
     >
       <div className="flex items-start justify-between gap-3">
-        <h2 className="font-display text-2xl">Share a moment.</h2>
+        <h2 className="font-display text-[22px] font-bold leading-tight">Share a moment.</h2>
         <ExitButton testId="composer-compose-exit" onClick={onExit} disabled={busy} />
       </div>
 
-      <StoryFrame
-        photo={photo}
-        barId={bar?.id ?? null}
-        className="mt-4 rounded-2xl border border-border aspect-[4/5]"
-        insetClassName="w-24"
-      />
+      {/* README §9.3: the pair as a 104px thumbnail with its inset, and the
+          Retake pill beside it. Retake discards the pair and reopens the
+          capture options — the same contract as the review screen's Retake. */}
+      <div className="mt-4 flex items-center gap-4">
+        <StoryFrame
+          photo={photo}
+          barId={bar?.id ?? null}
+          className="w-[104px] shrink-0 aspect-[3/4] rounded-2xl border border-border"
+          insetClassName="w-8"
+        />
+        <button
+          type="button"
+          data-testid="composer-retake"
+          onClick={onRetake}
+          disabled={busy}
+          aria-disabled={busy}
+          className="min-h-[44px] px-5 rounded-full border border-border font-display text-xs uppercase tracking-widest touch-manipulation hover:border-accent transition-colors disabled:bg-held disabled:text-muted"
+        >
+          Retake
+        </button>
+      </div>
 
       <div className="mt-4">
         <label htmlFor="composer-caption" className="block text-sm">
@@ -116,15 +137,18 @@ export default function ComposeStep({
           placeholder="Say something (optional)"
           className="mt-2 w-full rounded-2xl border border-border bg-surface px-4 py-3 text-sm outline-none focus:border-accent"
         />
-        <p
-          data-testid="composer-caption-count"
-          // Labelled as it is typed, per the requirement's accessibility line,
-          // and announced politely rather than interrupting each keystroke.
-          aria-live="polite"
-          className="text-muted text-[11px] mt-1 text-right"
-        >
-          {remaining} characters left
-        </p>
+        {/* README §9.3: the counter appears only in the last 40 characters —
+            a count nobody is near yet is noise, not information. */}
+        {remaining <= CAPTION_COUNTER_FROM ? (
+          <p
+            data-testid="composer-caption-count"
+            // Announced politely rather than interrupting each keystroke.
+            aria-live="polite"
+            className="text-muted text-[11px] mt-1 text-right"
+          >
+            {remaining} characters left
+          </p>
+        ) : null}
       </div>
 
       <div className="mt-4 space-y-2">
@@ -160,9 +184,9 @@ export default function ComposeStep({
           type="button"
           data-testid="composer-next"
           onClick={onNext}
-          className="w-full min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation hover:bg-accentDim transition-colors"
+          className="w-full min-h-[54px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation hover:bg-accentDim transition-colors"
         >
-          Choose where
+          Next
         </button>
       </div>
 
@@ -225,7 +249,7 @@ export function ExitButton({
       disabled={disabled}
       aria-disabled={disabled}
       aria-label={label}
-      className="w-11 h-11 -mr-2 -mt-1 shrink-0 flex items-center justify-center rounded-full border border-border text-muted touch-manipulation disabled:opacity-40"
+      className="w-11 h-11 -mr-2 -mt-1 shrink-0 flex items-center justify-center rounded-full border border-border text-muted touch-manipulation disabled:bg-held"
     >
       ✕
     </button>
@@ -261,7 +285,7 @@ function MetaRow({
       data-value={value}
       onClick={onClick}
       aria-label={`${action} ${label.toLowerCase()}`}
-      className="w-full flex items-center gap-3 min-h-[52px] px-4 rounded-2xl border border-border bg-surface text-left touch-manipulation hover:border-accent transition-colors"
+      className="w-full flex items-center gap-3 min-h-[56px] px-4 rounded-2xl border border-border bg-surface text-left touch-manipulation hover:border-accent transition-colors"
     >
       <span aria-hidden="true" className="text-muted">
         {icon}

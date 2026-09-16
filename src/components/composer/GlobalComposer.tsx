@@ -58,6 +58,7 @@ export default function GlobalComposer({
   onPublish,
   onUndo,
   onExit,
+  onRetake,
   onViewPost,
   onViewStory,
 }: {
@@ -80,6 +81,8 @@ export default function GlobalComposer({
   onUndo: (publishId: string) => Promise<{ ok: true } | { ok: false; message: string }>;
   /** ✕ — before Share it leaves without publishing, after Share it returns to Social. */
   onExit: () => void;
+  /** Compose's Retake pill: discard the pair and reopen the capture options (README §9.3). */
+  onRetake: () => void;
   onViewPost: (postId: string | null) => void;
   onViewStory: () => void;
 }): JSX.Element {
@@ -92,7 +95,6 @@ export default function GlobalComposer({
   const [groupsOpen, setGroupsOpen] = useState(false);
   const [storyAudience, setStoryAudience] =
     useState<StoryAudienceChoice>(defaultStoryAudience);
-  const [audienceGroupId, setAudienceGroupId] = useState<string | null>(null);
   const [customIds, setCustomIds] = useState<readonly string[]>([]);
   const [audienceOpen, setAudienceOpen] = useState(false);
   const [audienceLapsed, setAudienceLapsed] = useState(false);
@@ -149,7 +151,8 @@ export default function GlobalComposer({
       groupIds: selectedGroupIds,
       tagIds: people.map((person) => person.id),
       storyAudience,
-      storyAudienceGroupId: audienceGroupId,
+      // The sheet offers Friends or Custom only (README §9); no group audience.
+      storyAudienceGroupId: null,
       customIds,
       nightOutId: selectedNightOutId,
     },
@@ -198,9 +201,8 @@ export default function GlobalComposer({
    */
   const [committedAudience, setCommittedAudience] = useState<{
     choice: StoryAudienceChoice;
-    groupId: string | null;
     customIds: readonly string[];
-  }>({ choice: defaultStoryAudience, groupId: null, customIds: [] });
+  }>({ choice: defaultStoryAudience, customIds: [] });
 
   const publish = async (): Promise<void> => {
     if (busy || destinations.length === 0) return;
@@ -261,7 +263,7 @@ export default function GlobalComposer({
         tagIds: live.tagIds,
         storyAudience,
         storyAudienceIds: storyRecipients,
-        storyAudienceGroupId: storyAudience === 'group' ? audienceGroupId : null,
+        storyAudienceGroupId: null,
         groupIds: destinations.includes('group') ? live.groupIds : [],
         nightOutId: destinations.includes('night_out') ? (nightOut?.id ?? null) : null,
       });
@@ -497,15 +499,12 @@ export default function GlobalComposer({
         {audienceOpen ? (
           <StoryAudienceSheet
             value={storyAudience}
-            groups={groups}
-            groupId={audienceGroupId}
             friends={friendsReady ? friends : []}
             friendsReady={friendsReady}
             customIds={customIds}
             resolvedCount={storyRecipients.length}
             lapsed={audienceLapsed}
             onChangeChoice={setStoryAudience}
-            onChangeGroup={setAudienceGroupId}
             onToggleCustom={(profileId) =>
               setCustomIds((current) =>
                 current.includes(profileId)
@@ -518,7 +517,6 @@ export default function GlobalComposer({
               // to exactly this decision.
               setCommittedAudience({
                 choice: storyAudience,
-                groupId: audienceGroupId,
                 customIds,
               });
               setAudienceLapsed(false);
@@ -541,7 +539,6 @@ export default function GlobalComposer({
               // which is a fail-closed dead end with two one-tap exits — pick a
               // different audience, or turn Story off.
               setStoryAudience(committedAudience.choice);
-              setAudienceGroupId(committedAudience.groupId);
               setCustomIds(committedAudience.customIds);
               setAudienceLapsed(false);
               setAudienceOpen(false);
@@ -568,6 +565,7 @@ export default function GlobalComposer({
         setComposeFailure(null);
         setStep('destinations');
       }}
+      onRetake={onRetake}
       onExit={onExit}
     />
   );

@@ -153,7 +153,7 @@ export default function CaptureReview({
             onRetake();
           }}
           aria-disabled={rotating}
-          className="flex-1 min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation hover:border-accent transition-colors aria-disabled:opacity-40"
+          className="flex-1 min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation hover:border-accent transition-colors aria-disabled:bg-held aria-disabled:text-muted"
         >
           Retake
         </button>
@@ -165,7 +165,7 @@ export default function CaptureReview({
             onApprove();
           }}
           aria-disabled={rotating}
-          className="flex-1 min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation hover:bg-accentDim transition-colors aria-disabled:opacity-40"
+          className="flex-1 min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation hover:bg-accentDim transition-colors aria-disabled:bg-held aria-disabled:text-muted"
         >
           {kind === 'dual' ? 'Use photos' : 'Use photo'}
         </button>
@@ -199,7 +199,7 @@ function CompositionButton({
         onClick();
       }}
       aria-disabled={busy}
-      className="min-h-[44px] rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors aria-disabled:opacity-40"
+      className="min-h-[44px] rounded-2xl border border-border text-xs font-label uppercase tracking-widest touch-manipulation hover:border-accent transition-colors aria-disabled:bg-held aria-disabled:text-muted"
     >
       {label}
     </button>

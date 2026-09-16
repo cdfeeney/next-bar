@@ -69,7 +69,7 @@ test.describe('Add to Story', () => {
     // The plus lives on your own rail cell, and there is no rail signed out.
     await expect(page.getByTestId('add-story')).toHaveCount(0);
     await expect(page.getByTestId('capture-modes')).toHaveCount(0);
-    await expect(page.getByTestId('story-compose')).toHaveCount(0);
+    await expect(page.getByTestId('composer-compose')).toHaveCount(0);
 
     // And the surface says why rather than showing a dead control.
     await expect(page.getByTestId('stories-signed-out')).toBeVisible();
@@ -141,7 +141,20 @@ async function captureAndApprove(page: Page): Promise<void> {
   // compose that does not pass through it.
   await expect(page.getByTestId('capture-review')).toBeVisible();
   await page.getByTestId('capture-approve').click();
-  await expect(page.getByTestId('story-compose')).toBeVisible();
+  await expect(page.getByTestId('composer-compose')).toBeVisible();
+}
+
+/**
+ * S-11: compose → Next → Destinations → Story on → Share. Since the one
+ * composer replaced the Story-only dock, "add to my story" is a destination
+ * choice like any other, and the CTA names it.
+ */
+async function shareToStory(page: Page): Promise<void> {
+  await page.getByTestId('composer-next').click();
+  await expect(page.getByTestId('composer-destinations')).toBeVisible();
+  await page.getByTestId('composer-destination-story').click();
+  await expect(page.getByTestId('composer-share')).toHaveText('Share to Story');
+  await page.getByTestId('composer-share').click();
 }
 
 test.describe('Add to Story — signed in', () => {
@@ -159,22 +172,41 @@ test.describe('Add to Story — signed in', () => {
 
     await captureAndApprove(page);
 
-    // Audience defaults to Friends and is a real screen, not a label.
-    await page.getByTestId('story-compose-audience').click();
-    await expect(page.getByTestId('story-audience-sheet')).toBeVisible();
-    await page.getByTestId('story-audience-done').click();
+    // Compose (README §9.3): "Share a moment.", Bar and People rows, Next.
+    await expect(page.getByTestId('composer-compose')).toContainText('Share a moment.');
+    await expect(page.getByTestId('composer-next')).toHaveText('Next');
+    await page.getByTestId('composer-next').click();
 
-    await page.getByTestId('story-compose-add').click();
+    // Destinations (README §9.4): exactly four rows, no fifth; nothing selected
+    // holds the CTA; Story on reveals the JOINED audience sub-row, which opens
+    // the audience sheet (Friends by default) as a sheet, not a fourth screen.
+    const destinations = page.getByTestId('composer-destinations');
+    await expect(destinations).toBeVisible();
+    await expect(destinations.locator('[data-destination]')).toHaveCount(4);
+    await expect(destinations.locator('[data-destination]')).toHaveText([
+      /Feed/, /Story/, /Night Out/, /Group/,
+    ]);
+    await expect(page.getByTestId('composer-share')).toBeDisabled();
+    await expect(page.getByTestId('composer-story-audience')).toHaveCount(0);
+    await page.getByTestId('composer-destination-story').click();
+    await expect(page.getByTestId('composer-story-audience')).toBeVisible();
+    await expect(page.getByTestId('composer-story-audience-value')).toHaveText('Friends');
+    await page.getByTestId('composer-story-audience').click();
+    await expect(page.getByTestId('composer-audience-sheet')).toBeVisible();
+    await expect(page.getByTestId('composer-audience-option')).toHaveCount(2);
+    await page.getByTestId('composer-audience-done').click();
+    await expect(page.getByTestId('composer-share')).toHaveText('Share to Story');
+    await page.getByTestId('composer-share').click();
 
     // The receipt claims the story is live for 24 hours, so it appears only
     // once BOTH the upload and the metadata publish actually succeeded.
-    const receipt = page.getByTestId('story-shared-receipt');
+    const receipt = page.getByTestId('composer-receipt');
     await expect(receipt).toBeVisible();
     // README §9.5: "Shared." + one consequence line, "See it" + Undo.
-    await expect(receipt.getByRole('heading')).toHaveText('Shared.');
-    await expect(receipt).toContainText(/Live for 24 hours\./);
-    await expect(page.getByTestId('story-receipt-view')).toHaveText('See it');
-    await expect(page.getByTestId('story-receipt-undo')).toHaveText('Undo');
+    await expect(page.getByTestId('composer-receipt-headline')).toHaveText('Shared.');
+    await expect(page.getByTestId('composer-receipt-consequence')).toHaveText('Live for 24 hours.');
+    await expect(page.getByTestId('composer-receipt-primary')).toHaveText('See it');
+    await expect(page.getByTestId('composer-receipt-undo')).toHaveText('Undo');
     expect(stub.published).toHaveLength(1);
     expect(stub.uploads).toHaveLength(1);
     // Upload comes FIRST and under the author's own prefix — the key
@@ -232,19 +264,25 @@ test.describe('Add to Story — signed in', () => {
     await page.goto('/friends');
     await captureAndApprove(page);
 
-    await page.getByTestId('story-compose-people').click();
-    await expect(page.getByTestId('story-people-sheet')).toBeVisible();
+    await page.getByTestId('composer-people').click();
+    const sheet = page.getByTestId('story-people-sheet');
+    await expect(sheet).toBeVisible();
+    // README §9.3 "Tag friends": the mutuals line, a search field, a count.
+    await expect(sheet).toContainText('Friends are people you follow who follow you back.');
+    await expect(page.getByTestId('story-people-count')).toHaveText('2 friends · 0 picked');
     await page.getByTestId('story-people-row').first().click();
-    await page.getByTestId('story-people-sheet').getByRole('button', { name: /close/i }).click();
+    await expect(page.getByTestId('story-people-count')).toHaveText('2 friends · 1 picked');
+    await page.getByTestId('story-people-done').click();
+    await expect(sheet).toHaveCount(0);
 
-    await page.getByTestId('story-compose-add').click();
-    await expect(page.getByTestId('story-shared-receipt')).toBeVisible();
+    await shareToStory(page);
+    await expect(page.getByTestId('composer-receipt')).toBeVisible();
 
     // Published as a REAL profile id, never a handle…
     expect(stub.published[0].p_tag_ids).toEqual([CLAIRE_ID]);
     // …and the tag survives the round trip into the viewer, which is what the
     // discarded read path made impossible.
-    await page.getByTestId('story-receipt-view').click();
+    await page.getByTestId('composer-receipt-primary').click();
     await expect(page.getByTestId('story-viewer')).toBeVisible();
     await expect(page.getByTestId('story-people-chip')).toBeVisible();
   });
@@ -264,10 +302,10 @@ test.describe('Add to Story — signed in', () => {
     });
     await page.goto('/friends');
     await captureAndApprove(page);
-    await page.getByTestId('story-compose-add').click();
-    await expect(page.getByTestId('story-shared-receipt')).toBeVisible();
+    await shareToStory(page);
+    await expect(page.getByTestId('composer-receipt')).toBeVisible();
 
-    await page.getByTestId('story-receipt-view').click();
+    await page.getByTestId('composer-receipt-primary').click();
     const viewer = page.getByTestId('story-viewer');
     await expect(viewer).toBeVisible();
     // "You", not Claire and not Dev.
@@ -284,18 +322,18 @@ test.describe('Add to Story — signed in', () => {
     const stub = await stubStories(page, { following: [CLAIRE] });
     await page.goto('/friends');
     await captureAndApprove(page);
-    await page.getByTestId('story-compose-add').click();
-    await expect(page.getByTestId('story-shared-receipt')).toBeVisible();
+    await shareToStory(page);
+    await expect(page.getByTestId('composer-receipt')).toBeVisible();
 
     stub.deleteError = { message: 'delete refused' };
-    await page.getByTestId('story-receipt-undo').click();
+    await page.getByTestId('composer-receipt-undo').click();
 
-    const failure = page.getByTestId('story-undo-failed');
+    const failure = page.getByTestId('composer-undo-failed');
     await expect(failure).toBeVisible();
     await expect(failure).toContainText(/still live/i);
     // The receipt does NOT close on a failed Undo — closing would be the
     // same silent claim in a different costume.
-    await expect(page.getByTestId('story-shared-receipt')).toBeVisible();
+    await expect(page.getByTestId('composer-receipt')).toBeVisible();
     expect(stub.stories).toHaveLength(1);
   });
 
@@ -303,12 +341,12 @@ test.describe('Add to Story — signed in', () => {
     const stub = await stubStories(page, { following: [CLAIRE] });
     await page.goto('/friends');
     await captureAndApprove(page);
-    await page.getByTestId('story-compose-add').click();
-    await expect(page.getByTestId('story-shared-receipt')).toBeVisible();
+    await shareToStory(page);
+    await expect(page.getByTestId('composer-receipt')).toBeVisible();
     expect(stub.stories).toHaveLength(1);
 
-    await page.getByTestId('story-receipt-undo').click();
-    await expect(page.getByTestId('story-shared-receipt')).toHaveCount(0);
+    await page.getByTestId('composer-receipt-undo').click();
+    await expect(page.getByTestId('composer-receipt')).toHaveCount(0);
     expect(stub.stories).toHaveLength(0);
     // The bytes go too — the RPC hands back the keys precisely so they can.
     expect(stub.removed.length).toBeGreaterThan(0);
@@ -321,12 +359,104 @@ test.describe('Add to Story — signed in', () => {
     stub.publishError = { code: '42501', message: 'not a mutual friend' };
     await page.goto('/friends');
     await captureAndApprove(page);
-    await page.getByTestId('story-compose-add').click();
+    await shareToStory(page);
 
-    // "Shared" is only true when the server took it.
-    await expect(page.getByTestId('story-save-failed')).toBeVisible();
-    await expect(page.getByTestId('story-save-failed')).toContainText(/Nothing was shared/i);
-    await expect(page.getByTestId('story-shared-receipt')).toHaveCount(0);
+    // "Shared" is only true when the server took it: a publish that landed
+    // nowhere returns to Compose with the draft intact and says so.
+    await expect(page.getByTestId('composer-publish-failed')).toBeVisible();
+    await expect(page.getByTestId('composer-publish-failed')).toContainText(/Nothing was shared/i);
+    await expect(page.getByTestId('composer-receipt')).toHaveCount(0);
+    await expect(page.getByTestId('composer-compose')).toBeVisible();
+  });
+
+  // S-11 (README §9.3 / §9.4 / audience sheet): the composer's own contracts,
+  // driven on the real route. The store is stubbed; nothing here writes until
+  // a test says so.
+  test('the caption counter appears only in the last 40 characters, and Retake reopens the capture options', async ({
+    page,
+  }) => {
+    await stubStories(page, { following: [CLAIRE] });
+    await page.goto('/friends');
+    await captureAndApprove(page);
+    const caption = page.getByTestId('composer-caption');
+    await expect(page.getByTestId('composer-caption-count')).toHaveCount(0);
+    await caption.fill('x'.repeat(99));
+    await expect(page.getByTestId('composer-caption-count')).toHaveCount(0);
+    await caption.fill('x'.repeat(100));
+    await expect(page.getByTestId('composer-caption-count')).toHaveText('40 characters left');
+    await caption.fill('x'.repeat(200));
+    await expect(caption).toHaveValue('x'.repeat(140));
+    await expect(page.getByTestId('composer-caption-count')).toHaveText('0 characters left');
+
+    await page.getByTestId('composer-retake').click();
+    await expect(page.getByTestId('capture-modes')).toBeVisible();
+    await expect(page.getByTestId('composer-compose')).toHaveCount(0);
+  });
+
+  test('the CTA names its picks, and the Story audience sub-row comes and goes with the Story row', async ({
+    page,
+  }) => {
+    await stubStories(page, { following: [CLAIRE] });
+    await page.goto('/friends');
+    await captureAndApprove(page);
+    await page.getByTestId('composer-next').click();
+    const share = page.getByTestId('composer-share');
+    await expect(share).toBeDisabled();
+    await expect(share).toHaveText('Pick a place to share');
+
+    await page.getByTestId('composer-destination-feed').click();
+    await expect(share).toHaveText('Share to Feed');
+    await page.getByTestId('composer-destination-story').click();
+    await expect(share).toHaveText('Share to Feed and Story');
+    await expect(page.getByTestId('composer-story-audience')).toBeVisible();
+    await page.getByTestId('composer-destination-story').click();
+    await expect(page.getByTestId('composer-story-audience')).toHaveCount(0);
+    await expect(share).toHaveText('Share to Feed');
+    // With no night out tonight the row says so and cannot be turned on.
+    await expect(page.getByTestId('composer-destination-night_out')).toContainText('No night out tonight');
+    await expect(page.getByTestId('composer-destination-night_out')).toBeDisabled();
+    await expect(page.getByTestId('composer-destinations')).toContainText(
+      'One capture, one publish — no review screen after this.',
+    );
+  });
+
+  test('the audience sheet: two options, Done held until somebody is picked, search by @handle, dismiss falls back to Friends', async ({
+    page,
+  }) => {
+    await stubStories(page, { following: [CLAIRE, DEV] });
+    await page.goto('/friends');
+    await captureAndApprove(page);
+    await page.getByTestId('composer-next').click();
+    await page.getByTestId('composer-destination-story').click();
+    await page.getByTestId('composer-story-audience').click();
+    const sheet = page.getByTestId('composer-audience-sheet');
+    await expect(sheet).toBeVisible();
+    await expect(page.getByTestId('composer-audience-option')).toHaveCount(2);
+    await expect(sheet).toContainText('Applies to this story only. Your Account default stays Friends.');
+
+    await sheet.getByText('Custom', { exact: true }).click();
+    const done = page.getByTestId('composer-audience-done');
+    await expect(done).toHaveText('Pick at least one person');
+    await expect(done).toHaveAttribute('aria-disabled', 'true');
+    await expect(page.getByTestId('composer-audience-person')).toHaveCount(2);
+    await page.getByTestId('composer-audience-search').fill(`@${CLAIRE.handle}`);
+    await expect(page.getByTestId('composer-audience-person')).toHaveCount(1);
+    await expect(page.getByTestId('composer-audience-person')).toHaveAttribute('data-profile', CLAIRE_ID);
+
+    // Dismiss with Custom still empty → back to Friends.
+    await sheet.getByRole('button', { name: 'Close story audience' }).click();
+    await expect(page.getByTestId('composer-story-audience-value')).toHaveText('Friends');
+  });
+
+  test('Tag friends: the search field narrows the rows by name', async ({ page }) => {
+    await stubStories(page, { following: [CLAIRE, DEV] });
+    await page.goto('/friends');
+    await captureAndApprove(page);
+    await page.getByTestId('composer-people').click();
+    await expect(page.getByTestId('story-people-row')).toHaveCount(2);
+    await page.getByTestId('story-people-search').fill('Dev');
+    await expect(page.getByTestId('story-people-row')).toHaveCount(1);
+    await expect(page.getByTestId('story-people-row')).toHaveAttribute('data-profile', DEV_ID);
   });
 
   test('the page under the capture and compose dialogs does not scroll', async ({
@@ -465,7 +595,7 @@ test.describe('Add to Story — signed in', () => {
     await expect(page.getByTestId('capture-approve')).toHaveText('Use photo');
     // And the approved single frame lands on compose like a library pick does.
     await page.getByTestId('capture-approve').click();
-    await expect(page.getByTestId('story-compose')).toBeVisible();
+    await expect(page.getByTestId('composer-compose')).toBeVisible();
   });
 });
 

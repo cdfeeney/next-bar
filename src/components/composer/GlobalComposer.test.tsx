@@ -65,6 +65,7 @@ function element(overrides: ComposerProps = {}): JSX.Element {
       onExit={() => {
         exits += 1;
       }}
+      onRetake={vi.fn()}
       onViewPost={vi.fn()}
       onViewStory={vi.fn()}
       {...overrides}
@@ -574,7 +575,22 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     expect(screen.getByTestId('composer-destinations')).toBeTruthy();
   });
 
-  test('a named group is intersected with mutual friends before it publishes', async () => {
+  test('the sheet offers exactly two audiences — Friends and Custom — and no group', async () => {
+    const user = userEvent.setup();
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-story-audience'));
+    const sheet = await screen.findByTestId('composer-audience-sheet');
+    expect(
+      within(sheet)
+        .getAllByTestId('composer-audience-option')
+        .map((el) => el.getAttribute('data-value')),
+    ).toEqual(['friends', 'custom']);
+    expect(within(sheet).queryByText('A group')).toBeNull();
+  });
+
+  test('a custom audience publishes exactly the picked mutual friends', async () => {
     const user = userEvent.setup();
     publishResult = { ok: true, publishId: 'p1', delivered: ['story'] };
     mount();
@@ -582,9 +598,8 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     await user.click(screen.getByTestId('composer-destination-story'));
     await user.click(screen.getByTestId('composer-story-audience'));
     const sheet = await screen.findByTestId('composer-audience-sheet');
-    await user.click(within(sheet).getByText('A group'));
-    await user.click(await within(sheet).findByText('Bar Crew'));
-    // Bar Crew holds alex (mutual) and stranger (not). One recipient, not two.
+    await user.click(within(sheet).getByText('Custom'));
+    await user.click(await within(sheet).findByText('Alex Ray'));
     expect(screen.getByTestId('composer-audience-count').textContent).toBe(
       '1 person will see this story',
     );
@@ -593,22 +608,39 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     await screen.findByTestId('composer-receipt');
 
     expect([...published[0].storyAudienceIds]).toEqual(['alex']);
-    expect(published[0].storyAudienceGroupId).toBe('crew');
+    expect(published[0].storyAudienceGroupId).toBeNull();
   });
 
-  test('fails closed: the sheet will not commit a narrowing that reaches nobody', async () => {
+  test('the Custom picker narrows by name or @handle', async () => {
     const user = userEvent.setup();
-    mount({ groups: [{ id: 'none', name: 'Strangers', memberIds: ['nobody'] }] });
+    mount();
     await toDestinations(user);
     await user.click(screen.getByTestId('composer-destination-story'));
     await user.click(screen.getByTestId('composer-story-audience'));
     const sheet = await screen.findByTestId('composer-audience-sheet');
-    await user.click(within(sheet).getByText('A group'));
-    await user.click(await within(sheet).findByText('Strangers'));
-    // Done is unavailable, so the narrowing can never be committed at all.
-    expect(
-      (screen.getByTestId('composer-audience-done') as HTMLButtonElement).disabled,
-    ).toBe(true);
+    await user.click(within(sheet).getByText('Custom'));
+    expect(within(sheet).getAllByTestId('composer-audience-person')).toHaveLength(2);
+    await user.type(within(sheet).getByTestId('composer-audience-search'), '@sa');
+    const rows = within(sheet).getAllByTestId('composer-audience-person');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].getAttribute('data-handle')).toBe('sam');
+  });
+
+  test('fails closed: the sheet will not commit a narrowing that reaches nobody', async () => {
+    const user = userEvent.setup();
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-story-audience'));
+    const sheet = await screen.findByTestId('composer-audience-sheet');
+    await user.click(within(sheet).getByText('Custom'));
+    // Nobody picked: Done is HELD and says why, so the narrowing can never be
+    // committed at all (aria-disabled keeps it reachable inside the trap).
+    const done = screen.getByTestId('composer-audience-done');
+    expect(done.getAttribute('aria-disabled')).toBe('true');
+    expect(done.textContent).toBe('Pick at least one person');
+    await user.click(done);
+    expect(screen.getByTestId('composer-audience-sheet')).toBeTruthy();
   });
 
   /**
@@ -643,27 +675,40 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     await user.click(screen.getByTestId('composer-destination-story'));
     await user.click(screen.getByTestId('composer-story-audience'));
     const sheet = await screen.findByTestId('composer-audience-sheet');
-    await user.click(within(sheet).getByText('A group'));
-    await user.click(await within(sheet).findByText('Bar Crew'));
+    await user.click(within(sheet).getByText('Custom'));
+    await user.click(await within(sheet).findByText('Alex Ray'));
     await user.click(screen.getByTestId('composer-audience-done'));
     expect(screen.getByTestId('composer-story-audience-value').textContent).toBe(
-      'Group · 1 person',
+      'Custom · 1 person',
     );
 
-    // Reopen, browse to Custom — which reaches nobody until people are picked —
-    // then back out. "Never mind" must not widen Bar Crew to everyone.
+    // Reopen, browse to Friends, then back out. "Never mind" must not widen
+    // the committed one-person audience to everyone.
     await user.click(screen.getByTestId('composer-story-audience'));
     const reopened = await screen.findByTestId('composer-audience-sheet');
-    await user.click(within(reopened).getByText('Custom'));
+    await user.click(within(reopened).getByText('Friends'));
     await user.click(within(reopened).getByLabelText('Close story audience'));
 
     expect(screen.getByTestId('composer-story-audience-value').textContent).toBe(
-      'Group · 1 person',
+      'Custom · 1 person',
     );
     await user.click(screen.getByTestId('composer-share'));
     await screen.findByTestId('composer-receipt');
     expect([...published[0].storyAudienceIds]).toEqual(['alex']);
-    expect(published[0].storyAudienceGroupId).toBe('crew');
+    expect(published[0].storyAudienceGroupId).toBeNull();
+  });
+
+  test('dismissing with Custom empty falls back to Friends (README §9)', async () => {
+    const user = userEvent.setup();
+    mount();
+    await toDestinations(user);
+    await user.click(screen.getByTestId('composer-destination-story'));
+    await user.click(screen.getByTestId('composer-story-audience'));
+    const sheet = await screen.findByTestId('composer-audience-sheet');
+    await user.click(within(sheet).getByText('Custom'));
+    // Nothing committed: ✕ restores the last committed audience, which is Friends.
+    await user.click(within(sheet).getByLabelText('Close story audience'));
+    expect(screen.getByTestId('composer-story-audience-value').textContent).toBe('Friends');
   });
 
   /**
@@ -678,19 +723,19 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     await user.click(screen.getByTestId('composer-destination-story'));
     await user.click(screen.getByTestId('composer-story-audience'));
     const sheet = await screen.findByTestId('composer-audience-sheet');
-    await user.click(within(sheet).getByText('A group'));
-    await user.click(await within(sheet).findByText('Bar Crew'));
-    // Committed while it still resolved: Bar Crew narrowed to alex.
+    await user.click(within(sheet).getByText('Custom'));
+    await user.click(await within(sheet).findByText('Alex Ray'));
+    // Committed while it still resolved: narrowed to alex.
     await user.click(screen.getByTestId('composer-audience-done'));
     expect(screen.getByTestId('composer-story-audience-value').textContent).toBe(
-      'Group · 1 person',
+      'Custom · 1 person',
     );
 
     // NOW the circle changes underneath it — alex is no longer a mutual friend,
     // so the committed narrowing resolves to nobody and has lapsed.
     rerender(element({ friends: [SAM] }));
     expect(screen.getByTestId('composer-story-audience-value').textContent).toBe(
-      'Group · 0 people',
+      'Custom · 0 people',
     );
 
     // Share fails closed and reopens the sheet. Dismissing it must NOT resolve
@@ -702,7 +747,7 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     await user.click(within(reopened).getByLabelText('Close story audience'));
 
     expect(screen.getByTestId('composer-story-audience-value').textContent).toBe(
-      'Group · 0 people',
+      'Custom · 0 people',
     );
     // And it still cannot publish — fail-closed, not widened.
     await user.click(screen.getByTestId('composer-share'));
@@ -713,7 +758,7 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
   test('tagging someone the narrowed story will not reach is refused, not widened', async () => {
     const user = userEvent.setup();
     mount();
-    // Tag Sam, then narrow the story to Bar Crew — which resolves to Alex only.
+    // Tag Sam, then narrow the story to Alex only.
     await user.click(screen.getByTestId('composer-people'));
     await user.click(await screen.findByText('Sam Poe'));
     await user.keyboard('{Escape}');
@@ -721,8 +766,8 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     await user.click(screen.getByTestId('composer-destination-story'));
     await user.click(screen.getByTestId('composer-story-audience'));
     const sheet = await screen.findByTestId('composer-audience-sheet');
-    await user.click(within(sheet).getByText('A group'));
-    await user.click(await within(sheet).findByText('Bar Crew'));
+    await user.click(within(sheet).getByText('Custom'));
+    await user.click(await within(sheet).findByText('Alex Ray'));
     await user.click(screen.getByTestId('composer-audience-done'));
     await user.click(screen.getByTestId('composer-share'));
 
@@ -757,8 +802,8 @@ describe('V8-R-CMP-005 — the Story audience subrow', () => {
     await user.click(screen.getByTestId('composer-destination-story'));
     await user.click(screen.getByTestId('composer-story-audience'));
     const sheet = await screen.findByTestId('composer-audience-sheet');
-    await user.click(within(sheet).getByText('A group'));
-    await user.click(await within(sheet).findByText('Bar Crew'));
+    await user.click(within(sheet).getByText('Custom'));
+    await user.click(await within(sheet).findByText('Alex Ray'));
     await user.click(screen.getByTestId('composer-audience-done'));
 
     await user.click(screen.getByTestId('composer-destination-group'));
@@ -1004,15 +1049,23 @@ describe('V8-R-CMP-009 — every full-screen state exits with ✕', () => {
 });
 
 describe('V8-R-CMP-010 — the optional 140-character caption', () => {
-  test('labels the remaining length as it is typed', async () => {
+  test('shows the remaining length only in the last 40 characters (README §9.3)', async () => {
     const user = userEvent.setup();
     mount();
+    const field = screen.getByTestId('composer-caption') as HTMLTextAreaElement;
+    // Nowhere near the bound: no counter.
+    expect(screen.queryByTestId('composer-caption-count')).toBeNull();
+    await user.click(field);
+    await user.paste('x'.repeat(99));
+    expect(screen.queryByTestId('composer-caption-count')).toBeNull();
+    // The 100th character leaves exactly 40, and the counter appears.
+    await user.paste('x');
     expect(screen.getByTestId('composer-caption-count').textContent).toBe(
-      '140 characters left',
+      '40 characters left',
     );
-    await user.type(screen.getByTestId('composer-caption'), 'hello');
+    await user.type(field, 'hello');
     expect(screen.getByTestId('composer-caption-count').textContent).toBe(
-      '135 characters left',
+      '35 characters left',
     );
   });
 
@@ -1045,8 +1098,14 @@ describe('V8-R-CMP-011 — the three receipts and Undo', () => {
     await user.click(screen.getByTestId('composer-destination-feed'));
     await user.click(screen.getByTestId('composer-share'));
     await screen.findByTestId('composer-receipt');
-    expect(screen.getByTestId('composer-receipt-headline').textContent).toBe('Posted to Feed');
-    expect(screen.getByTestId('composer-receipt-primary').textContent).toBe('View post');
+    expect(screen.getByTestId('composer-receipt-headline').textContent).toBe('Shared.');
+    expect(screen.getByTestId('composer-receipt-consequence').textContent).toBe(
+      'On your feed until you delete it.',
+    );
+    expect(screen.getByTestId('composer-receipt-primary').textContent).toBe('See it');
+    expect(screen.getByTestId('composer-receipt-primary').getAttribute('data-action')).toBe(
+      'view-post',
+    );
     expect(screen.getByTestId('composer-receipt-undo')).toBeTruthy();
   });
 
@@ -1058,10 +1117,14 @@ describe('V8-R-CMP-011 — the three receipts and Undo', () => {
     await user.click(screen.getByTestId('composer-destination-story'));
     await user.click(screen.getByTestId('composer-share'));
     await screen.findByTestId('composer-receipt');
-    expect(screen.getByTestId('composer-receipt-headline').textContent).toBe(
-      'Added to your story',
+    expect(screen.getByTestId('composer-receipt-headline').textContent).toBe('Shared.');
+    expect(screen.getByTestId('composer-receipt-consequence').textContent).toBe(
+      'Live for 24 hours.',
     );
-    expect(screen.getByTestId('composer-receipt-primary').textContent).toBe('View story');
+    expect(screen.getByTestId('composer-receipt-primary').textContent).toBe('See it');
+    expect(screen.getByTestId('composer-receipt-primary').getAttribute('data-action')).toBe(
+      'view-story',
+    );
   });
 
   test('several destinations count themselves and show per-destination indicators', async () => {
@@ -1073,10 +1136,12 @@ describe('V8-R-CMP-011 — the three receipts and Undo', () => {
     await user.click(screen.getByTestId('composer-destination-story'));
     await user.click(screen.getByTestId('composer-share'));
     await screen.findByTestId('composer-receipt');
-    expect(screen.getByTestId('composer-receipt-headline').textContent).toBe(
-      'Shared to 2 places',
+    expect(screen.getByTestId('composer-receipt-headline').textContent).toBe('Shared.');
+    // The README's own example sentence.
+    expect(screen.getByTestId('composer-receipt-consequence').textContent).toBe(
+      'Live for 24 hours, and on your feed until you delete it.',
     );
-    expect(screen.getByTestId('composer-receipt-primary').textContent).toBe('Done');
+    expect(screen.getByTestId('composer-receipt-primary').textContent).toBe('See it');
     expect(
       screen.getAllByTestId('composer-receipt-destination').map((el) =>
         el.getAttribute('data-destination'),

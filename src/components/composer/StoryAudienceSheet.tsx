@@ -1,50 +1,51 @@
 'use client';
 
+import { useState } from 'react';
+
 import Avatar from '@/components/Avatar';
 import Sheet from '@/components/story/Sheet';
 import type { TaggedPerson } from '@/components/story/storyStore';
 
-import type { ComposerGroup, StoryAudienceChoice } from './types';
+import type { StoryAudienceChoice } from './types';
 
 /**
- * The Story-audience sheet (V8-R-CMP-005).
+ * The Story-audience sheet — README §9 "Story audience sheet", exactly TWO
+ * options, per `storyStore.ts`'s `StoryAudience = 'friends' | 'custom'`:
  *
- * WHY THIS IS NOT `story/StorySheets.tsx`'s `AudienceSheet`. That one is typed
- * to `StoryAudience = 'friends' | 'custom'` and deliberately dropped its
- * "Selected groups" row, because at the time "there is no saved-groups
- * capability in this database, and a people picker labelled as a group feature
- * is a promise the product cannot keep". That is no longer true — `groups.server.ts`
- * ships real named groups — and V8-R-CMP-005 requires the named-group audience
- * here. Widening the story branch's own type is another lane's file, so the
- * composer carries its own sheet over the SAME shared `Sheet` shell.
+ *   Friends  "All accepted friends · your Account default"
+ *   Custom   "Pick people one by one" — reveals the mutuals picker with a search
+ *            field; Done reads "Pick at least one person" and is HELD while
+ *            Custom has nobody.
+ *
+ * The composer used to offer a third, named-group audience here. The social
+ * redesign (2026-09-13) dropped it: a story's audience is its friends or a
+ * hand-picked few, and a GROUP is a destination (its own thread), not a way
+ * to narrow a story. `StoryAudienceChoice` keeps the `'group'` member so the
+ * pure resolution in `types.ts` stays total; this sheet can never emit it.
  *
  * IT IS A SHEET OVER THE DESTINATION SCREEN, NOT A FOURTH FRAME: "opens as a
  * sheet over the destination screen rather than as a fourth frame" is the
  * requirement's own wording, and V8-R-CMP-001 counts three steps.
  *
- * D-C-37 lives in `resolveStoryRecipients`, not here: a named group resolves to
- * that group INTERSECTED WITH the poster's mutual friends. This sheet shows the
- * intersection it will actually get, so the count on screen is the count that
- * publishes.
+ * Dismissing (✕, backdrop, Escape) is not Done: the parent restores the last
+ * COMMITTED audience, which for a Custom that never had anybody picked is
+ * Friends — "Dismissing with Custom empty falls back to Friends" (README) and
+ * D-C-37 (never widen a committed narrowing) are the same rule seen from two
+ * sides, and both live in `GlobalComposer`, not here.
  */
 export default function StoryAudienceSheet({
   value,
-  groups,
-  groupId,
   friends,
   friendsReady,
   customIds,
   resolvedCount,
   lapsed,
   onChangeChoice,
-  onChangeGroup,
   onToggleCustom,
   onDone,
   onClose,
 }: {
   value: StoryAudienceChoice;
-  groups: readonly ComposerGroup[];
-  groupId: string | null;
   /** Accepted MUTUAL friends — the only permissible recipients. */
   friends: readonly TaggedPerson[];
   /** False until the real circle has resolved; narrowing fails closed until then. */
@@ -55,23 +56,18 @@ export default function StoryAudienceSheet({
   /** True when a publish was refused because this narrowing reached nobody. */
   lapsed: boolean;
   onChangeChoice: (next: StoryAudienceChoice) => void;
-  onChangeGroup: (next: string) => void;
   onToggleCustom: (profileId: string) => void;
   onDone: () => void;
   onClose: () => void;
 }): JSX.Element {
-  // Done is unavailable while a narrowing reaches nobody — the same gate the
-  // story branch keeps, for the same reason: an audience with no recipients
-  // behind it is a label, not an audience.
+  const [query, setQuery] = useState('');
+  // Done is unavailable while a narrowing reaches nobody — an audience with no
+  // recipients behind it is a label, not an audience.
   const ready = value === 'friends' || (friendsReady && resolvedCount > 0);
+  const shown = filterPeople(friends, query);
 
   return (
     <Sheet label="Story audience" testId="composer-audience-sheet" onClose={onClose}>
-      <p className="text-muted text-[11px] mb-3 leading-relaxed">
-        This governs your story only. It never changes who sees the Feed post,
-        the Night Out recap or a group thread.
-      </p>
-
       {lapsed ? (
         <p
           data-testid="composer-audience-lapsed"
@@ -92,13 +88,6 @@ export default function StoryAudienceSheet({
           onChange={onChangeChoice}
         />
         <AudienceOption
-          option="group"
-          label="A group"
-          hint="That group, narrowed to friends who follow you back"
-          value={value}
-          onChange={onChangeChoice}
-        />
-        <AudienceOption
           option="custom"
           label="Custom"
           hint="Pick people one by one"
@@ -107,46 +96,22 @@ export default function StoryAudienceSheet({
         />
       </ul>
 
-      {value === 'group' ? (
-        <div data-testid="composer-audience-groups" className="mt-4">
-          <p className="text-muted text-[11px] mb-2 leading-relaxed">
-            A group member who is not a friend who follows you back is not a
-            recipient.
-          </p>
-          {groups.length === 0 ? (
-            <p data-testid="composer-audience-groups-empty" className="text-sm leading-relaxed">
-              You have no groups yet.
-            </p>
-          ) : (
-            <ul>
-              {groups.map((group) => (
-                <li key={group.id}>
-                  <button
-                    type="button"
-                    data-testid="composer-audience-group"
-                    data-group={group.id}
-                    role="radio"
-                    aria-checked={groupId === group.id}
-                    onClick={() => onChangeGroup(group.id)}
-                    className="w-full flex items-center gap-3 min-h-[56px] border-b border-border text-left touch-manipulation"
-                  >
-                    <span className="min-w-0 flex-1 text-sm truncate">{group.name}</span>
-                    <SelectionMark on={groupId === group.id} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      ) : null}
-
       {value === 'custom' ? (
         <div data-testid="composer-audience-people" className="mt-4">
           <p className="text-muted text-[11px] mb-2 leading-relaxed">
-            Only friends who follow you back can be picked.
+            Who sees it. Only friends who follow you back can be picked.
           </p>
-          <ul className="max-h-[40vh] overflow-y-auto">
-            {friends.map((friend) => {
+          <input
+            type="search"
+            data-testid="composer-audience-search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search friends…"
+            aria-label="Search friends"
+            className="w-full min-h-[44px] rounded-2xl border border-border bg-bg px-4 text-sm outline-none focus:border-accent mb-2"
+          />
+          <ul className="max-h-[290px] overflow-y-auto">
+            {shown.map((friend) => {
               const on = customIds.includes(friend.id);
               return (
                 <li key={friend.id}>
@@ -154,12 +119,16 @@ export default function StoryAudienceSheet({
                     type="button"
                     data-testid="composer-audience-person"
                     data-profile={friend.id}
+                    data-handle={friend.handle}
                     aria-pressed={on}
                     onClick={() => onToggleCustom(friend.id)}
                     className="w-full flex items-center gap-3 min-h-[56px] border-b border-border text-left touch-manipulation"
                   >
                     <Avatar initials={friend.initials} seed={friend.id} size="sm" />
-                    <span className="min-w-0 flex-1 text-sm truncate">{friend.name}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm truncate">{friend.name}</span>
+                      <span className="block text-[11px] text-muted truncate">@{friend.handle}</span>
+                    </span>
                     <SelectionMark on={on} />
                   </button>
                 </li>
@@ -175,17 +144,40 @@ export default function StoryAudienceSheet({
           : `${resolvedCount} ${resolvedCount === 1 ? 'person' : 'people'} will see this story`}
       </p>
 
+      {/* aria-disabled, never `disabled`: unchecking the last person while Done
+          holds keyboard focus would drop focus to <body> behind this aria-modal
+          sheet, and `disabled` also leaves the focus trap's Tab ring. The
+          control explaining why the sheet will not complete stays reachable.
+          README: while held, the button itself SAYS why. */}
       <button
         type="button"
         data-testid="composer-audience-done"
-        onClick={onDone}
-        disabled={!ready}
+        onClick={() => {
+          if (!ready) return;
+          onDone();
+        }}
         aria-disabled={!ready}
-        className="mt-3 w-full min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation disabled:opacity-40"
+        className="mt-3 w-full min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation hover:bg-accentDim transition-colors aria-disabled:bg-held aria-disabled:text-muted"
       >
-        Done
+        {ready ? 'Done' : 'Pick at least one person'}
       </button>
+      <p className="text-muted text-[11px] text-center mt-3 leading-relaxed">
+        Applies to this story only. Your Account default stays Friends.
+      </p>
     </Sheet>
+  );
+}
+
+/** Name or @handle, case-insensitive; an empty query shows everyone. */
+export function filterPeople(
+  people: readonly TaggedPerson[],
+  query: string,
+): readonly TaggedPerson[] {
+  const needle = query.trim().replace(/^@/, '').toLowerCase();
+  if (needle.length === 0) return people;
+  return people.filter(
+    (person) =>
+      person.name.toLowerCase().includes(needle) || person.handle.toLowerCase().includes(needle),
   );
 }
 

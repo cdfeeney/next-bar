@@ -102,9 +102,20 @@ export default function SharedReceipt({
         />
       </div>
 
-      <h2 data-testid="composer-receipt-headline" className="font-display text-2xl text-center mt-2">
+      {/* README §9.5: "Shared." 26px/700, then ONE consequence line naming
+          what happened, per delivered destination. */}
+      <h2
+        data-testid="composer-receipt-headline"
+        className="font-display text-[26px] font-bold leading-tight text-center mt-2"
+      >
         {headline}
       </h2>
+      <p
+        data-testid="composer-receipt-consequence"
+        className="text-muted text-sm text-center mt-1 leading-relaxed"
+      >
+        {receipt.consequence}
+      </p>
 
       {/* Per-destination indicators — the counted receipt's third element. */}
       <ul
@@ -159,7 +170,7 @@ export default function SharedReceipt({
                 ? onViewStory
                 : onExit
           }
-          className="flex-1 min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation disabled:opacity-40 hover:border-accent transition-colors"
+          className="flex-1 min-h-[52px] rounded-2xl bg-accent text-bg font-display text-sm uppercase tracking-widest touch-manipulation disabled:bg-held disabled:text-muted hover:bg-accentDim transition-colors"
         >
           {receipt.primaryLabel}
         </button>
@@ -169,7 +180,7 @@ export default function SharedReceipt({
           onClick={onUndo}
           disabled={undoing}
           aria-disabled={undoing}
-          className="flex-1 min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation disabled:opacity-40 hover:border-accent transition-colors"
+          className="flex-1 min-h-[52px] rounded-2xl border border-border font-display text-sm uppercase tracking-widest touch-manipulation disabled:bg-held disabled:text-muted hover:border-accent transition-colors"
         >
           {undoing ? 'Undoing…' : 'Undo'}
         </button>

@@ -11,6 +11,7 @@ import { getBarById } from '@/lib/catalog';
 import { isValidPin } from '@/lib/presence';
 import { PinGlyph, PeopleGlyph } from './_components/HeaderGlyphs';
 import AddStoryFlow from '@/components/story/AddStoryFlow';
+import { useAddStoryPublish } from '@/components/story/useAddStoryPublish';
 import StoriesRail from '@/components/story/StoriesRail';
 import StoryViewer from '@/components/story/StoryViewer';
 import StoriesEmptyState from '@/components/story/StoriesEmptyState';
@@ -75,6 +76,10 @@ export default function SocialPage(): JSX.Element {
 
   const stories = useStories();
   const youId = auth.status === 'signed-in' ? auth.user.id : null;
+  // S-11: the photo flow publishes to Feed / Story / Night Out / Group in one
+  // call; this binds that contract to the real backends and loads the two
+  // targets the Destinations screen names (your groups, tonight's plan).
+  const composer = useAddStoryPublish(stories, youId);
   // FOUNDER DECISION 2026-08-24: the rail's pin badge reads PRESENCE, not suggestions.
   // `usePinnedHandles` now returns presence state rather than a bare id list, and a "pin"
   // is a presence row that names a bar — a status without a place is not a pin.
@@ -334,9 +339,16 @@ export default function SocialPage(): JSX.Element {
         <AddStoryFlow
           friends={stories.friends}
           friendsReady={stories.friendsReady}
+          groups={composer.groups}
+          nightOut={composer.nightOut}
           onCancel={() => setAddingStory(false)}
-          onPublish={stories.publish}
-          onUndo={stories.removeItem}
+          onPublish={composer.publish}
+          onUndo={composer.undo}
+          onViewPost={() => {
+            // The new post is at the top of the Feed sub-tab.
+            setAddingStory(false);
+            setTab('feed');
+          }}
           onViewStory={() => {
             setAddingStory(false);
             if (youId !== null) setViewer(youId);
