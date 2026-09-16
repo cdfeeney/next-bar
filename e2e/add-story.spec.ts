@@ -448,6 +448,67 @@ test.describe('Add to Story — signed in', () => {
     await expect(page.getByTestId('composer-story-audience-value')).toHaveText('Friends');
   });
 
+  // Fable, S-11 round 1 (HIGH): Feed is reachable from here for the first
+  // time, and "See it" after a Feed-only publish used to land on the Feed
+  // panel's story-only empty state — the page mounted FeedSection (the only
+  // reader of feed_posts) only when a live story existed, so the post the
+  // author had just been told about was unreachable anywhere in the app.
+  test('a Feed-only publish uploads once, and "See it" opens a Feed that shows the post', async ({
+    page,
+  }) => {
+    const stub = await stubStories(page, { following: [CLAIRE], stories: [] });
+    const posts: Record<string, unknown>[] = [];
+    const seen: { feed: Record<string, unknown> | null } = { feed: null };
+    // The two Feed surfaces the stories stub does not cover: the publish RPC
+    // and the posts read. Registered after stubStories so they win (newest-first).
+    await page.route('**/rest/v1/rpc/publish_feed_post**', async (route) => {
+      const args = route.request().postDataJSON() as Record<string, unknown>;
+      seen.feed = args;
+      const row = {
+        id: 'post-1',
+        author_id: YOU_ID,
+        media_id: String(args.p_media_id),
+        bar_id: null,
+        caption: (args.p_caption as string | null) ?? null,
+        night_out_id: null,
+        audience: 'friends',
+        audience_group_id: null,
+        created_at: ago(0),
+      };
+      posts.unshift(row);
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(row) });
+    });
+    await page.route('**/rest/v1/feed_posts**', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(posts) });
+    });
+
+    await page.goto('/friends');
+    await captureAndApprove(page);
+    await page.getByTestId('composer-next').click();
+    await page.getByTestId('composer-destination-feed').click();
+    await expect(page.getByTestId('composer-share')).toHaveText('Share to Feed');
+    await page.getByTestId('composer-share').click();
+
+    const receipt = page.getByTestId('composer-receipt');
+    await expect(receipt).toBeVisible();
+    await expect(page.getByTestId('composer-receipt-consequence')).toHaveText(
+      'On your feed until you delete it.',
+    );
+    // ONE upload through the media boundary, and the post is keyed to it.
+    expect(stub.uploads).toHaveLength(1);
+    expect(seen.feed?.p_media_id).toBe('e2e-media-1');
+    // Nothing went to Story: only Feed was picked.
+    expect(stub.published).toHaveLength(0);
+
+    await expect(page.getByTestId('composer-receipt-primary')).toHaveText('See it');
+    await page.getByTestId('composer-receipt-primary').click();
+    await expect(page.getByTestId('composer-receipt')).toHaveCount(0);
+    await expect(page.getByTestId('social-panel-feed')).toBeVisible();
+    await expect(page.getByTestId('friends-feed')).toBeVisible();
+    await expect(page.getByTestId('feed-post')).toHaveCount(1);
+    await expect(page.getByTestId('feed-empty')).toHaveCount(0);
+  });
+
   test('Tag friends: the search field narrows the rows by name', async ({ page }) => {
     await stubStories(page, { following: [CLAIRE, DEV] });
     await page.goto('/friends');

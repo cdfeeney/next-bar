@@ -119,6 +119,8 @@ export default function FeedSection({
     () => new Map(),
   );
   const [loadFailed, setLoadFailed] = useState(false);
+  /** The posts read has answered at least once — the precondition for "nothing here". */
+  const [settled, setSettled] = useState(false);
   const [openThread, setOpenThread] = useState<string | null>(null);
 
   /**
@@ -248,6 +250,9 @@ export default function FeedSection({
 
     const loaded = await fetchFeedPosts(supabase);
     if (stale()) return;
+    // The read has ANSWERED, one way or the other. Only now may "nothing here"
+    // be said: before this, an empty list is "not loaded yet", not "empty".
+    setSettled(true);
 
     if (!loaded.ok) {
       // "a failed circle read must render an honest error, never an empty ready
@@ -437,6 +442,24 @@ export default function FeedSection({
           </li>
         ))}
       </ul>
+
+      {/* READY-AND-EMPTY is its own state, said only once the posts read has
+          settled and neither a post nor a live story exists. It lives HERE, not
+          in the page, because this section is the only reader of persistent
+          Feed posts: gating the MOUNT on the 24-hour story count (the page's
+          old branch) hid every post the moment the last story expired — and,
+          from S-11, hid the post an author had just been told "See it" about. */}
+      {settled && !loadFailed && posts.length === 0 && entries.length === 0 ? (
+        <div
+          data-testid="feed-empty"
+          className="rounded-2xl border border-border bg-surface p-5"
+        >
+          <p className="text-sm leading-relaxed">
+            Nothing here yet. Posts and stories from you and the friends who
+            follow you back show up here — stories for 24 hours.
+          </p>
+        </div>
+      ) : null}
     </section>
   );
 }

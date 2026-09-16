@@ -20,10 +20,10 @@ import type { UseStories } from './storyStore';
  * loads the two things the Destinations screen needs to name: the author's
  * groups and tonight's night out.
  *
- * KNOWN LIMIT, stated rather than hidden: `get_my_night_outs` (0059) excludes
- * the rows the caller OWNS, so a plan you created yourself does not surface as
- * "tonight" here — only one you were invited to and accepted. The row then says
- * "No night out tonight". Widening that read is a migration, not this lane.
+ * Tonight's plan comes from TWO reads, because `get_my_night_outs` (0059)
+ * excludes the rows the caller OWNS: an accepted invitation comes from the RPC,
+ * and a plan the caller created comes from a direct `night_outs` read, which
+ * the 0044 RLS policy scopes to the caller's own and member rows. No migration.
  */
 export function useAddStoryPublish(
   stories: Pick<UseStories, 'publish' | 'removeItem'>,
@@ -39,17 +39,28 @@ export function useAddStoryPublish(
   const [nightOut, setNightOut] = useState<ComposerNightOut | null>(null);
 
   useEffect(() => {
+    // ACCOUNT-SCOPED, so a sign-out or an account switch on a mounted page never
+    // offers the previous account's groups or plan as targets (Codex, round 1):
+    // the targets are dropped the moment the viewer changes and refilled only
+    // from the new account's own reads.
+    setGroups([]);
+    setNightOut(null);
     if (client === null || youId === null) return undefined;
     let cancelled = false;
     void (async () => {
-      const [mine, nights] = await Promise.all([fetchMyGroups(client), getMyNightOuts(client)]);
+      const nightKey = nycNightKey();
+      const [mine, nights, owned] = await Promise.all([
+        fetchMyGroups(client),
+        getMyNightOuts(client),
+        fetchOwnedTonight(client, nightKey),
+      ]);
       if (cancelled) return;
       // A failed groups read leaves the Group row "no groups yet" rather than
       // inventing targets; the composer refuses an empty Group selection anyway.
       if (mine.ok) {
         setGroups(mine.value.map((group) => ({ id: group.id, name: group.name, memberIds: [] })));
       }
-      setNightOut(tonightFrom(nights ?? [], nycNightKey()));
+      setNightOut(tonightFrom(nights ?? [], nightKey) ?? owned);
     })();
     return () => {
       cancelled = true;
@@ -114,6 +125,33 @@ export function useAddStoryPublish(
   );
 
   return { groups, nightOut, publish, undo };
+}
+
+/**
+ * A plan the caller OWNS for tonight. RLS admits owner and member rows, so the
+ * filter here is only "tonight, not cancelled"; a member row that also shows up
+ * is harmless (the RPC hit wins, and the same plan is the same target). A read
+ * failure is null: the row then says "No night out tonight", never a guess.
+ */
+async function fetchOwnedTonight(
+  client: SupabaseClient,
+  nightKey: string,
+): Promise<ComposerNightOut | null> {
+  try {
+    const { data, error } = await client
+      .from('night_outs')
+      .select('id, title, night, status')
+      .eq('night', nightKey)
+      .neq('status', 'cancelled')
+      .order('created_at', { ascending: true })
+      .limit(1);
+    if (error || !Array.isArray(data) || data.length === 0) return null;
+    const row = data[0] as { id: unknown; title: unknown };
+    if (typeof row.id !== 'string') return null;
+    return { id: row.id, label: typeof row.title === 'string' && row.title.length > 0 ? row.title : 'Tonight' };
+  } catch {
+    return null;
+  }
 }
 
 /** Tonight's plan from the caller's list: today's night key, live, and accepted. */

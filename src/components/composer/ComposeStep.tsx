@@ -24,9 +24,9 @@ const CAPTION_COUNTER_FROM = 40;
  * trap here is disarmed while one is open — two traps over one document fight
  * for focus.
  *
- * The caption (V8-R-CMP-010) lives HERE and only here: the quick Add-to-Story
- * path stays caption-free on purpose, and `AddStoryFlow` passes `caption: null`
- * for exactly that reason.
+ * The caption (V8-R-CMP-010) lives HERE and only here. Since S-11 this is the
+ * one compose screen for every entry point — Add-to-Story hands its approved
+ * pair to this composer rather than carrying a caption-free dock of its own.
  *
  * The bar sheet wraps the app's ONE `BarPicker` rather than growing a second
  * search list — the same reuse `story/StorySheets.tsx` makes — but it is opened
