@@ -8,13 +8,12 @@
  * you", and "LEADING" / "PICKED" on the leading row only. Then "Suggest another
  * bar…", and for the host "Lock in <leader>".
  *
- * VOTING IS NOT SINGLE-TRANSFER HERE, and this file does not pretend it is.
- * `vote_night_out_bar` is insert-only (one row per bar per member, on conflict
- * do nothing) and no RPC clears a vote, so "tapping a new bar moves your vote"
- * and "tapping your current one clears it" cannot be built without a
- * migration — which S-07 forbids and its body says to surface. A row that
- * holds your vote renders the held control and writes nothing; every other
- * open row casts an additional vote, exactly as before this goal.
+ * ONE VOTE THAT MOVES (S-07b, migration 0079): `vote_night_out_bar` now moves
+ * the caller's vote to the tapped bar inside the shortlist lock, and
+ * `unvote_night_out_bar` clears it. So the held control is a button again —
+ * tap it to clear, tap another row to move. On a database that predates 0079
+ * the voter still only adds and the unvote returns false, which `withRefresh`
+ * reports as "That didn't go through".
  *
  * State and the refresh wrapper stay on the page; this renders what it is
  * given. A FAILED board read (`board === null`) is stated, never drawn as an
@@ -28,6 +27,7 @@ import { remainingLabel } from '@/lib/nightOutPlan';
 import { lockNightOut, removeNightOutSuggestion, type NightOutVoting } from '../planActions';
 import {
   suggestNightOutBar,
+  unvoteNightOutBar,
   voteNightOutBar,
   type NightOut,
   type NightOutBoardEntry,
@@ -143,15 +143,23 @@ export default function PlanShortlist({
                   leading || picked ? 'border-accent' : 'border-border',
                 ].join(' ')}
               >
-                {canParticipate && !entry.callerVoted ? (
+                {canParticipate ? (
+                  // S-07b: ONE vote that moves. Tapping another bar moves it
+                  // there (the server deletes the old one in the same locked
+                  // section); tapping the bar you hold clears it.
                   <button
                     type="button"
-                    aria-label={`Vote for ${barLabel(entry.barId)}`}
+                    aria-pressed={entry.callerVoted}
+                    aria-label={entry.callerVoted
+                      ? `Your vote on ${barLabel(entry.barId)} — tap to clear`
+                      : `Vote for ${barLabel(entry.barId)}`}
+                    data-testid={entry.callerVoted ? 'shortlist-voted' : undefined}
                     onClick={withRefresh(() => {
                       const supabase = getBrowserSupabase();
-                      return supabase
-                        ? voteNightOutBar(supabase, plan.id, entry.barId)
-                        : Promise.resolve(false);
+                      if (!supabase) return Promise.resolve(false);
+                      return entry.callerVoted
+                        ? unvoteNightOutBar(supabase, plan.id, entry.barId)
+                        : voteNightOutBar(supabase, plan.id, entry.barId);
                     })}
                     className={voteClass}
                   >
@@ -165,7 +173,7 @@ export default function PlanShortlist({
                     // forbids aria-label on a generic span — R-03 item 1).
                     role="img"
                     aria-label={entry.callerVoted ? `Your vote — ${entry.votes} ${entry.votes === 1 ? 'vote' : 'votes'}` : `${entry.votes} ${entry.votes === 1 ? 'vote' : 'votes'}`}
-                    data-testid={entry.callerVoted ? 'shortlist-voted' : undefined}
+                    data-testid={entry.callerVoted ? 'shortlist-voted-closed' : undefined}
                   >
                     <span aria-hidden="true">▲</span>
                     <span className="mt-0.5 font-display text-sm font-semibold tabular-nums">{entry.votes}</span>

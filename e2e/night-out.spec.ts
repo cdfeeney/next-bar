@@ -3350,28 +3350,68 @@ test.describe('S-07: the plan board as drawn', () => {
     await expect(page.getByTestId('night-out-lock')).toBeDisabled();
   });
 
-  test('4 (as it stands): a vote writes once; a row that holds your vote is held and writes nothing — single-transfer needs a migration', async ({
+  test('4: one vote that moves — voting on a second bar issues one call and the refreshed board holds ONE vote on it; tapping the held bar clears it', async ({
     page,
     context,
     baseURL,
   }) => {
-    const calls: unknown[] = [];
-    await openOwnerBoard(page, context, baseURL, {}, {
-      board: [
+    const votes: unknown[] = [];
+    const unvotes: unknown[] = [];
+    // The board the server hands back after each write: the vote MOVED, then cleared.
+    let phase: 'start' | 'moved' | 'cleared' = 'start';
+    const boards = {
+      start: [
         { bar_id: PDT, suggested_by_handle: 'sam', votes: 5, caller_voted: true },
         { bar_id: 'attaboy', suggested_by_handle: 'conor', votes: 1, caller_voted: false },
       ],
+      moved: [
+        { bar_id: PDT, suggested_by_handle: 'sam', votes: 4, caller_voted: false },
+        { bar_id: 'attaboy', suggested_by_handle: 'conor', votes: 2, caller_voted: true },
+      ],
+      cleared: [
+        { bar_id: PDT, suggested_by_handle: 'sam', votes: 4, caller_voted: false },
+        { bar_id: 'attaboy', suggested_by_handle: 'conor', votes: 1, caller_voted: false },
+      ],
+    };
+    test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
+    await context.addCookies([
+      { ...sessionCookie(SUPABASE_URL as string), url: baseURL as string },
+    ]);
+    await stubOwnerRpcs(page);
+    await page.route('**/rest/v1/rpc/get_night_out*', async (route) => {
+      const url = route.request().url();
+      if (url.includes('get_night_out_board')) return fulfillJson(200, boards[phase])(route);
+      return route.fallback();
     });
     await page.route('**/rest/v1/rpc/vote_night_out_bar*', async (route) => {
-      calls.push(route.request().postDataJSON());
+      votes.push(route.request().postDataJSON());
+      phase = 'moved';
       await fulfillJson(200, true)(route);
     });
+    await page.route('**/rest/v1/rpc/unvote_night_out_bar*', async (route) => {
+      unvotes.push(route.request().postDataJSON());
+      phase = 'cleared';
+      await fulfillJson(200, true)(route);
+    });
+    await page.goto(`/night-out/${TOKEN}`);
     const rows = page.getByTestId('shortlist-row');
+    await expect(rows.first()).toHaveAttribute('data-bar-id', PDT);
     await expect(rows.first().getByTestId('shortlist-voted')).toBeVisible();
-    await expect(rows.first().getByRole('button', { name: /^Vote for/ })).toHaveCount(0);
+
+    // Vote for the OTHER bar: one call, and the refreshed board holds exactly one vote — on it.
     await rows.nth(1).getByRole('button', { name: /^Vote for Attaboy/ }).click();
-    await expect.poll(() => calls.length).toBe(1);
-    expect(calls[0]).toEqual({ p_night_out: PLAN_ID, p_bar: 'attaboy' });
+    await expect.poll(() => votes.length).toBe(1);
+    expect(votes[0]).toEqual({ p_night_out: PLAN_ID, p_bar: 'attaboy' });
+    await expect(page.getByTestId('shortlist-voted')).toHaveCount(1);
+    await expect(page.getByTestId('shortlist-voted')).toHaveAttribute('aria-label', /^Your vote on Attaboy/);
+    await expect(page.getByTestId('shortlist-row').filter({ hasText: /your vote/i })).toHaveCount(1);
+
+    // Tap the held bar: one unvote call, no vote left.
+    await page.getByTestId('shortlist-voted').click();
+    await expect.poll(() => unvotes.length).toBe(1);
+    expect(unvotes[0]).toEqual({ p_night_out: PLAN_ID, p_bar: 'attaboy' });
+    await expect(page.getByTestId('shortlist-voted')).toHaveCount(0);
+    expect(votes.length, 'clearing never casts').toBe(1);
   });
 });
 
@@ -3413,7 +3453,8 @@ test.describe('R-03: wave-2 review follow-ups', () => {
     ]);
     const held = page.getByTestId('shortlist-row').first();
     await expect(held).toContainText(/your vote/i);
-    await expect(held.getByRole('img', { name: /^Your vote/ })).toBeVisible();
+    // Open plan (S-07b): the held control is a button named for what a tap does.
+    await expect(held.getByRole('button', { name: /^Your vote on/ })).toHaveAttribute('aria-pressed', 'true');
   });
 
   test('5: "Suggest another bar" is a picker — type a name, tap +, one suggest call; nothing matches says so', async ({

@@ -280,6 +280,24 @@ export async function voteNightOutBar(
   return !error && data === true;
 }
 
+/**
+ * S-07b (0079): clear the caller's own vote on a bar while voting is open.
+ * False when there was none, the plan is closed, or the caller is not a member
+ * — and false (never a throw) on a database that predates 0079.
+ */
+export async function unvoteNightOutBar(
+  supabase: SupabaseClient,
+  nightOutId: string,
+  barId: string,
+): Promise<boolean> {
+  if (!UUID_RE.test(nightOutId) || !BAR_ID_RE.test(barId)) return false;
+  const { data, error } = await supabase.rpc('unvote_night_out_bar', {
+    p_night_out: nightOutId,
+    p_bar: barId,
+  });
+  return !error && data === true;
+}
+
 type NightOutRow = {
   id: string;
   night: string;
