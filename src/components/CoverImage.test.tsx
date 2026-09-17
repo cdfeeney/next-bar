@@ -32,10 +32,13 @@ describe('CoverImage (S-06c) — a library photo', () => {
     expect(el.getAttribute('data-cover')).toBe('media');
     expect(el.getAttribute('data-cover-state')).toBe('ok');
     expect(screen.getByRole('img').getAttribute('src')).toBe('https://signed.example/cover.jpg');
-    expect(el.textContent).toMatch(/your photo/i);
+    // R-05a: a library cover is seen by every member, so it carries no "Your
+    // photo" chip (that "your" was true only for the owner). Its alt is neutral.
+    expect(el.textContent).not.toMatch(/your photo/i);
+    expect(screen.getByRole('img').getAttribute('alt')).toBe('Cover photo');
   });
 
-  test("loading is not failed, and the route's 404 is failed — the label stays either way", () => {
+  test("loading is not failed, and the route's 404 is failed — and a media cover shows no chip either way", () => {
     mediaState.current = { status: 'loading' };
     const { rerender } = render(<CoverImage cover={`media:${MEDIA_ID}`} />);
     expect(screen.getByTestId('cover-image').getAttribute('data-cover-state')).toBe('loading');
@@ -43,7 +46,10 @@ describe('CoverImage (S-06c) — a library photo', () => {
     mediaState.current = { status: 'gone' };
     rerender(<CoverImage cover={`media:${MEDIA_ID}`} showLabel />);
     expect(screen.getByTestId('cover-image').getAttribute('data-cover-state')).toBe('failed');
-    expect(screen.getByTestId('cover-image').textContent).toMatch(/your photo/i);
+    expect(screen.getByTestId('cover-image').textContent).not.toMatch(/your photo/i);
+    // A TEMPLATE keeps its label under the same flag.
+    rerender(<CoverImage cover="template:rooftop" showLabel />);
+    expect(screen.getByTestId('cover-image').textContent?.trim().length).toBeGreaterThan(0);
   });
 
   test('a transient unavailable is retried, not failed, and resolves when the route answers', async () => {

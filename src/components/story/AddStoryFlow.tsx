@@ -37,6 +37,7 @@ export default function AddStoryFlow({
   groups,
   groupsUnavailable = false,
   nightOut,
+  nightOutNote = null,
   onCancel,
   onPublish,
   onUndo,
@@ -53,6 +54,8 @@ export default function AddStoryFlow({
   groupsUnavailable?: boolean;
   /** Tonight's night out, or null when there is none. */
   nightOut: ComposerNightOut | null;
+  /** Why the Night Out row is held when there IS a plan but it cannot take a photo yet. */
+  nightOutNote?: string | null;
   onCancel: () => void;
   onPublish: (input: PublishInput) => Promise<PublishResult>;
   onUndo: (publishId: string) => Promise<{ ok: true } | { ok: false; message: string }>;
@@ -91,6 +94,7 @@ export default function AddStoryFlow({
       groups={groups}
       groupsUnavailable={groupsUnavailable}
       nightOut={nightOut}
+      nightOutNote={nightOutNote}
       onPublish={onPublish}
       onUndo={onUndo}
       onExit={onCancel}

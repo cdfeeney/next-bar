@@ -70,6 +70,15 @@ test.describe('E4.2/E4.5 recap home', () => {
       recap.getByRole('link', { name: /Rank last night/i }),
     ).toHaveAttribute('href', '/rankings');
 
+    // R-05a: the pins are the inert recap embed (SavedNightMap), not BarMap —
+    // one marker per stop, the Loved one highlighted, and no zoom control to
+    // misplace inside a 192px block.
+    const map = recap.getByTestId('recap-card-map');
+    await expect(map).toBeVisible();
+    await expect(map.locator('[data-stop]')).toHaveCount(2);
+    await expect(map.locator('[data-stop="loved"]')).toHaveCount(1);
+    await expect(map.locator('.leaflet-control-zoom')).toHaveCount(0);
+
     // The find-a-bar flow is still on the screen below (R5).
     await expect(
       page.getByRole('heading', { name: /Where are you\?/i }),

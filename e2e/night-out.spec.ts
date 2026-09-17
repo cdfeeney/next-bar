@@ -2200,7 +2200,7 @@ test.describe('S-08: the saved night recap', () => {
     context: BrowserContext,
     baseURL: string | undefined,
     bars: Array<{ bar_id: string; sort_order: number; rating: string | null }>,
-    opts: { photo?: boolean } = {},
+    opts: { photo?: boolean; barsFail?: boolean } = {},
   ): Promise<void> {
     test.skip(SUPABASE_URL === null, 'needs NEXT_PUBLIC_SUPABASE_URL for the auth cookie');
     await context.addCookies([{ ...sessionCookie(SUPABASE_URL as string), url: baseURL as string }]);
@@ -2222,12 +2222,39 @@ test.describe('S-08: the saved night recap', () => {
         },
       ]),
     );
-    await page.route('**/rest/v1/rpc/get_saved_night_bars*', fulfillJson(200, bars));
+    await page.route(
+      '**/rest/v1/rpc/get_saved_night_bars*',
+      opts.barsFail === true
+        ? fulfillJson(500, { message: 'stops read failed' })
+        : fulfillJson(200, bars),
+    );
     await page.goto(`/nights/${S8_SAVED}`);
     await expect(page.getByTestId('saved-night-open')).toBeVisible();
   }
 
+  // R-05a (carried from the S-08 panel): "couldn't read the stops" is its own
+  // state, distinct from a night with none.
+  test('a failed stops read says so, and shows no stop rows and no map', async ({ page, context, baseURL }) => {
+    await openRecap(page, context, baseURL, [], { barsFail: true });
+    await expect(page.getByTestId('saved-night-stops-failed')).toBeVisible();
+    await expect(page.getByTestId('saved-night-stop')).toHaveCount(0);
+    await expect(page.getByTestId('saved-night-map')).toHaveCount(0);
+    // The header and photos still render — the night is not "missing".
+    await expect(page.getByTestId('saved-night-photos')).toBeVisible();
+  });
+
   test('two stops in order with the right badge on each, and the headline names the Loved bar', async ({ page, context, baseURL }) => {
+    // R-05a: the photo-BEARING recap is console-clean too. openRecap
+    // deliberately 404s /api/media/*/url ("photos no longer available"), and the
+    // browser logs that as a resource error; exactly that one is excluded, so
+    // any other error still fails this test.
+    const consoleErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() !== 'error') return;
+      const text = msg.text();
+      if (/Failed to load resource.*404/.test(text) || /\/api\/media\/.*\/url/.test(text)) return;
+      consoleErrors.push(text);
+    });
     await openRecap(page, context, baseURL, [
       { bar_id: 'attaboy', sort_order: 1, rating: 'loved' },
       { bar_id: 'dead-rabbit', sort_order: 2, rating: 'pass' },
@@ -2255,6 +2282,7 @@ test.describe('S-08: the saved night recap', () => {
     await expect(markerIcons).toHaveCount(2);
     await expect(map.locator('.leaflet-marker-icon[tabindex="0"]')).toHaveCount(0);
     await expect(map.locator('.leaflet-marker-icon[role="button"]')).toHaveCount(0);
+    expect(consoleErrors, `console errors on /nights/[id]: ${consoleErrors.join(' | ')}`).toEqual([]);
   });
 
   // S-08c #2 (was S-08b acceptance #4): the recap + map render with no console

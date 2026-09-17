@@ -48,6 +48,7 @@ import {
   type GroupMessage,
 } from '@/lib/groups.server';
 import { reportContent } from '@/lib/moderation/reports';
+import { uploadImageThroughBoundary } from '@/lib/media/uploadClient';
 
 /** A mutual friend offered to the administrator's add control. */
 export type AddableFriend = {
@@ -263,34 +264,26 @@ export default function GroupThread({
    * boundary.
    */
   const onPickPhoto = async (file: File): Promise<void> => {
-    if (accessToken === null) {
+    if (accessToken === null || client === null) {
       setNotice('Sign in to send a photo.');
       return;
     }
     setBusy(true);
     setNotice(null);
     try {
-      const form = new FormData();
-      form.append('file', file);
-      const response = await fetch('/api/media/upload', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${accessToken}` },
-        body: form,
-      });
-      const payload = (await response.json().catch(() => null)) as
-        | { ok?: boolean; mediaId?: string }
-        | null;
-
-      if (!response.ok || payload?.ok !== true || typeof payload.mediaId !== 'string') {
+      // ONE upload path for the whole app (R-05a): the boundary client owns the
+      // request, the 413 read and the id parse; this component keeps its copy.
+      const uploaded = await uploadImageThroughBoundary(client, file);
+      if (uploaded.kind !== 'ok') {
         setNotice(
-          response.status === 413
+          uploaded.kind === 'too_large'
             ? 'That photo is too large.'
             : 'That photo could not be sent. Try again.',
         );
         return;
       }
 
-      const sent = await sendGroupMessage(client, groupId, null, payload.mediaId);
+      const sent = await sendGroupMessage(client, groupId, null, uploaded.mediaId);
       if (!sent.ok) {
         setNotice(sent.message);
         return;

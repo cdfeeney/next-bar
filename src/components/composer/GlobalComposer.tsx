@@ -55,6 +55,7 @@ export default function GlobalComposer({
   groups,
   groupsUnavailable = false,
   nightOut,
+  nightOutNote = null,
   defaultStoryAudience = 'friends',
   onPublish,
   onUndo,
@@ -78,6 +79,8 @@ export default function GlobalComposer({
   groupsUnavailable?: boolean;
   /** Tonight's night out, or null. */
   nightOut: ComposerNightOut | null;
+  /** Shown on the held Night Out row when a plan exists but cannot take a photo yet. */
+  nightOutNote?: string | null;
   /** The Account default the Story audience subrow is pre-filled from (V8-R-CMP-005). */
   defaultStoryAudience?: StoryAudienceChoice;
   onPublish: (input: PublishInput) => Promise<PublishResult>;
@@ -465,6 +468,7 @@ export default function GlobalComposer({
           // The row shows the CHOSEN plan while one is selected, so a replacement
           // cannot appear under the author's selection.
           nightOut={destinations.includes('night_out') ? selectedNightOut : nightOut}
+          nightOutNote={nightOutNote}
           nightOutEnded={
             destinations.includes('night_out') && live.undeliverable.includes('night_out')
           }

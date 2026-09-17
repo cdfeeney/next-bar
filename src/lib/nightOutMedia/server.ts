@@ -330,9 +330,9 @@ export async function fetchSavedNight(
   if (error || !Array.isArray(data)) return { kind: 'failed' };
   if (data.length === 0) return { kind: 'missing' };
 
-  // S-08a: the stops are their own owner-scoped read (0083). A failure or a
-  // pre-0083 database yields an empty list — the recap shows its header and
-  // photos without stop rows rather than failing the whole night.
+  // S-08a: the stops are their own owner-scoped read (0083). A pre-0083
+  // database yields an empty list (header + photos, no stop rows); a FAILED
+  // read yields null and the recap says so — neither fails the whole night.
   const bars = await fetchSavedNightBars(supabase, savedNightId);
 
   const rows = data as SavedNightDetailRow[];
@@ -371,16 +371,19 @@ const RATINGS: ReadonlySet<string> = new Set(['loved', 'liked', 'pass']);
 
 /**
  * S-08a: the ordered, rated stops of the caller's own saved night (0083).
- * Returns [] on any failure or a pre-0083 database — never throws, so a missing
- * snapshot degrades the recap to header + photos rather than failing it.
+ *
+ * "COULDN'T READ" IS NOT "NO STOPS" (R-05a, carried from the S-08 panel): a
+ * failed RPC returns NULL and the recap says the stops could not be loaded; an
+ * empty array is the genuine pre-0083 / no-snapshot answer and renders no stop
+ * rows. Never throws — a missing snapshot degrades the recap, never fails it.
  */
-async function fetchSavedNightBars(
+export async function fetchSavedNightBars(
   supabase: SupabaseClient,
   savedNightId: string,
 ): Promise<SavedNight['bars']> {
   try {
     const { data, error } = await supabase.rpc('get_saved_night_bars', { p_id: savedNightId });
-    if (error || !Array.isArray(data)) return [];
+    if (error || !Array.isArray(data)) return null;
     return (data as SavedNightBarRow[])
       .filter((row) => isNonEmptyString(row.bar_id))
       .map((row) => ({
@@ -392,6 +395,6 @@ async function fetchSavedNightBars(
       }))
       .sort((a, b) => a.sortOrder - b.sortOrder);
   } catch {
-    return [];
+    return null;
   }
 }

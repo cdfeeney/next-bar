@@ -121,17 +121,20 @@ function Recap({ night }: { night: import('@/lib/nightOutMedia').SavedNight }): 
   // stays the snapshot's own count.
   const catalog = useBars();
   const byId = useMemo(() => new Map(catalog.map((b) => [b.id, b])), [catalog]);
+  // null = the stops READ failed (R-05a); [] = a genuine pre-0083/no-snapshot night.
+  const stopsFailed = night.bars === null;
+  const snapshot = useMemo(() => night.bars ?? [], [night.bars]);
   const stops = useMemo(
     () =>
-      night.bars.flatMap((b) => {
+      snapshot.flatMap((b) => {
         const bar = byId.get(b.barId);
         return bar ? [{ bar, rating: b.rating }] : [];
       }),
-    [night.bars, byId],
+    [snapshot, byId],
   );
   const lovedName = stops.find((s) => s.rating === 'loved')?.bar.name ?? null;
-  const anyUnrated = night.bars.some((b) => b.rating === null);
-  const stopCount = night.bars.length;
+  const anyUnrated = snapshot.some((b) => b.rating === null);
+  const stopCount = snapshot.length;
 
   return (
     <article data-testid="saved-night-open">
@@ -151,6 +154,13 @@ function Recap({ night }: { night: import('@/lib/nightOutMedia').SavedNight }): 
         <p className="text-xl font-bold mt-3" data-testid="saved-night-headline">
           {stopCount === 1 ? 'One stop' : `${stopCount} stops`}
           {lovedName ? ` · you loved ${lovedName}` : ''}
+        </p>
+      ) : null}
+
+      {/* A failed stops read is said, never shown as "no stops" (R-05a). */}
+      {stopsFailed ? (
+        <p className="text-muted text-sm mt-3" role="status" data-testid="saved-night-stops-failed">
+          Couldn&apos;t load the stops for this night.
         </p>
       ) : null}
 

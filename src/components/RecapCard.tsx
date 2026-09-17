@@ -7,7 +7,11 @@ import BarVisualTile from '@/components/BarVisualTile';
 import RatingBadge from '@/components/RatingBadge';
 import ShareNightButton from '@/components/ShareNightButton';
 
-const BarMap = dynamic(() => import('@/components/BarMap'), { ssr: false });
+// R-05a: the inert embed built for the saved-night recap (S-08b), not BarMap —
+// BarMap fills a fixed box only in `fill` mode and that mode's control offset
+// (globals.css) is sized for a full-page map, so inside a 192px block its
+// controls mispositioned. SavedNightMap has no controls to misplace.
+const SavedNightMap = dynamic(() => import('@/components/SavedNightMap'), { ssr: false });
 
 type RecapCardProps = {
   recap: Recap;
@@ -70,13 +74,14 @@ export default function RecapCard({ recap }: RecapCardProps) {
         <ShareNightButton recap={recap} />
       </div>
 
-      <div className="h-48">
-        <BarMap
-          bars={recap.bars}
-          fitToBars
-          highlightIds={recap.loved ? [recap.loved.id] : []}
-        />
-      </div>
+      {recap.bars.length > 0 ? (
+        <div className="h-48" data-testid="recap-card-map">
+          <SavedNightMap
+            bars={recap.bars}
+            highlightIds={recap.loved ? [recap.loved.id] : []}
+          />
+        </div>
+      ) : null}
     </section>
   );
 }

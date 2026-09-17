@@ -157,10 +157,11 @@ export type SavedNight = {
   photos: ReadonlyArray<{ mediaId: string; storagePath: string }>;
   /**
    * S-08a: the ordered, rated stops snapshotted at archive time. Empty for a
-   * pre-0083 archive (none was captured) or when the stops read failed — the
-   * recap then shows its header and photos without stop rows, never a guess.
+   * pre-0083 archive (none was captured) — header and photos, no stop rows.
+   * NULL when the stops READ failed (R-05a): the recap then says it could not
+   * load the stops rather than showing a night with none.
    */
-  bars: ReadonlyArray<SavedNightBar>;
+  bars: ReadonlyArray<SavedNightBar> | null;
 };
 
 /**

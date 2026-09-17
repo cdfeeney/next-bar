@@ -8,7 +8,7 @@ import { deleteFeedPost, publishFeedPost } from '@/lib/feed.server';
 import { deleteGroupMessage, fetchMyGroups, sendGroupMessage } from '@/lib/groups.server';
 import { uploadImageThroughBoundary } from '@/lib/media/uploadClient';
 import { nycNightKey } from '@/lib/nightKey';
-import { addNightOutMedia } from '@/lib/nightOutMedia/server';
+import { addNightOutMedia, fetchNightOutMediaWindow } from '@/lib/nightOutMedia/server';
 import { getMyNightOuts, type MyNightOut } from '@/lib/nightOuts.server';
 import { getBrowserSupabase } from '@/lib/supabase/client';
 
@@ -28,10 +28,19 @@ import type { UseStories } from './storyStore';
 export function useAddStoryPublish(
   stories: Pick<UseStories, 'publish' | 'removeItem'>,
   youId: string | null,
+  /**
+   * True while the photo flow is OPEN. The targets are read when it opens —
+   * not at page mount — so a plan started on the Plans sub-tab or a group
+   * created in-session is offered, and visitors who never open the composer
+   * never pay for the reads (Fable, S-11 r3).
+   */
+  active: boolean,
 ): {
   groups: readonly ComposerGroup[];
   groupsUnavailable: boolean;
   nightOut: ComposerNightOut | null;
+  /** Why the Night Out row is held when `nightOut` is null for a reason other than "none". */
+  nightOutNote: string | null;
   publish: (input: PublishInput) => Promise<PublishResult>;
   undo: (publishId: string) => Promise<{ ok: true } | { ok: false; message: string }>;
 } {
@@ -40,16 +49,18 @@ export function useAddStoryPublish(
   /** A FAILED groups read is not "no groups": the Group row says which (Codex, r2). */
   const [groupsUnavailable, setGroupsUnavailable] = useState(false);
   const [nightOut, setNightOut] = useState<ComposerNightOut | null>(null);
+  const [nightOutNote, setNightOutNote] = useState<string | null>(null);
 
   useEffect(() => {
-    // ACCOUNT-SCOPED, so a sign-out or an account switch on a mounted page never
-    // offers the previous account's groups or plan as targets (Codex, round 1):
-    // the targets are dropped the moment the viewer changes and refilled only
-    // from the new account's own reads.
+    // ACCOUNT- AND OPEN-SCOPED: dropped the moment the viewer changes or the
+    // flow closes, refilled only from this account's reads on the next open.
+    // A sign-out or account switch on a mounted page therefore never offers
+    // the previous account's groups or plan as targets (Codex, round 1).
     setGroups([]);
     setGroupsUnavailable(false);
     setNightOut(null);
-    if (client === null || youId === null) return undefined;
+    setNightOutNote(null);
+    if (!active || client === null || youId === null) return undefined;
     let cancelled = false;
     void (async () => {
       const nightKey = nycNightKey();
@@ -65,12 +76,23 @@ export function useAddStoryPublish(
         // Not an empty list: the row is held and says the read failed.
         setGroupsUnavailable(true);
       }
-      setNightOut(tonightFrom(nights ?? [], nightKey) ?? owned);
+      const plan = tonightFrom(nights ?? [], nightKey) ?? owned;
+      if (plan === null) return;
+      // `add_night_out_media` refuses before the plan's media window opens
+      // (0068, night_out_scheduled_start), so the row is held with the opening
+      // time until then — asked of the SERVER, never the device clock.
+      const window = await fetchNightOutMediaWindow(client, plan.id);
+      if (cancelled) return;
+      if (window !== null && !window.isOpen && window.state === 'before') {
+        setNightOutNote(`${plan.label} · opens at ${formatNyTime(window.opensAt)}`);
+        return;
+      }
+      setNightOut(plan);
     })();
     return () => {
       cancelled = true;
     };
-  }, [client, youId]);
+  }, [client, youId, active]);
 
   const publish = useCallback(
     (input: PublishInput) =>
@@ -129,7 +151,20 @@ export function useAddStoryPublish(
     [client, stories],
   );
 
-  return { groups, groupsUnavailable, nightOut, publish, undo };
+  return { groups, groupsUnavailable, nightOut, nightOutNote, publish, undo };
+}
+
+/** "9:00 PM" in the plan's own zone — night outs are New York nights (D-C-39). */
+function formatNyTime(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(new Date(iso));
+  } catch {
+    return 'later tonight';
+  }
 }
 
 /**

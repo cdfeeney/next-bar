@@ -442,6 +442,12 @@ test.describe('Add to Story — signed in', () => {
     await page.getByTestId('composer-audience-search').fill(`@${CLAIRE.handle}`);
     await expect(page.getByTestId('composer-audience-person')).toHaveCount(1);
     await expect(page.getByTestId('composer-audience-person')).toHaveAttribute('data-profile', CLAIRE_ID);
+    // …and by NAME (R-05a: both dimensions, both pickers).
+    await page.getByTestId('composer-audience-search').fill('Dev');
+    await expect(page.getByTestId('composer-audience-person')).toHaveCount(1);
+    await expect(page.getByTestId('composer-audience-person')).toHaveAttribute('data-profile', DEV_ID);
+    await page.getByTestId('composer-audience-search').fill('');
+    await expect(page.getByTestId('composer-audience-person')).toHaveCount(2);
 
     // Dismiss with Custom still empty → back to Friends.
     await sheet.getByRole('button', { name: 'Close story audience' }).click();
@@ -509,6 +515,61 @@ test.describe('Add to Story — signed in', () => {
     await expect(page.getByTestId('feed-empty')).toHaveCount(0);
   });
 
+  // R-05a: composer targets are read when the flow OPENS, not at page mount, and
+  // the Night Out row honours the plan's media window (the server's answer).
+  test('composer targets load on open, and a plan whose photo window has not opened is held with the time', async ({
+    page,
+  }) => {
+    await stubStories(page, { following: [CLAIRE] });
+    let groupReads = 0;
+    let nightReads = 0;
+    await page.route('**/rest/v1/groups**', async (route) => {
+      groupReads += 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+    await page.route('**/rest/v1/rpc/get_my_night_outs**', async (route) => {
+      nightReads += 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+    // The owner read: RLS filtering is the server's; the stub answers the row.
+    await page.route('**/rest/v1/night_outs**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{ id: 'no-1', title: 'Friday at The Fox', night: '2026-09-16', status: 'open' }]),
+      });
+    });
+    await page.route('**/rest/v1/rpc/night_out_media_window**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            opens_at: '2026-09-17T01:00:00.000Z',
+            expires_at: '2026-09-17T09:00:00.000Z',
+            is_open: false,
+            state: 'before',
+          },
+        ]),
+      });
+    });
+
+    await page.goto('/friends');
+    await expect(page.getByTestId('social-subtabs')).toBeVisible();
+    // Nothing read yet: the composer is closed.
+    expect(groupReads).toBe(0);
+    expect(nightReads).toBe(0);
+
+    await captureAndApprove(page);
+    await page.getByTestId('composer-next').click();
+    const row = page.getByTestId('composer-destination-night_out');
+    // Held, and it SAYS when — 01:00Z is 9:00 PM in New York.
+    await expect(row).toContainText('Friday at The Fox · opens at 9:00 PM');
+    await expect(row).toBeDisabled();
+    expect(groupReads).toBeGreaterThan(0);
+    expect(nightReads).toBeGreaterThan(0);
+  });
+
   test('Tag friends: the search field narrows the rows by name', async ({ page }) => {
     await stubStories(page, { following: [CLAIRE, DEV] });
     await page.goto('/friends');
@@ -518,6 +579,10 @@ test.describe('Add to Story — signed in', () => {
     await page.getByTestId('story-people-search').fill('Dev');
     await expect(page.getByTestId('story-people-row')).toHaveCount(1);
     await expect(page.getByTestId('story-people-row')).toHaveAttribute('data-profile', DEV_ID);
+    // …and by @HANDLE (R-05a: both dimensions, both pickers).
+    await page.getByTestId('story-people-search').fill(`@${CLAIRE.handle}`);
+    await expect(page.getByTestId('story-people-row')).toHaveCount(1);
+    await expect(page.getByTestId('story-people-row')).toHaveAttribute('data-profile', CLAIRE_ID);
   });
 
   test('the page under the capture and compose dialogs does not scroll', async ({

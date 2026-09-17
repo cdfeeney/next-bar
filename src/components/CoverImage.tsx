@@ -73,7 +73,10 @@ export default function CoverImage({
   const src = isMedia
     ? media.status === 'ready' ? media.url : null
     : source.template.src;
-  const label = isMedia ? 'Your photo' : source.template.label;
+  // A library cover is shown to EVERY viewer of the plan, so a chip reading
+  // "Your photo" was wrong for everyone but the owner (S-06c panel, R-05a).
+  // Templates keep their label; a media cover carries none.
+  const label = isMedia ? null : source.template.label;
   const state = failed ? 'failed' : src === null ? 'loading' : 'ok';
   return (
     <div
@@ -88,12 +91,12 @@ export default function CoverImage({
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={src}
-          alt={`${label} cover`}
+          alt={label === null ? 'Cover photo' : `${label} cover`}
           className="absolute inset-0 h-full w-full object-cover"
           onError={() => setFailedFor(cover ?? null)}
         />
       ) : null}
-      {showLabel ? (
+      {showLabel && label !== null ? (
         <span className="absolute bottom-3 left-3 rounded-full bg-text/85 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-bg">
           {label}
         </span>

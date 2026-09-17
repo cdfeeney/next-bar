@@ -16,6 +16,7 @@ import {
   fetchNightOutMedia,
   fetchNightOutMediaWindow,
 } from '@/lib/nightOutMedia/server';
+import { uploadImageThroughBoundary } from '@/lib/media/uploadClient';
 
 /**
  * A second past the boundary, so the server has unambiguously crossed it by its
@@ -381,35 +382,14 @@ export default function NightOutMedia({
       setBusy(true);
       setNotice(null);
       try {
-        const { data } = await supabase.auth.getSession();
-        const token = data.session?.access_token;
-        if (!token) {
-          setNotice("That didn't save — try again in a moment.");
-          return;
-        }
-
-        const body = new FormData();
-        body.append('file', file);
-        const response = await fetch('/api/media/upload', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-          body,
-        });
-        const uploaded = response.ok
-          ? ((await response.json().catch(() => null)) as
-              | { ok?: unknown; mediaId?: unknown }
-              | null)
-          : null;
-        if (!uploaded || uploaded.ok !== true || typeof uploaded.mediaId !== 'string') {
-          // A 413 IS NOT TRANSIENT, so "try again in a moment" is the one piece
-          // of advice guaranteed not to work. The platform caps the request
-          // body before this app's route runs — measured against production
-          // 2026-09-03: 3.70MB -> 200, 4.73MB -> 413
-          // FUNCTION_PAYLOAD_TOO_LARGE from the edge — and that refusal arrives
-          // as PLAIN TEXT, so the parse above cannot be what detects it. The
-          // status is. `GroupThread.onPickPhoto` already reads it this way.
+        // ONE upload path for the whole app (R-05a): `uploadImageThroughBoundary`
+        // owns the token, the request and the 413 read. A 413 IS NOT TRANSIENT
+        // (the platform caps the body before this app's route runs — measured
+        // 2026-09-03: 3.70MB -> 200, 4.73MB -> 413), so its advice differs.
+        const uploaded = await uploadImageThroughBoundary(supabase, file);
+        if (uploaded.kind !== 'ok') {
           setNotice(
-            response.status === 413
+            uploaded.kind === 'too_large'
               ? 'That photo is too large to upload. Try a smaller one.'
               : "That photo didn't upload — try again in a moment.",
           );

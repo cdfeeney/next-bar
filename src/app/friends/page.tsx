@@ -79,7 +79,7 @@ export default function SocialPage(): JSX.Element {
   // S-11: the photo flow publishes to Feed / Story / Night Out / Group in one
   // call; this binds that contract to the real backends and loads the two
   // targets the Destinations screen names (your groups, tonight's plan).
-  const composer = useAddStoryPublish(stories, youId);
+  const composer = useAddStoryPublish(stories, youId, addingStory);
   // FOUNDER DECISION 2026-08-24: the rail's pin badge reads PRESENCE, not suggestions.
   // `usePinnedHandles` now returns presence state rather than a bare id list, and a "pin"
   // is a presence row that names a bar — a status without a place is not a pin.
@@ -305,6 +305,7 @@ export default function SocialPage(): JSX.Element {
           groups={composer.groups}
           groupsUnavailable={composer.groupsUnavailable}
           nightOut={composer.nightOut}
+          nightOutNote={composer.nightOutNote}
           onCancel={() => setAddingStory(false)}
           onPublish={composer.publish}
           onUndo={composer.undo}

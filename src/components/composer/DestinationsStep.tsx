@@ -43,6 +43,7 @@ export default function DestinationsStep({
   selectedGroupIds,
   groupsOpen,
   nightOut,
+  nightOutNote = null,
   nightOutEnded = false,
   storyAudience,
   storyRecipientCount,
@@ -77,6 +78,12 @@ export default function DestinationsStep({
    * otherwise tonight's. The row states which (V8-R-CMP-006).
    */
   nightOut: ComposerNightOut | null;
+  /**
+   * There IS a plan tonight but it cannot take a photo yet (its media window
+   * has not opened); the row is held and says when. Null = the plain "No
+   * night out tonight" case.
+   */
+  nightOutNote?: string | null;
   /** The chosen night out is no longer the live one, so it can no longer receive. */
   nightOutEnded?: boolean;
   storyAudience: StoryAudienceChoice;
@@ -245,7 +252,7 @@ export default function DestinationsStep({
             hint={
               retiredHint('night_out')
               ?? (nightOut === null
-                ? 'No night out tonight'
+                ? (nightOutNote ?? 'No night out tonight')
                 : nightOutEnded
                   ? `${nightOut.label} has ended · turn this off to share`
                   : `${nightOut.label} · 24 hours from the start`)
