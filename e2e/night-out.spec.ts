@@ -2246,14 +2246,14 @@ test.describe('S-08: the saved night recap', () => {
   test('two stops in order with the right badge on each, and the headline names the Loved bar', async ({ page, context, baseURL }) => {
     // R-05a: the photo-BEARING recap is console-clean too. openRecap
     // deliberately 404s /api/media/*/url ("photos no longer available"), and the
-    // browser logs that as a resource error; exactly that one is excluded, so
-    // any other error still fails this test.
+    // browser logs that as a resource error whose TEXT carries no URL — the URL
+    // is in msg.location().url. Exactly that URL is excluded (R-05a2, both
+    // lanes), so any other error — another 404 included — still fails this test.
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {
       if (msg.type() !== 'error') return;
-      const text = msg.text();
-      if (/Failed to load resource.*404/.test(text) || /\/api\/media\/.*\/url/.test(text)) return;
-      consoleErrors.push(text);
+      if (/\/api\/media\/[^/]+\/url/.test(msg.location().url ?? '')) return;
+      consoleErrors.push(`${msg.text()} @ ${msg.location().url ?? ''}`);
     });
     await openRecap(page, context, baseURL, [
       { bar_id: 'attaboy', sort_order: 1, rating: 'loved' },

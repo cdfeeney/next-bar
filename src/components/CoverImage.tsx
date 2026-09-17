@@ -22,10 +22,12 @@ const COVER_RETRY_BASE_MS = 400;
  * `media_read_window` as the caller — never off Storage.
  *
  * A FAILED IMAGE LOAD IS NOT AN EMPTY COVER: the states stay apart, as the
- * media components already do. On load failure the picture is dropped and the
- * label stays on the chip, so the owner still sees which cover the plan
- * carries; `data-cover-state` says which it is: `ok`, `failed`, or — for a
- * photo whose URL has not resolved yet — `loading`.
+ * media components already do. On load failure the picture is dropped; a
+ * TEMPLATE keeps its label on the chip, so the owner still sees which cover
+ * the plan carries, while a library photo carries no chip at all (it is seen
+ * by every member, so "Your photo" was wrong for all but one — R-05a) and
+ * shows its failed state by `data-cover-state` alone: `ok`, `failed`, or — for
+ * a photo whose URL has not resolved yet — `loading`.
  */
 export default function CoverImage({
   cover,

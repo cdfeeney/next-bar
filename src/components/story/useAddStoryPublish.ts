@@ -78,16 +78,25 @@ export function useAddStoryPublish(
       }
       const plan = tonightFrom(nights ?? [], nightKey) ?? owned;
       if (plan === null) return;
-      // `add_night_out_media` refuses before the plan's media window opens
-      // (0068, night_out_scheduled_start), so the row is held with the opening
-      // time until then — asked of the SERVER, never the device clock.
+      // `add_night_out_media` accepts a photo only while the plan's media
+      // window is OPEN (0068), so the row is offered only on the server's own
+      // "open" answer and otherwise held IN WORDS — never the device clock, and
+      // never a guess: a window we could not read is not an open one (R-05a2).
       const window = await fetchNightOutMediaWindow(client, plan.id);
       if (cancelled) return;
-      if (window !== null && !window.isOpen && window.state === 'before') {
-        setNightOutNote(`${plan.label} · opens at ${formatNyTime(window.opensAt)}`);
+      if (window === null) {
+        setNightOutNote(`${plan.label} · couldn't check this night's photo window`);
         return;
       }
-      setNightOut(plan);
+      if (window.isOpen) {
+        setNightOut(plan);
+        return;
+      }
+      setNightOutNote(
+        window.state === 'before'
+          ? `${plan.label} · opens at ${formatNyTime(window.opensAt)}`
+          : `${plan.label} · this night's photo window has closed`,
+      );
     })();
     return () => {
       cancelled = true;

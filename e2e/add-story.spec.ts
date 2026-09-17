@@ -540,6 +540,8 @@ test.describe('Add to Story — signed in', () => {
         body: JSON.stringify([{ id: '0f3a1b2c-4d5e-4f60-8a71-92b3c4d5e6f7', title: 'Friday at The Fox', night: '2026-09-16', status: 'open' }]),
       });
     });
+    // Switchable, so the same page can prove the row is re-read on each open.
+    const windowRow: { is_open: boolean; state: string } = { is_open: false, state: 'before' };
     await page.route('**/rest/v1/rpc/night_out_media_window**', async (route) => {
       await route.fulfill({
         status: 200,
@@ -548,8 +550,8 @@ test.describe('Add to Story — signed in', () => {
           {
             opens_at: '2026-09-17T01:00:00.000Z',
             expires_at: '2026-09-17T09:00:00.000Z',
-            is_open: false,
-            state: 'before',
+            is_open: windowRow.is_open,
+            state: windowRow.state,
           },
         ]),
       });
@@ -569,6 +571,31 @@ test.describe('Add to Story — signed in', () => {
     await expect(row).toBeDisabled();
     expect(groupReads).toBeGreaterThan(0);
     expect(nightReads).toBeGreaterThan(0);
+    const readsAfterFirstOpen = nightReads;
+
+    // A closed window is held too, in words (R-05a2).
+    windowRow.is_open = false;
+    windowRow.state = 'closed';
+    await page.getByTestId('composer-destinations-exit').click();
+    await expect(page.getByTestId('composer-destinations')).toHaveCount(0);
+    await captureAndApprove(page);
+    await page.getByTestId('composer-next').click();
+    await expect(row).toContainText("this night's photo window has closed");
+    await expect(row).toBeDisabled();
+
+    // Reopen with the window OPEN: the targets are re-read on THIS open (not
+    // cached from the first), and the row is selectable and names the plan.
+    windowRow.is_open = true;
+    windowRow.state = 'open';
+    await page.getByTestId('composer-destinations-exit').click();
+    await expect(page.getByTestId('composer-destinations')).toHaveCount(0);
+    await captureAndApprove(page);
+    await page.getByTestId('composer-next').click();
+    await expect(row).toBeEnabled();
+    await expect(row).toContainText('Friday at The Fox · 24 hours from the start');
+    expect(nightReads).toBeGreaterThan(readsAfterFirstOpen);
+    await row.click();
+    await expect(page.getByTestId('composer-share')).toHaveText('Share to Night Out');
   });
 
   test('Tag friends: the search field narrows the rows by name', async ({ page }) => {
