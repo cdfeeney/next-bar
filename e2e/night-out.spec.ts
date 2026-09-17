@@ -3331,7 +3331,10 @@ test.describe('the Start a Night Out form (V8-R-NO-002/003/005)', () => {
       const tileImage = page.getByTestId('cover-tile-image');
       await expect(tileImage).toHaveAttribute('data-cover', 'media');
       await expect(tileImage).toHaveAttribute('data-cover-state', 'ok');
-      await expect(tileImage).toContainText(/your photo/i);
+      // R-05a: a library cover is seen by every member, so it carries no
+      // "Your photo" chip; the image's alt is neutral.
+      await expect(tileImage).not.toContainText(/your photo/i);
+      await expect(tileImage.getByRole('img')).toHaveAttribute('alt', 'Cover photo');
       expect(urlReads[0]).toContain(`/api/media/${MEDIA_ID}/url`);
 
       await page.getByTestId('create-night-out').click();

@@ -532,11 +532,12 @@ test.describe('Add to Story — signed in', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
     });
     // The owner read: RLS filtering is the server's; the stub answers the row.
+    // A REAL uuid: the window helper refuses anything else before it asks.
     await page.route('**/rest/v1/night_outs**', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify([{ id: 'no-1', title: 'Friday at The Fox', night: '2026-09-16', status: 'open' }]),
+        body: JSON.stringify([{ id: '0f3a1b2c-4d5e-4f60-8a71-92b3c4d5e6f7', title: 'Friday at The Fox', night: '2026-09-16', status: 'open' }]),
       });
     });
     await page.route('**/rest/v1/rpc/night_out_media_window**', async (route) => {
