@@ -72,9 +72,21 @@ type GooglePlacePhotoProps = {
    * surface breakdown cannot say which migration step caused a bill spike.
    */
   surface?: string;
+  /** Lightbox only: also ask the widget for its open-now line (same one request). */
+  openNowStatus?: boolean;
 };
 
-type Status = 'pending' | 'ready' | 'unavailable';
+/**
+ * 'late' = a load deadline passed while the SDK or widget was still on its
+ * way. The fallback shows, but the host STAYS MOUNTED (hidden) and the
+ * pending load keeps running: on a phone the first band's cards routinely
+ * outlast MAX_LOAD_MS while the Maps SDK downloads behind the catalog and
+ * travel fetches, and giving up for good there is exactly why the owner saw
+ * no photos on Walkable and photos on the band tapped ten seconds later
+ * (staging, 2026-09-18, reproduced throttled at 750 kbps). 'unavailable' is
+ * the hard no: no key, flag off, empty placeId, SDK refused.
+ */
+type Status = 'pending' | 'ready' | 'unavailable' | 'late';
 
 export default function GooglePlacePhoto({
   placeId,
@@ -83,6 +95,7 @@ export default function GooglePlacePhoto({
   fallback,
   onBillableRequest,
   surface,
+  openNowStatus = false,
 }: GooglePlacePhotoProps) {
   const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
   const builtRef = useRef(false);
@@ -101,6 +114,7 @@ export default function GooglePlacePhoto({
     placeId: string;
     allowed: boolean;
     surface: string | undefined;
+    openNowStatus: boolean;
   } | null>(null);
   const [status, setStatus] = useState<Status>('pending');
 
@@ -135,9 +149,10 @@ export default function GooglePlacePhoto({
       prev === null ||
       prev.placeId !== placeId ||
       prev.allowed !== allowed ||
-      prev.surface !== surface
+      prev.surface !== surface ||
+      prev.openNowStatus !== openNowStatus
     ) {
-      inputsRef.current = { placeId, allowed, surface };
+      inputsRef.current = { placeId, allowed, surface, openNowStatus };
       builtRef.current = false;
       setStatus('pending');
       hostEl?.replaceChildren();
@@ -173,29 +188,18 @@ export default function GooglePlacePhoto({
 
     let cancelled = false;
     /**
-     * Latches once a timeout has given up on this attempt.
-     *
-     * `cancelled` is set ONLY by effect cleanup, so nothing used to mark an
-     * attempt abandoned. Two ways that stranded the card (santa: Claude/FABLE
-     * H-1):
-     *
-     *  - A late `gmp-load`. The widget is appended, the 4s budget expires and
-     *    the fallback renders — then Google's element, still alive in the
-     *    listener closure, finishes at 5-10s and fires. The listener saw
-     *    `cancelled === false` and set 'ready', which re-rendered an EMPTY
-     *    host: zero children, zero height. On a google-live card that is a
-     *    nameless card with no Maps action, because both are suppressed
-     *    outside the fallback — the exact collapse criterion 4 forbids,
-     *    replacing a working fallback.
-     *  - A late build. If the flag check plus the SDK load together outlast
-     *    MAX_LOAD_MS, the first timer already rendered the fallback and
-     *    unmounted the host, but `build()` only checked `cancelled`, so it
-     *    appended to a DETACHED node and still called `markRequested` +
-     *    `onBillableRequest` — billing telemetry recording a creation that
-     *    could never render.
+     * There is deliberately no "gave up" latch any more. A deadline flips the
+     * card to 'late' (fallback visible, host kept mounted and hidden) and the
+     * attempt carries on: a late SDK still builds the widget, a late
+     * `gmp-load` still reveals it. The old latch turned every slow first
+     * paint into a permanent glyph, and the host stayed attached the whole
+     * time, so a late widget now lands in a real box, never a detached node.
+     * `cancelled` (effect cleanup) is still the only abandonment.
      */
-    let gaveUp = false;
     let timer: number | undefined;
+    const late = () => {
+      if (!cancelled) setStatus((s) => (s === 'ready' ? s : 'late'));
+    };
 
     const build = async () => {
       // StrictMode double-invokes effects in development. Without this guard
@@ -211,11 +215,7 @@ export default function GooglePlacePhoto({
       // too, but a component must not depend on a collaborator's internal
       // timing for its own liveness: whatever happens below, this guarantees the
       // user sees something. (santa-loop round 3.)
-      timer = window.setTimeout(() => {
-        if (cancelled) return;
-        gaveUp = true;
-        setStatus('unavailable');
-      }, MAX_LOAD_MS);
+      timer = window.setTimeout(late, MAX_LOAD_MS);
 
       // Server permission gate — consulted per widget CREATION, before the
       // SDK is even loaded. Fail-closed: unreachable flags mean no request.
@@ -223,7 +223,7 @@ export default function GooglePlacePhoto({
       // a new deployment); the immediate spend stop is the Google-side
       // quota cap, not this flag. See docs/GOOGLE-MEDIA-RUNBOOK.md.
       const runtimeOk = await isRuntimeGoogleMediaEnabled();
-      if (cancelled || gaveUp) return;
+      if (cancelled) return;
       if (!runtimeOk) {
         window.clearTimeout(timer);
         setStatus('unavailable');
@@ -231,7 +231,7 @@ export default function GooglePlacePhoto({
       }
 
       const ok = await loadPlacesUiKit();
-      if (cancelled || gaveUp) return;
+      if (cancelled) return;
       if (!ok) {
         window.clearTimeout(timer);
         setStatus('unavailable');
@@ -262,13 +262,16 @@ export default function GooglePlacePhoto({
       attribution.setAttribute('light-scheme-color', 'gray');
       attribution.setAttribute('dark-scheme-color', 'white');
 
+      if (openNowStatus) {
+        config.append(document.createElement('gmp-place-open-now-status'));
+      }
       config.append(media, attribution);
       details.append(request, config);
 
       details.addEventListener('gmp-load', () => {
-        // gaveUp: a widget that arrives after the fallback already rendered
-        // must NOT flip the card back to an empty host.
-        if (cancelled || gaveUp) return;
+        // A late load is still a load: the widget has content, so it replaces
+        // the fallback whenever it lands.
+        if (cancelled) return;
         window.clearTimeout(timer);
         setStatus('ready');
       });
@@ -276,11 +279,7 @@ export default function GooglePlacePhoto({
       // Hand the budget over from the load phase to the widget phase: the
       // pre-await timer above has done its job once we get here.
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        if (cancelled) return;
-        gaveUp = true;
-        setStatus('unavailable');
-      }, WIDGET_LOAD_TIMEOUT_MS);
+      timer = window.setTimeout(late, WIDGET_LOAD_TIMEOUT_MS);
 
       // Appending is the billable moment — record it here and nowhere else.
       //
@@ -294,7 +293,7 @@ export default function GooglePlacePhoto({
       // below are the one place money is spent, and a future refactor that
       // introduces an await above would silently start billing for widgets
       // that were already abandoned. (santa: DeepSeek round 3, Q3.)
-      if (cancelled || gaveUp) return;
+      if (cancelled) return;
 
       host.appendChild(details);
       markRequested(placeId, surface);
@@ -342,15 +341,20 @@ export default function GooglePlacePhoto({
     // — see the stuck-'pending' bug documented on onBillableRequestRef above.
     // `surface` is static per callsite; if it ever genuinely changed, the
     // widget belongs to a different billing context and SHOULD rebuild.
-  }, [placeId, allowed, surface, hostEl]);
+  }, [placeId, allowed, surface, openNowStatus, hostEl]);
 
   if (status === 'unavailable') return <>{fallback}</>;
 
+  // 'late': the fallback is what the user sees, but the host stays in the
+  // tree (hidden) so the attempt in flight has somewhere real to land.
   return (
+    <>
+    {status === 'late' ? fallback : null}
     <div
       ref={setHostEl}
       data-testid="google-place-photo"
       data-status={status}
+      hidden={status === 'late'}
       // NEVER clip, and never impose a fixed height on a loaded widget.
       //
       // This used to be `aspect-[21/9] overflow-hidden`, which reserved a
@@ -390,5 +394,6 @@ export default function GooglePlacePhoto({
         .filter(Boolean)
         .join(' ')}
     />
+    </>
   );
 }

@@ -275,6 +275,7 @@ export default function BarLightbox({
             <GooglePlacePhotoLazy
               placeId={media.placeId}
               surface="bar-lightbox"
+              openNowStatus
               fallback={(
                 <div
                   className="relative w-full aspect-[21/9] rounded-3xl flex items-center justify-center"

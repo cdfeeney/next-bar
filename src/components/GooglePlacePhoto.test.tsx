@@ -170,6 +170,40 @@ describe('re-render churn does not strand the widget (regression, Codex 0f614b8)
     }
   });
 
+  test('an SDK that lands after the deadline still builds the widget (T-01a)', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveSdk: (ok: boolean) => void = () => {};
+      vi.doMock('@/lib/placesUiKit', async (orig) => ({
+        ...(await orig<typeof import('@/lib/placesUiKit')>()),
+        isPlacesUiKitConfigured: () => true,
+        isRuntimeGoogleMediaEnabled: async () => true,
+        loadPlacesUiKit: () => new Promise<boolean>((resolve) => { resolveSdk = resolve; }),
+      }));
+      vi.resetModules();
+      const { default: Fresh } = await import('./GooglePlacePhoto');
+      const { MAX_LOAD_MS: MAX } = await import('@/lib/placesUiKit');
+      const billed: string[] = [];
+
+      render(<Fresh placeId="ChIJslow" fallback={FALLBACK} onBillableRequest={(id) => billed.push(id)} />);
+
+      // The phone case: the SDK is still downloading when the deadline passes.
+      await vi.advanceTimersByTimeAsync(MAX + 100);
+      expect(screen.getByTestId('glyph-fallback')).toBeTruthy();
+      const host = screen.getByTestId('google-place-photo');
+      expect(host.hidden).toBe(true);
+      expect(billed).toEqual([]);
+
+      // It lands later: the widget is built ONCE into the kept host.
+      resolveSdk(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(host.querySelector('gmp-place-details-compact')).not.toBeNull();
+      expect(billed).toEqual(['ChIJslow']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('never strands the user on an empty box: it resolves to the fallback', async () => {
     vi.useFakeTimers();
     try {

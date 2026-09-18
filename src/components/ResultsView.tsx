@@ -17,7 +17,7 @@ import { NEIGHBORHOOD_CENTROIDS, OPENS_SOON_WINDOW_MIN } from '@/lib/constants';
 import { displayHood } from '@/lib/hoodDisplay';
 import { useRatings } from '@/hooks/useRatings';
 import { useTravelRoutes } from '@/hooks/useTravelRoutes';
-import { matchesTravelBand, ROUTE_CANDIDATE_CAP, ROUTE_RESULT_CAP, type TravelBand } from '@/lib/travelTime';
+import { matchesTravelBand, ROUTE_CANDIDATE_CAP, ROUTE_RESULT_CAP, WALKABLE_FLOOR_MILES, type TravelBand } from '@/lib/travelTime';
 import { RADIUS_CAB, RADIUS_WALK } from '@/lib/constants';
 import ResultCard from '@/components/ResultCard';
 
@@ -136,9 +136,20 @@ export default function ResultsView({
         preferredNeighborhoods,
         minMilesExclusive: null,
         maxMiles: null,
-        bars: pool.filter(b => band === 'nearby' || (band === 'anywhere'
-          ? haversineMiles(userCoords, b) > RADIUS_CAB
-          : haversineMiles(userCoords, b) <= RADIUS_CAB)),
+        // The cab band's 15 route checks must not be spent on bars the walk
+        // band already owns: from a dense origin, taste order handed the cab
+        // search fifteen 3-minute walks and the API rightly confirmed none
+        // (staging 2026-09-18, "Worth a cab" rendered nothing). Bars inside
+        // the walkable floor can never be a cab result, so skip them here.
+        // ponytail: a bar inside the floor but >15 min on foot (rivers, one-way
+        // grids) is skipped too; a per-bar walking check would recover it.
+        bars: pool.filter(b => {
+          if (band === 'nearby') return true;
+          const miles = haversineMiles(userCoords, b);
+          if (band === 'anywhere') return miles > RADIUS_CAB;
+          if (band === 'cab') return miles > WALKABLE_FLOOR_MILES && miles <= RADIUS_CAB;
+          return miles <= RADIUS_CAB;
+        }),
         distanceBands: nearbyCandidates,
         excludeIds: effectiveExcludeIds,
         maxResults: pool.length,

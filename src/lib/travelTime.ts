@@ -20,6 +20,9 @@ export type TravelSearch = {
 export const WALKABLE_SECONDS = 900;
 export const ROUTE_CANDIDATE_CAP = 15;
 export const ROUTE_RESULT_CAP = 5;
+/** ORS foot-walking moves at 5 km/h; no bar farther than this straight-line can be a WALKABLE_SECONDS walk. */
+export const WALKING_METERS_PER_SECOND = 5000 / 3600;
+export const WALKABLE_FLOOR_MILES = (WALKABLE_SECONDS * WALKING_METERS_PER_SECOND) / 1609.344;
 
 export function isRouteEstimate(value: unknown): value is RouteEstimate {
   if (!value || typeof value !== 'object') return false;

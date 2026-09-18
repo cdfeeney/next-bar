@@ -41,7 +41,11 @@ it('requires route confirmation for inner bands and excludes nearer bars from An
   rerender(view(RADIUS_CAB));
   const cab = shown();
   expect(cab).toEqual([]);
-  expect(sentIds()).toContain('near-0');
+  // The cab search never spends a route check on a bar the walk band owns:
+  // near-0 (0.05 mi) is inside the walkable floor, near-19 (1.0 mi) is not.
+  expect(sentIds()).not.toContain('near-0');
+  expect(sentIds()).toContain('near-19');
+  expect(sentIds()).toContain('cab-0');
   expect(sentIds().every((id) => !id.startsWith('far-'))).toBe(true);
 
   rerender(view(null));

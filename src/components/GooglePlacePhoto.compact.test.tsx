@@ -49,6 +49,16 @@ async function mountWidget(): Promise<HTMLElement> {
 }
 
 describe('compact element construction', () => {
+  test('openNowStatus adds the open-now line to the same single request (T-01a lightbox)', async () => {
+    render(<GooglePlacePhoto placeId="ChIJhours" surface="bar-lightbox" fallback={FALLBACK} openNowStatus />);
+    const host = await vi.waitFor(() => screen.getByTestId('google-place-photo'));
+    await vi.waitFor(() => expect(host.querySelector('gmp-place-details-compact')).not.toBeNull());
+    const config = host.querySelector('gmp-place-content-config');
+    expect(config?.querySelector('gmp-place-open-now-status')).not.toBeNull();
+    expect(config?.querySelector('gmp-place-media')).not.toBeNull();
+    expect(billableEventCountForSurface('bar-lightbox')).toBe(1);
+  });
+
   test('creates gmp-place-details-compact, never the full details element', async () => {
     const host = await mountWidget();
     expect(host.querySelector('gmp-place-details-compact')).not.toBeNull();
@@ -93,8 +103,8 @@ describe('compact element construction', () => {
  * suppressed outside the fallback, so that is a nameless card with no Maps
  * action — replacing a perfectly good fallback. (santa: Claude/FABLE H-1.)
  */
-describe('a late widget must not un-do the fallback', () => {
-  test('a gmp-load arriving after the timeout leaves the fallback in place', async () => {
+describe('a late widget replaces the fallback when it lands', () => {
+  test('a gmp-load arriving after the timeout reveals the widget (T-01a)', async () => {
     vi.useFakeTimers();
     try {
       render(
@@ -122,21 +132,27 @@ describe('a late widget must not un-do the fallback', () => {
       // Batched into one act(), `cancelled` is still false and `gaveUp` is
       // the ONLY guard standing between a late widget and a resurrected,
       // empty host.
+      // The deadline passes first: fallback visible, host kept (hidden).
       act(() => {
         vi.advanceTimersByTime(WIDGET_LOAD_TIMEOUT_MS + 1_000);
+      });
+      expect(screen.getByTestId('glyph-fallback')).toBeTruthy();
+      expect(host.hidden).toBe(true);
+      expect(host.getAttribute('data-status')).toBe('late');
+
+      // Google's late answer lands in that SAME host (never rebuilt, never
+      // re-billed): the widget shows, the fallback goes.
+      act(() => {
         compact.dispatchEvent(new Event('gmp-load'));
       });
+      expect(screen.queryByTestId('glyph-fallback')).toBeNull();
+      expect(host.hidden).toBe(false);
+      expect(host.getAttribute('data-status')).toBe('ready');
+      expect(host.querySelector('gmp-place-details-compact')).toBe(compact);
+      expect(billableEventCountForSurface('result-card')).toBe(1);
 
-      // The fallback STANDS. Without the latch, the listener's
-      // setStatus('ready') lands after the timeout's setStatus('unavailable')
-      // and wins, re-rendering a host with no children and no height.
-      expect(screen.getByTestId('glyph-fallback')).toBeTruthy();
-      expect(screen.queryByTestId('google-place-photo')).toBeNull();
-
-      // And it still stands once everything else settles.
       await vi.advanceTimersByTimeAsync(50);
-      expect(screen.getByTestId('glyph-fallback')).toBeTruthy();
-      expect(screen.queryByTestId('google-place-photo')).toBeNull();
+      expect(screen.queryByTestId('glyph-fallback')).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -163,10 +179,10 @@ describe('a new placeId after a fallback still builds', () => {
       );
       await vi.waitFor(() => expect(screen.getByTestId('google-place-photo')).toBeTruthy());
 
-      // Let the first attempt give up so the fallback replaces the host.
+      // Let the first attempt run late so the fallback shows over a hidden host.
       await vi.advanceTimersByTimeAsync(WIDGET_LOAD_TIMEOUT_MS + 1_000);
       expect(screen.getByTestId('glyph-fallback')).toBeTruthy();
-      expect(screen.queryByTestId('google-place-photo')).toBeNull();
+      expect(screen.getByTestId('google-place-photo').hidden).toBe(true);
 
       // A different bar now occupies this card position.
       rerender(

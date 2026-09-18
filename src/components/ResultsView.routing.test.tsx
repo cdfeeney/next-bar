@@ -75,7 +75,9 @@ it('selects bands before routing and never shows unconfirmed inner-band candidat
   expect(screen.queryAllByRole('article')).toHaveLength(0);
   expect(candidatesSentToRouting()[0].id).toBe('bar-16');
   const cab = (routing.mock.lastCall as unknown as [unknown, Bar[], string]);
-  expect(cab[1].map(b => b.id)).toContain('bar-0');
+  // bar-0 sits at the origin: inside the walkable floor, so the cab search
+  // never spends one of its 15 route checks on it (T-01a).
+  expect(cab[1].map(b => b.id)).not.toContain('bar-0');
   expect(cab[1].map(b => b.id)).not.toContain('bar-17');
   expect(cab[2]).toBe('driving');
   rerender(<ResultsView profile={profile} location={location} maxMiles={null} />);
