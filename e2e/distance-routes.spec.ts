@@ -175,7 +175,10 @@ test('each travel selection returns only its own band and refresh preserves it',
 
   await group.getByRole('button', { name: 'Worth a cab' }).click();
   await expect(headings(cards)).toHaveText(CAB_TOP);
-  expect(lastBandSearch(posted)).toContain('near-0');
+  // T-01a: the cab search spends its route checks only beyond the walkable
+  // floor — never on near-0, which the walk band already confirmed.
+  expect(lastBandSearch(posted)).not.toContain('near-0');
+  expect(lastBandSearch(posted)).toContain('cab-0');
   expect(lastBandSearch(posted).some((id) => id.startsWith('far-'))).toBe(false);
 
   await group.getByRole('button', { name: 'Anywhere' }).click();
