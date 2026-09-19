@@ -35,7 +35,8 @@ test.describe('Lists', () => {
     await expect(
       page.getByRole('button', { name: /^Top 10 date bars 0 bars$/ }),
     ).toBeVisible();
-    await expect(page.getByText(/Empty so far/i)).toBeVisible();
+    // T-01b: every list's empty body reads the same way as Want to go.
+    await expect(page.getByText(/Nothing saved yet/i)).toBeVisible();
 
     // Add Death & Co via the picker.
     await page.getByRole('button', { name: /Add a bar/i }).click();
@@ -57,7 +58,10 @@ test.describe('Lists', () => {
     await page
       .getByRole('button', { name: /Remove Death & Co/i })
       .click();
-    await expect(page.getByText(/0 bars/)).toBeVisible();
+    // Scoped to the named list: the Want to go row also reads "0 bars".
+    await expect(
+      page.getByRole('button', { name: /^Top 10 date bars 0 bars$/ }),
+    ).toBeVisible();
   });
 
   test('delete asks for confirmation — dismiss keeps the list, accept deletes', async ({

@@ -270,7 +270,7 @@ export default function MapPage(): JSX.Element {
           // map surface, so an expanded vibe panel would otherwise grow past
           // the bottom edge and put its own controls out of reach. Capped well
           // under the viewport so the map stays visible behind it (note 2).
-          className="absolute inset-x-0 bottom-[calc(49px+env(safe-area-inset-bottom))] z-[950] max-h-[60vh] overflow-y-auto overscroll-contain rounded-t-3xl bg-bg border-t border-border px-4 pt-4 pb-4"
+          className="absolute inset-x-0 bottom-[calc(49px+env(safe-area-inset-bottom))] z-[1100] max-h-[60vh] overflow-y-auto overscroll-contain rounded-t-3xl bg-bg border-t border-border px-4 pt-4 pb-4"
         >
           <div className="flex items-center justify-between gap-3">
             <h2 className="font-display text-base">Filters</h2>
