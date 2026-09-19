@@ -36,6 +36,7 @@ adding another is a deliberate edit there.
 | Exact key | Storage | Current purpose and owner | V8 continuity rule |
 | --- | --- | --- | --- |
 | `next-bar:age-ack:v1` | local | Device-only age acknowledgement | Preserve; never sync. |
+| `next-bar:catalog:v1` | local | T-01c addition (2026-09-19): the last good `bars` row set, swapped in at mount so a returning visitor paints the full catalog before any request | **Local-only, never synced** — a cache of public catalog rows, not account data. Ignored after 7 days or if it fails to parse; safe to drop at any time (the next visit is cold). Not a V7 key. |
 | `next-bar:install-nudge-dismissed:v1` | local | Device-only install prompt state | Preserve; never sync. |
 | `next-bar:handle-nudge-dismissed:v1` | local | Device-only account prompt state | Preserve; never sync. |
 | `next-bar:onboarding-prompted:v1` | session | Per-tab onboarding prompt state | **Local-only, never synced.** Preserve the name; expiry with the tab is intentional. |
