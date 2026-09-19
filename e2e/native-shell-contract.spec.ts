@@ -349,6 +349,19 @@ test.describe('V8 native interaction contract', () => {
       );
       await denyGeolocation(page.context());
       await page.setViewportSize({ width: 390, height: 844 });
+      // T-01b moved the Rankings empty state up under the header (owner), so
+      // an EMPTY /rankings no longer overflows an 844px viewport. Give it a
+      // viewport of content the way this test's own note prescribes — seed
+      // ratings — rather than relaxing the maxScroll guard below.
+      if (route === '/rankings') {
+        await page.addInitScript(() => {
+          const ids = ['attaboy', 'death-and-co', 'pdt', 'amor-y-amargo', 'ace-bar', 'little-branch', 'buvette', 'westlight', 'pianos', '169-bar'];
+          window.localStorage.setItem(
+            'next-bar:ratings:v1',
+            JSON.stringify(ids.map((barId, i) => ({ barId, rating: 'liked', ratedAt: new Date(2026, 8, 1 + i).toISOString(), score: 9 - i * 0.3 }))),
+          );
+        });
+      }
       await page.goto(route);
       await settle(page);
 
