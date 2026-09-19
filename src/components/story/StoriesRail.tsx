@@ -149,7 +149,7 @@ function Cell({
       {pinned ? (
         <span
           data-testid="story-pin-badge"
-          className={`text-[10px] text-accent leading-none -mt-1 ${wide ? 'w-14 text-center' : ''}`}
+          className={`text-[10px] text-muted leading-none -mt-1 ${wide ? 'w-14 text-center' : ''}`}
         >
           Pinned<span className="sr-only"> a spot tonight</span>
         </span>

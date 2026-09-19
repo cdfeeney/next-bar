@@ -89,6 +89,13 @@ describe('V8-R-CMP-001 — three steps, and Bar/People are branches not steps', 
     expect(screen.getByTestId('composer-compose')).toBeTruthy();
     expect(screen.getByTestId('composer-bar')).toBeTruthy();
     expect(screen.getByTestId('composer-people')).toBeTruthy();
+    // T-01b (owner): real glyphs on both rows — a martini glass and the
+    // Account person — never the old ◎ / ◑ characters.
+    for (const id of ['composer-bar', 'composer-people']) {
+      const row = screen.getByTestId(id);
+      expect(row.querySelector('svg')).not.toBeNull();
+      expect(row.textContent).not.toMatch(/[◎◑]/);
+    }
   });
 
   test('the People picker is a sheet over Compose and returns straight to it', async () => {

@@ -39,12 +39,14 @@ test.describe('Lists', () => {
     await expect(page.getByText(/Nothing saved yet/i)).toBeVisible();
 
     // Add Death & Co via the picker.
-    await page.getByRole('button', { name: /Add a bar/i }).click();
+    // T-01c (owner): an empty list invites you to find bars; a stocked one adds.
+    await page.getByRole('button', { name: /^Find bars to add$/ }).click();
     await typeInto(page.getByLabel('Search bars'), 'Death');
     await page.getByRole('button', { name: /Death & Co/i }).click();
     await page.getByRole('button', { name: /^Done$/ }).click();
     await expect(page.getByText(/1 bar\b/)).toBeVisible();
     await expect(page.getByText(/Death & Co/i)).toBeVisible();
+    await expect(page.getByRole('button', { name: /^\+ Add a bar$/ })).toBeVisible();
 
     // Survives reload.
     await page.reload();

@@ -333,6 +333,20 @@ test.describe('/map filter sheet (locked: draft until "Show N bars")', () => {
       .click();
     await expect(commit).not.toHaveText(before);
 
+    // T-01c: Clear empties the draft even while the panel is open, and the
+    // panel's own Apply cannot bring the cleared picks back.
+    await filters.getByTestId('filter-clear').click();
+    await expect(commit).toHaveText(before);
+    await filters.getByRole('button', { name: 'Apply' }).click();
+    await expect(commit).toHaveText(before);
+    await filters.getByTestId('vibe-filter-toggle').click();
+    await filters.getByRole('button', { name: 'Neighborhood' }).click();
+    await filters
+      .getByRole('group', { name: 'Neighborhood' })
+      .getByRole('button', { name: /^Lower East Side$/ })
+      .click();
+    await expect(commit).not.toHaveText(before);
+
     // T-01b (owner): the sheet never covers the five tabs.
     const nav = page.getByRole('navigation', { name: 'Primary' });
     const navBox = (await nav.boundingBox())!;

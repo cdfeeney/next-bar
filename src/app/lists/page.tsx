@@ -233,7 +233,7 @@ function ListCard({
                 onClick={() => setPicking(true)}
                 className="bg-accent text-bg font-display text-sm px-5 py-2.5 rounded-full min-h-[44px] touch-manipulation"
               >
-                + Add a bar
+                {list.barIds.length === 0 ? 'Find bars to add' : '+ Add a bar'}
               </button>
               <button
                 type="button"

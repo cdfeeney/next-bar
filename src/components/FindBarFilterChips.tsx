@@ -17,6 +17,9 @@ export default function FindBarFilterChips({
   onChange,
 }: FindBarFilterChipsProps): JSX.Element {
   const [expanded, setExpanded] = useState(false);
+  // Bumped by Clear: a mounted VibeTweak keeps its own picks, so without a
+  // remount its Apply would put the cleared picks straight back (T-01b panel).
+  const [resetKey, setResetKey] = useState(0);
   // What the panel opened with, so Cancel can put it back after live edits.
   const openedWith = useRef(filters);
   const activeCount = countActiveFilters(filters);
@@ -56,7 +59,12 @@ export default function FindBarFilterChips({
           <button
             type="button"
             data-testid="filter-clear"
-            onClick={() => onChange({ neighborhoods: [], radius: null, vibes: [] })}
+            onClick={() => {
+              const empty = { neighborhoods: [], radius: null, vibes: [] };
+              openedWith.current = empty;
+              onChange(empty);
+              setResetKey((k) => k + 1);
+            }}
             className="text-xs text-accent min-h-[44px] px-2 touch-manipulation underline-offset-4 hover:underline"
           >
             Clear
@@ -66,6 +74,7 @@ export default function FindBarFilterChips({
 
       {expanded ? (
         <VibeTweak
+          key={resetKey}
           initialTags={[...filters.vibes]}
           initialNeighborhoods={[...filters.neighborhoods]}
           // Every toggle lands in the caller's DRAFT so the sheet's

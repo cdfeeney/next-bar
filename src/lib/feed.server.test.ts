@@ -325,6 +325,12 @@ describe('publishFeedPost refusal copy (T-01a2)', () => {
     if (!r.ok) expect(r.message).toMatch(/night isn't one of yours/);
   });
 
+  it('names the group when 0069 refused the group', async () => {
+    const r = await publishFeedPost(refusing('publish_feed_post: that is not a group of yours'), { ...post, audience: 'group', groupId: 'g1' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/group isn't one of yours/);
+  });
+
   it('names the mutual-follow rule for a recipient refusal', async () => {
     const r = await publishFeedPost(refusing('publish_feed_post: u2 is not a mutual friend'), { ...post, audience: 'custom', audienceIds: ['u2'] });
     expect(r.ok).toBe(false);

@@ -257,7 +257,9 @@ export async function publishFeedPost(
         ? "That photo isn't yours to post. Nothing was posted."
         : /night/i.test(reason)
           ? "That night isn't one of yours. Nothing was posted."
-          : 'Everyone you post to has to be a friend who follows you back. Nothing was posted.';
+          : /group/i.test(reason)
+            ? "That group isn't one of yours. Nothing was posted."
+            : 'Everyone you post to has to be a friend who follows you back. Nothing was posted.';
       return rpcFailure(
         error?.code,
         deniedMessage,
