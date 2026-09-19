@@ -17,6 +17,8 @@ let totalRows = 0;
 let pageError = false;
 /** When set, every page resolves only when the test says so (in order). */
 let deferPages = false;
+/** Simulates a proxy/stub that strips the content-range header. */
+let noCount = false;
 const pending: Array<() => void> = [];
 const selectedColumns: string[] = [];
 
@@ -56,7 +58,7 @@ vi.mock('@/lib/supabase/client', () => ({
                 if (pageError) return { data: null, error: { message: 'boom' } };
                 const page = [];
                 for (let i = from; i <= to && i < totalRows; i++) page.push(makeRow(i));
-                return { data: page, error: null, count: opts?.count ? totalRows : null };
+                return { data: page, error: null, count: opts?.count && !noCount ? totalRows : null };
               };
               if (!deferPages) return Promise.resolve(answer());
               return new Promise((resolve) => pending.push(() => resolve(answer())));
@@ -91,6 +93,7 @@ describe('CatalogRefresh paging (PostgREST 1,000-row cap)', () => {
     pending.length = 0;
     pageError = false;
     deferPages = false;
+    noCount = false;
     window.localStorage.clear();
   });
 
@@ -125,6 +128,19 @@ describe('CatalogRefresh paging (PostgREST 1,000-row cap)', () => {
     expect(ranges).toEqual([
       [0, 999],
       [1000, 1999],
+    ]);
+    expect(replaced[0]).toHaveLength(2000);
+  });
+
+  test('without a count header it pages serially until a short page, as before', async () => {
+    totalRows = 2000;
+    noCount = true;
+    render(<CatalogRefresh />);
+    await waitFor(() => expect(replaced.length).toBe(1));
+    expect(ranges).toEqual([
+      [0, 999],
+      [1000, 1999],
+      [2000, 2999],
     ]);
     expect(replaced[0]).toHaveLength(2000);
   });

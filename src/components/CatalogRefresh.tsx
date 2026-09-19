@@ -111,33 +111,47 @@ export default function CatalogRefresh(): JSX.Element | null {
         .order('id', { ascending: true })
         .range(0, PAGE - 1)) as PageResult;
       if (cancelled) return;
-      if (first.error || !Array.isArray(first.data) || typeof first.count !== 'number') {
+      if (first.error || !Array.isArray(first.data)) {
         fail();
         return;
       }
-      // 2. Every remaining page at once.
-      const rest: Promise<PageResult>[] = [];
-      for (let from = PAGE; from < first.count; from += PAGE) {
-        rest.push(
-          supabase
-            .from('bars')
-            .select(CATALOG_COLUMNS)
-            .order('id', { ascending: true })
-            .range(from, from + PAGE - 1) as unknown as Promise<PageResult>,
-        );
-      }
-      const pages = await Promise.all(rest);
-      if (cancelled) return;
-      if (pages.some((p) => p.error || !Array.isArray(p.data))) {
-        fail();
-        return;
-      }
-      const all = [...first.data, ...pages.flatMap((p) => p.data as BarsTableRow[])];
-      // The catalog changed between the count and the pages: never swap in a
-      // set with a hole or a duplicate in it.
-      if (all.length !== first.count) {
-        fail();
-        return;
+      const page = (from: number) =>
+        supabase
+          .from('bars')
+          .select(CATALOG_COLUMNS)
+          .order('id', { ascending: true })
+          .range(from, from + PAGE - 1) as unknown as Promise<PageResult>;
+      const all: BarsTableRow[] = [...first.data];
+      if (typeof first.count === 'number') {
+        // 2. Every remaining page at once.
+        const rest: Promise<PageResult>[] = [];
+        for (let from = PAGE; from < first.count; from += PAGE) rest.push(page(from));
+        const pages = await Promise.all(rest);
+        if (cancelled) return;
+        if (pages.some((p) => p.error || !Array.isArray(p.data))) {
+          fail();
+          return;
+        }
+        all.push(...pages.flatMap((p) => p.data as BarsTableRow[]));
+        // The catalog changed between the count and the pages: never swap in
+        // a set with a hole or a duplicate in it.
+        if (all.length !== first.count) {
+          fail();
+          return;
+        }
+      } else if (first.data.length === PAGE) {
+        // No count header (a proxy or a stub that strips it): page serially
+        // until a short page proves the end, exactly as before.
+        for (let from = PAGE; ; from += PAGE) {
+          const next = await page(from);
+          if (cancelled) return;
+          if (next.error || !Array.isArray(next.data)) {
+            fail();
+            return;
+          }
+          all.push(...next.data);
+          if (next.data.length < PAGE) break;
+        }
       }
       const next = rowsToCatalog(all);
       if (next === null) {
