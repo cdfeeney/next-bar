@@ -11,7 +11,7 @@ import type { StoryGroup } from './storyStore';
  *
  * TWO SIGNALS, NEVER MERGED — the rule both canvases state in the same words:
  *   ring       = an unseen story (a circular stroke around the avatar)
- *   pin badge  = shared bar presence tonight (a SQUARED map-pin mark)
+ *   "Pinned"   = shared bar presence tonight, as small text under the name (owner, 2026-09-17)
  * They differ in shape as well as colour, and each carries its own screen-
  * reader text, so neither is conveyed by colour alone.
  *
@@ -114,11 +114,14 @@ export default function StoriesRail({
 function Cell({
   children,
   label,
+  pinned = false,
   wide = false,
   size,
 }: {
   children: React.ReactNode;
   label: string;
+  /** Shared bar presence tonight: a second small line under the name. */
+  pinned?: boolean;
   /** Your cell once a story exists: it carries a second 44px target beside the
       avatar, so it needs the room. The label stays centred on the AVATAR
       rather than on the widened cell. */
@@ -143,6 +146,14 @@ function Cell({
       >
         {label}
       </span>
+      {pinned ? (
+        <span
+          data-testid="story-pin-badge"
+          className={`text-[10px] text-accent leading-none -mt-1 ${wide ? 'w-14 text-center' : ''}`}
+        >
+          Pinned<span className="sr-only"> a spot tonight</span>
+        </span>
+      ) : null}
     </li>
   );
 }
@@ -168,7 +179,7 @@ function YourCell({
 }): JSX.Element {
   const hasStory = group.items.length > 0;
   return (
-    <Cell label="You" wide={hasStory} size={size}>
+    <Cell label="You" pinned={pinned} wide={hasStory} size={size}>
       {/* Two 44px targets cannot both fit on one 56px avatar. The original
           shape put the add button at `left-3 top-3 w-11 h-11`, i.e. over
           (12,12)-(56,56) of the 56px cell — which contains the avatar's own
@@ -190,8 +201,7 @@ function YourCell({
         data-testid="story-rail-you"
         className={`relative block h-14 ${hasStory ? 'w-[6.25rem]' : 'w-14'}`}
       >
-        {/* The avatar keeps its own 56px positioning box so the pin badge
-            stays anchored to the avatar's corner rather than to the widened
+        {/* The avatar keeps its own 56px positioning box inside the widened
             cell. */}
         <span className="absolute left-0 top-0 block w-14 h-14">
           <button
@@ -205,7 +215,6 @@ function YourCell({
               <Avatar initials={group.initials} seed={group.id} size="md" />
             </Ring>
           </button>
-          {pinned ? <PinBadge /> : null}
         </span>
         {hasStory ? (
           // 44x44 starting at x=56 — the avatar's right edge — and inside the
@@ -264,7 +273,7 @@ function FriendCell({
   size: RailSize;
 }): JSX.Element {
   return (
-    <Cell label={group.name.split(/\s+/)[0]} size={size}>
+    <Cell label={group.name.split(/\s+/)[0]} pinned={pinned} size={size}>
       <span className="relative block w-14 h-14">
         <button
           type="button"
@@ -284,7 +293,6 @@ function FriendCell({
             <Avatar initials={group.initials} seed={group.id} size="md" />
           </Ring>
         </button>
-        {pinned ? <PinBadge /> : null}
       </span>
     </Cell>
   );
@@ -345,22 +353,3 @@ function PlusBadge(): JSX.Element {
   );
 }
 
-/**
- * Shared bar presence. SQUARED, not circular, and it sits top-right — the
- * opposite corner from the plus — so the two marks can never be read as one
- * affordance.
- */
-function PinBadge(): JSX.Element {
-  return (
-    <span
-      data-testid="story-pin-badge"
-      // pointer-events-none, like the decorative plus wrapper above: this is a
-      // STATUS mark, not a control, and as a positioned sibling over the
-      // avatar button it was swallowing taps on its own 14px corner — a dead
-      // region on the story-open target wherever a pin renders.
-      className="pointer-events-none absolute -top-0.5 -right-0.5 w-[14px] h-[14px] rounded-[3px] bg-accent border-2 border-bg"
-    >
-      <span className="sr-only">Pinned a spot tonight</span>
-    </span>
-  );
-}

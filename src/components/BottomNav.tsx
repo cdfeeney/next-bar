@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useFollowRequests } from '@/hooks/useFollowRequests';
 import { usePathname } from 'next/navigation';
+import { PersonGlyphPaths } from '@/components/icons';
 
 type Tab = {
   href: string;
@@ -75,12 +76,7 @@ const TABS: Tab[] = [
     href: '/settings',
     label: 'Account',
     isActive: (pathname) => pathname.startsWith('/settings'),
-    glyph: (
-      <>
-        <circle cx="12" cy="8.5" r="3.5" />
-        <path d="M5 20c0-3.9 3.1-7 7-7s7 3.1 7 7" />
-      </>
-    ),
+    glyph: <PersonGlyphPaths />,
   },
 ];
 

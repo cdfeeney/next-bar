@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useRatings } from '@/hooks/useRatings';
 import { useAuth } from '@/hooks/useAuth';
 import { sortRatingsByScore, tierMidpoint } from '@/lib/pairwise';
-import { seedSampleNight } from '@/lib/demo';
 import { getBarById } from '@/lib/catalog';
 import { useBars } from '@/lib/useBars';
 import { displayHood } from '@/lib/hoodDisplay';
@@ -106,7 +105,7 @@ export default function RankingsPage(): JSX.Element {
       </header>
 
       {hasNoRatings ? (
-        <section className="flex flex-col items-center justify-center text-center px-6 py-[120px]">
+        <section className="flex flex-col items-center justify-center text-center px-6 pt-8 pb-16">
           <h2 className="font-display text-2xl mb-2">Nothing here yet.</h2>
           <p className="text-muted text-sm mb-6 max-w-sm">
             Rate a bar after you check it out and it&apos;ll show up here, scored
@@ -122,13 +121,6 @@ export default function RankingsPage(): JSX.Element {
           >
             Find a bar →
           </Link>
-          <button
-            type="button"
-            onClick={() => seedSampleNight()}
-            className="mt-4 text-accent text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
-          >
-            Or load a sample night to see it in action →
-          </button>
         </section>
       ) : (
         <section className="max-w-2xl mx-auto px-6 flex flex-col gap-4">

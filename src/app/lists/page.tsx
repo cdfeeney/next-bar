@@ -17,6 +17,8 @@ import { useWantToGo } from '@/hooks/useWantToGo';
 import type { BarList } from '@/lib/lists';
 import { barById } from '@/lib/demo';
 
+const WANT_TO_GO_ROW = 'want-to-go';
+
 export default function ListsPage(): JSX.Element {
   // 0019 swap-day rule: ListCard rows and WantToGoList both resolve bar ids
   // through the catalog (barById / getBarById), so subscribe here — nothing
@@ -68,11 +70,6 @@ export default function ListsPage(): JSX.Element {
         </p>
       </header>
 
-      <section className="pb-8">
-        <h2 className="font-display text-xl text-center mb-4">Want to go</h2>
-        <WantToGoList entries={wantEntries} onRemove={removeWant} />
-      </section>
-
       <section className="max-w-md mx-auto px-6">
         <form
           className="flex gap-2 mb-8"
@@ -97,8 +94,20 @@ export default function ListsPage(): JSX.Element {
           </button>
         </form>
 
+        {/* T-01b (owner, 2026-09-17): "Want to go" is not the default list.
+            It is one row among the lists, opened on tap like the others. */}
+        <div className="space-y-4">
+          <ListRow
+            title="Want to go"
+            count={wantEntries.length}
+            open={openId === WANT_TO_GO_ROW}
+            onToggle={() => setOpenId(openId === WANT_TO_GO_ROW ? null : WANT_TO_GO_ROW)}
+          >
+            <WantToGoList entries={wantEntries} onRemove={removeWant} />
+          </ListRow>
+        </div>
         {lists.length === 0 ? (
-          <div className="bg-surface border border-border rounded-3xl p-6 text-center">
+          <div className="mt-4 bg-surface border border-border rounded-3xl p-6 text-center">
             <p className="font-display text-xl mb-2">No lists yet.</p>
             <p className="text-muted text-sm leading-relaxed">
               Start one above — &ldquo;Rooftops&rdquo;, &ldquo;First
@@ -107,7 +116,7 @@ export default function ListsPage(): JSX.Element {
             </p>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="mt-4 space-y-4">
             {lists.map((list) => (
               <ListCard
                 key={list.id}
@@ -158,26 +167,8 @@ function ListCard({
   const [picking, setPicking] = useState(false);
 
   return (
-    <article className="bg-surface border border-border rounded-3xl overflow-hidden">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        className="w-full flex items-baseline justify-between gap-3 text-left p-5 touch-manipulation"
-      >
-        <span className="font-display text-xl leading-tight truncate">
-          {list.name}
-        </span>
-        <span className="text-muted text-xs shrink-0">
-          {list.barIds.length} {list.barIds.length === 1 ? 'bar' : 'bars'}
-          <span aria-hidden="true" className="ml-2">
-            {open ? '▾' : '▸'}
-          </span>
-        </span>
-      </button>
-
-      {open ? (
-        <div className="px-5 pb-5">
+    <ListRow title={list.name} count={list.barIds.length} open={open} onToggle={onToggle}>
+      <div className="px-5 pb-5">
           {list.barIds.length > 0 ? (
             <ul className="mb-4">
               {list.barIds.map((barId, i) => {
@@ -212,9 +203,7 @@ function ListCard({
               })}
             </ul>
           ) : (
-            <p className="text-muted text-sm mb-4">
-              Empty so far — add the first bar.
-            </p>
+            <p className="text-muted text-sm mb-4">Nothing saved yet.</p>
           )}
 
           {picking ? (
@@ -256,8 +245,42 @@ function ListCard({
               </button>
             </div>
           )}
-        </div>
-      ) : null}
+      </div>
+    </ListRow>
+  );
+}
+
+/** One collapsible row per list; the header's accessible name is "<name> <n> bars". */
+function ListRow({
+  title,
+  count,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  count: number;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}): JSX.Element {
+  return (
+    <article className="bg-surface border border-border rounded-3xl overflow-hidden">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="w-full flex items-baseline justify-between gap-3 text-left p-5 touch-manipulation"
+      >
+        <span className="font-display text-xl leading-tight truncate">{title}</span>
+        <span className="text-muted text-xs shrink-0">
+          {count} {count === 1 ? 'bar' : 'bars'}
+          <span aria-hidden="true" className="ml-2">
+            {open ? '▾' : '▸'}
+          </span>
+        </span>
+      </button>
+      {open ? children : null}
     </article>
   );
 }

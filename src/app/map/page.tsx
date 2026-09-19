@@ -133,13 +133,11 @@ export default function MapPage(): JSX.Element {
     <main
       data-testid="map-surface"
       // `position: fixed` makes this its own stacking context, so the sheet's
-      // z-index only ranks INSIDE here — the bottom nav's root-level z-[1000]
-      // painted over the whole surface and swallowed taps on the sheet's
-      // primary action ("Show N bars" resolved to the nav's "Next Bar?" tab,
-      // navigating away instead of applying the filter). At rest the map must
-      // stay BEHIND the nav, per the locked design; while the aria-modal sheet
-      // is open it has to be above it. So raise the context only then.
-      className={`fixed inset-0 overflow-hidden${filtersOpen ? ' z-[1100]' : ''}`}
+      // z-index only ranks INSIDE here and the bottom nav's root-level
+      // z-[1000] always paints over this surface. The sheet therefore ends
+      // ABOVE the nav (T-01b, owner: the five tabs stay visible on every main
+      // page) instead of raising this context over it as it used to.
+      className="fixed inset-0 overflow-hidden"
     >
       <div className="absolute inset-0">
         <BarMap
@@ -272,7 +270,7 @@ export default function MapPage(): JSX.Element {
           // map surface, so an expanded vibe panel would otherwise grow past
           // the bottom edge and put its own controls out of reach. Capped well
           // under the viewport so the map stays visible behind it (note 2).
-          className="absolute inset-x-0 bottom-0 z-[1100] max-h-[70vh] overflow-y-auto overscroll-contain rounded-t-3xl bg-bg border-t border-border px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+          className="absolute inset-x-0 bottom-[calc(49px+env(safe-area-inset-bottom))] z-[950] max-h-[60vh] overflow-y-auto overscroll-contain rounded-t-3xl bg-bg border-t border-border px-4 pt-4 pb-4"
         >
           <div className="flex items-center justify-between gap-3">
             <h2 className="font-display text-base">Filters</h2>

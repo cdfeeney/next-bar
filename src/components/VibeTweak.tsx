@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { displayTag } from '@/lib/tagDisplay';
 import { displayHood } from '@/lib/hoodDisplay';
 import { NEIGHBORHOOD_CENTROIDS } from '@/lib/constants';
@@ -14,6 +14,8 @@ type VibeTweakProps = {
   initialNeighborhoods?: Neighborhood[];
   onApply: (tags: VibeTag[], neighborhoods: Neighborhood[]) => void;
   onCancel: () => void;
+  /** Fires on every toggle with the working picks (T-01b: a live "Show N bars"). */
+  onChange?: (tags: VibeTag[], neighborhoods: Neighborhood[]) => void;
 };
 
 const PRIMARY_BTN =
@@ -40,6 +42,7 @@ export default function VibeTweak({
   initialNeighborhoods,
   onApply,
   onCancel,
+  onChange,
 }: VibeTweakProps) {
   const [active, setActive] = useState<Set<VibeTag>>(
     () => new Set(initialTags),
@@ -63,6 +66,15 @@ export default function VibeTweak({
     }
     return out;
   }, [active]);
+
+  // Held in a ref so a caller's inline arrow never re-fires the report.
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  });
+  useEffect(() => {
+    onChangeRef.current?.(Array.from(active), Array.from(neighborhoods));
+  }, [active, neighborhoods]);
 
   const toggle = (tag: VibeTag) => {
     setActive((prev) => {

@@ -315,6 +315,34 @@ test.describe('/map filter sheet (locked: draft until "Show N bars")', () => {
     await expect(page.getByRole('button', { name: /^Filters \(1\)$/ })).toBeVisible();
   });
 
+  test('"Show N bars" counts the draft live, and the tab bar stays visible under the sheet', async ({ page }) => {
+    await gotoLoadedMap(page);
+    await expect(page.locator('.leaflet-marker-icon').first()).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: /^Filters/ }).click();
+    const sheet = page.getByTestId('map-filter-sheet');
+    const commit = sheet.getByRole('button', { name: /^Show \d+ bars?$/ });
+    const before = await commit.innerText();
+
+    // T-01b (owner): the count follows the picks BEFORE Apply.
+    const filters = sheet.getByTestId('findbar-filters');
+    await filters.getByTestId('vibe-filter-toggle').click();
+    await filters.getByRole('button', { name: 'Neighborhood' }).click();
+    await filters
+      .getByRole('group', { name: 'Neighborhood' })
+      .getByRole('button', { name: /^Lower East Side$/ })
+      .click();
+    await expect(commit).not.toHaveText(before);
+
+    // T-01b (owner): the sheet never covers the five tabs.
+    const nav = page.getByRole('navigation', { name: 'Primary' });
+    const navBox = (await nav.boundingBox())!;
+    const sheetBox = (await sheet.boundingBox())!;
+    expect(sheetBox.y + sheetBox.height).toBeLessThanOrEqual(navBox.y + 1);
+    for (const label of ['Map', 'Rankings', 'Next Bar?', 'Social', 'Account']) {
+      await expect(nav.getByRole('link', { name: label })).toBeVisible();
+    }
+  });
+
   test('cancelling the sheet discards the draft', async ({ page }) => {
     await gotoLoadedMap(page);
     await expect(page.getByRole('link', { name: /Leaflet/i })).toBeVisible({

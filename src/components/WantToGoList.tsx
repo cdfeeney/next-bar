@@ -38,11 +38,12 @@ export default function WantToGoList({
 
   if (rows.length === 0) {
     return (
+      // Inside the row, so it reads as this list's own empty state (T-01b).
       <section
         data-testid="want-to-go-empty"
-        className="flex flex-col items-center justify-center text-center px-6 py-[120px]"
+        className="flex flex-col items-center justify-center text-center px-5 pb-6 pt-2 gap-4"
       >
-        <h2 className="font-display text-2xl mb-2">Nothing saved yet.</h2>
+        <p className="text-muted text-sm">Nothing saved yet.</p>
         <a
           href="/discover"
           className="bg-accent text-bg rounded-full px-6 py-3 min-h-[44px] touch-manipulation font-display text-lg inline-flex items-center justify-center"
@@ -56,7 +57,7 @@ export default function WantToGoList({
   return (
     <section
       data-testid="want-to-go-list"
-      className="max-w-2xl mx-auto px-6 flex flex-col gap-4"
+      className="px-5 pb-5 flex flex-col gap-3"
     >
       {rows.map(({ entry, bar }, idx) => (
         <article

@@ -20,6 +20,8 @@ async function seedWantToGo(page: Page, barIds: string[]): Promise<void> {
     { key: WANT_KEY, ids: barIds },
   );
   await page.reload();
+  // T-01b: Want to go is a row like any list — tap it to open.
+  await page.getByRole('button', { name: /^Want to go \d+ bars?/ }).click();
 }
 
 test.describe('Want to go under Your lists', () => {
@@ -43,6 +45,10 @@ test.describe('Want to go under Your lists', () => {
     await dialog.getByRole('button', { name: 'Save score' }).click();
 
     await page.goto('/lists');
-    await expect(page.getByTestId('want-to-go-empty')).toBeVisible();
+    await page.getByRole('button', { name: /^Want to go 0 bars/ }).click();
+    const empty = page.getByTestId('want-to-go-empty');
+    await expect(empty).toBeVisible();
+    await expect(empty).toContainText('Nothing saved yet.');
+    await expect(empty.getByRole('link', { name: /Find bars to add/ })).toBeVisible();
   });
 });

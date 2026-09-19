@@ -309,22 +309,25 @@ describe('fetchFeedComments — the thread read is bounded PER POST, and honest 
 });
 
 describe('publishFeedPost refusal copy (T-01a2)', () => {
-  const denied = vi.fn(async () => ({ data: null, error: { code: '42501', message: 'that media is not yours to post' } }));
-  const client = { rpc: denied } as never;
+  const refusing = (message: string) =>
+    ({ rpc: vi.fn(async () => ({ data: null, error: { code: '42501', message } })) }) as never;
+  const post = { mediaId: 'm1', audience: 'friends' as const };
 
-  it('names the media on a plain friends post, where 0069 runs no mutual check', async () => {
-    const result = await publishFeedPost(client, { mediaId: 'm1', audience: 'friends' });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.message).toMatch(/isn't yours to post/);
+  it('names the media when 0069 refused the media', async () => {
+    const r = await publishFeedPost(refusing('publish_feed_post: that media is not yours to post'), post);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/isn't yours to post/);
   });
 
-  it('names the mutual-follow rule when recipients or tags are involved', async () => {
-    const custom = await publishFeedPost(client, { mediaId: 'm1', audience: 'custom', audienceIds: ['u2'] });
-    const tagged = await publishFeedPost(client, { mediaId: 'm1', audience: 'friends', tagIds: ['u2'] });
-    for (const r of [custom, tagged]) {
-      expect(r.ok).toBe(false);
-      if (!r.ok) expect(r.message).toMatch(/follows you back/);
-    }
+  it('names the night when 0069 refused the night', async () => {
+    const r = await publishFeedPost(refusing('publish_feed_post: that night is not one of yours'), { ...post, nightOutId: 'n1' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/night isn't one of yours/);
+  });
+
+  it('names the mutual-follow rule for a recipient refusal', async () => {
+    const r = await publishFeedPost(refusing('publish_feed_post: u2 is not a mutual friend'), { ...post, audience: 'custom', audienceIds: ['u2'] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.message).toMatch(/follows you back/);
   });
 });

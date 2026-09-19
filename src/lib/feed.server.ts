@@ -247,12 +247,16 @@ export async function publishFeedPost(
     });
 
     if (error || !data) {
-      // 0069 runs the mutual-friend check only for 'custom' / 'group' / tags;
-      // on a plain 'friends' post the only 42501 is the media-ownership check,
-      // so the friends copy would name a cause that cannot have fired.
-      const deniedMessage =
-        input.audience === 'friends' && (input.tagIds ?? []).length === 0
-          ? "That photo isn't yours to post. Nothing was posted."
+      // 0069 raises 42501 for three different reasons (media not yours, night
+      // not yours, recipient not a mutual) and names each in its message, so
+      // the copy follows the server's reason rather than guessing from the
+      // audience (T-01a2 panel: a 'friends' post with a night can be refused
+      // for the night).
+      const reason = String(error?.message ?? '');
+      const deniedMessage = /media/i.test(reason)
+        ? "That photo isn't yours to post. Nothing was posted."
+        : /night/i.test(reason)
+          ? "That night isn't one of yours. Nothing was posted."
           : 'Everyone you post to has to be a friend who follows you back. Nothing was posted.';
       return rpcFailure(
         error?.code,

@@ -69,7 +69,13 @@ test.describe('App-shell smoke', () => {
     // avoids the Next.js dev cold-compile race on /rankings.
     await page.goto('/rankings');
     await expect(page.getByRole('heading', { name: /^Bar Rankings$/ })).toBeVisible();
-    await expect(page.getByRole('heading', { name: /Nothing here yet/i })).toBeVisible();
+    const empty = page.getByRole('heading', { name: /Nothing here yet/i });
+    await expect(empty).toBeVisible();
+    // T-01b (owner): the empty state sits right under the header, not a screen down.
+    const title = await page.getByRole('heading', { name: /^Bar Rankings$/ }).boundingBox();
+    const emptyBox = await empty.boundingBox();
+    expect(emptyBox!.y - title!.y).toBeLessThan(260);
+    await expect(page.getByRole('button', { name: /load a sample night/i })).toHaveCount(0);
     await expectNoConsoleErrors(page, '/rankings');
   });
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   countActiveFilters,
   type FindBarFilters,
@@ -17,6 +17,8 @@ export default function FindBarFilterChips({
   onChange,
 }: FindBarFilterChipsProps): JSX.Element {
   const [expanded, setExpanded] = useState(false);
+  // What the panel opened with, so Cancel can put it back after live edits.
+  const openedWith = useRef(filters);
   const activeCount = countActiveFilters(filters);
 
   return (
@@ -29,7 +31,10 @@ export default function FindBarFilterChips({
           type="button"
           aria-expanded={expanded}
           data-testid="vibe-filter-toggle"
-          onClick={() => setExpanded((open) => !open)}
+          onClick={() => {
+            if (!expanded) openedWith.current = filters;
+            setExpanded((open) => !open);
+          }}
           className="flex-1 min-h-[44px] flex items-center justify-between gap-3 rounded-2xl border border-border bg-surface px-4 font-display text-left touch-manipulation"
         >
           <span className="flex items-center gap-2 min-w-0">
@@ -63,11 +68,18 @@ export default function FindBarFilterChips({
         <VibeTweak
           initialTags={[...filters.vibes]}
           initialNeighborhoods={[...filters.neighborhoods]}
+          // Every toggle lands in the caller's DRAFT so the sheet's
+          // "Show N bars" counts live (T-01b); Apply just closes the panel,
+          // Cancel restores what it opened with.
+          onChange={(vibes, neighborhoods) => onChange({ ...filters, vibes, neighborhoods })}
           onApply={(vibes, neighborhoods) => {
             onChange({ ...filters, vibes, neighborhoods });
             setExpanded(false);
           }}
-          onCancel={() => setExpanded(false)}
+          onCancel={() => {
+            onChange(openedWith.current);
+            setExpanded(false);
+          }}
         />
       ) : null}
     </div>

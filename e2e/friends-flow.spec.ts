@@ -6,7 +6,7 @@
  *   1. Following a suggested curator moves them into "Your circle".
  *   2. Consensus surfaces bars the selected group all rated (and excludes
  *      anyone's Pass).
- *   3. The "sample night" seeder populates Rankings from an empty state.
+ *   3. (retired 2026-09-19, T-01b: the Rankings seeder control is gone; the seed lives in Settings.)
  *   4. The profile follow toggle persists.
  *
  * Fresh Playwright contexts start with empty localStorage, so follows fall
@@ -205,24 +205,6 @@ test.describe('Friends + consensus', () => {
     await expect(page).toHaveURL(/\/auth(\?|$)/);
   });
 
-  test('sample-night seeder populates rankings from empty', async ({ page }) => {
-    await page.goto('/rankings');
-    await expect(
-      page.getByRole('heading', { name: /Nothing here yet/i }),
-    ).toBeVisible();
-
-    await page
-      .getByRole('button', { name: /load a sample night/i })
-      .click();
-
-    // Rankings now show the seeded bars, sorted by score.
-    await expect(
-      page.getByRole('heading', { name: /Death & Co/i }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole('heading', { name: /Nothing here yet/i }),
-    ).toHaveCount(0);
-  });
 
   test('a status pill never lights for a write that did not land', async ({ page }) => {
     // WAS "tonight intent pills toggle, persist, and clear (UX-A compact row)",

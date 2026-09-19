@@ -6,6 +6,7 @@ import BarPicker from '@/components/BarPicker';
 import Sheet from '@/components/story/Sheet';
 import StoryFrame from '@/components/story/StoryFrame';
 import { PeopleSheet } from '@/components/story/StorySheets';
+import { Glyph, MartiniGlyphPaths, PersonGlyphPaths } from '@/components/icons';
 import type { StoryPhoto, TaggedPerson } from '@/components/story/storyStore';
 import { useModalDialog } from '@/hooks/useModalDialog';
 import type { Bar } from '@/types';
@@ -154,7 +155,7 @@ export default function ComposeStep({
       <div className="mt-4 space-y-2">
         <MetaRow
           testId="composer-bar"
-          icon="◎"
+          icon={<Glyph><MartiniGlyphPaths /></Glyph>}
           label="Bar"
           value={bar?.name ?? 'Choose'}
           action={bar === null ? 'Choose' : 'Change'}
@@ -162,7 +163,7 @@ export default function ComposeStep({
         />
         <MetaRow
           testId="composer-people"
-          icon="◑"
+          icon={<Glyph><PersonGlyphPaths /></Glyph>}
           label="People"
           value={peopleLabel(people)}
           action={people.length === 0 ? 'Add' : 'Change'}
@@ -271,7 +272,7 @@ function MetaRow({
   onClick,
 }: {
   testId: string;
-  icon: string;
+  icon: React.ReactNode;
   label: string;
   value: string;
   /** Named on the row itself, per V8-R-CMP-013's accessibility line. */
