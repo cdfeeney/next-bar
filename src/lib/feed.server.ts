@@ -247,9 +247,16 @@ export async function publishFeedPost(
     });
 
     if (error || !data) {
+      // 0069 runs the mutual-friend check only for 'custom' / 'group' / tags;
+      // on a plain 'friends' post the only 42501 is the media-ownership check,
+      // so the friends copy would name a cause that cannot have fired.
+      const deniedMessage =
+        input.audience === 'friends' && (input.tagIds ?? []).length === 0
+          ? "That photo isn't yours to post. Nothing was posted."
+          : 'Everyone you post to has to be a friend who follows you back. Nothing was posted.';
       return rpcFailure(
         error?.code,
-        'Everyone you post to has to be a friend who follows you back. Nothing was posted.',
+        deniedMessage,
         'That post could not be shared. Nothing was posted.',
       );
     }

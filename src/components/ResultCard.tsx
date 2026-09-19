@@ -66,10 +66,26 @@ export default function ResultCard({ bar, rank, selectedVibes, showShare, origin
   const isGoogleLive = decision.source === 'google-live';
   const mapsHref = directionsHref(origin, bar, directionsMode);
   const fallbackVisual = barVisual(bar);
+  // WebKit does not focus a button on tap; the lightbox returns focus to
+  // whatever was active when it opened, so without this an iOS tap hands
+  // focus back to the page instead of the control (same fix as BarMap's popup).
+  const openLightbox = (e: React.MouseEvent<HTMLButtonElement>): void => {
+    e.currentTarget.focus({ preventScroll: true });
+    setLightboxOpen(true);
+  };
 
   return (
     <article data-testid="result-card" className="bg-surface border border-border rounded-3xl overflow-hidden flex flex-col">
       {isGoogleLive ? (
+        // The photo is the trained tap target (the non-google hero below is a
+        // button), but the widget is Google's own interactive element, so it
+        // cannot sit inside a button. A transparent button covers the photo
+        // region on top of it; the widget's Maps chip and attribution live in
+        // its lower part and stay reachable.
+        // ponytail: 60% covers the compact widget's photo and the fallback's
+        // glyph at every width measured (390-430px); a widget-status callback
+        // would let the overlay size itself exactly.
+        <div className="relative">
         <GooglePlacePhotoLazy
           placeId={decision.placeId}
           surface="result-card"
@@ -86,12 +102,20 @@ export default function ResultCard({ bar, rank, selectedVibes, showShare, origin
             </div>
           )}
         />
+        <button
+          type="button"
+          data-testid="hero-photo-tap"
+          onClick={openLightbox}
+          aria-label={`See photos and hours for ${bar.name}`}
+          className="absolute inset-x-0 top-0 h-[60%] touch-manipulation focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        />
+        </div>
       ) : null}
       {showHero ? (
         <div className="relative">
           <button
             type="button"
-            onClick={() => setLightboxOpen(true)}
+            onClick={openLightbox}
             aria-label={`See photos and hours for ${bar.name}`}
             className="block w-full touch-manipulation focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
@@ -140,7 +164,7 @@ export default function ResultCard({ bar, rank, selectedVibes, showShare, origin
           <div className="flex items-start gap-3">
             <button
               type="button"
-              onClick={() => setLightboxOpen(true)}
+              onClick={openLightbox}
               aria-label={`See photos and hours for ${bar.name}`}
               className="shrink-0 touch-manipulation rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
@@ -182,7 +206,7 @@ export default function ResultCard({ bar, rank, selectedVibes, showShare, origin
             <OpenNowBadge bar={bar} />
             <RatingBadge barId={bar.id} />
             {isGoogleLive ? (
-              <button type="button" onClick={() => setLightboxOpen(true)} className="text-xs text-accent font-display min-h-[44px] inline-flex items-center">
+              <button type="button" onClick={openLightbox} className="text-xs text-accent font-display min-h-[44px] inline-flex items-center">
                 Photos &amp; hours
               </button>
             ) : null}

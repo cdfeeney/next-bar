@@ -15,9 +15,18 @@
 -- inherited, which is what the revoke-first migrations (0034, 0069) do for
 -- `authenticated` anyway.
 --
--- SCOPE: exactly the one public table the service-role client writes. The
--- storage bucket and auth admin calls need no table grant. Nothing is revoked.
+-- SCOPE: the one public table the service-role client writes, PLUS the three
+-- sweep functions it calls (src/lib/media/destinations.ts, reclaim.ts). 0066
+-- revoked EXECUTE from public on those and granted only authenticated
+-- (release_media_claim: nobody — "SERVICE ROLE ONLY" via the default ACL), so
+-- the same empty default ACL leaves service_role without EXECUTE on staging
+-- (verified 2026-09-19: has_function_privilege false for all three; true on
+-- prod) and the daily /api/media/reclaim cron answers sweep_incomplete there.
+-- The storage bucket and auth admin calls need no grant. Nothing is revoked.
 -- Idempotent; safe to re-run. Applied to STAGING on the owner's word;
 -- production as its own authorised step (no-op).
 
 grant select, insert, update, delete on table public.media_objects to service_role;
+grant execute on function public.claim_media_for_removal(uuid, integer) to service_role;
+grant execute on function public.claim_orphan_paths(integer) to service_role;
+grant execute on function public.release_media_claim(uuid, timestamptz) to service_role;

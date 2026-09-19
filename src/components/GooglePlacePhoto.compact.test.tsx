@@ -92,16 +92,15 @@ describe('compact element construction', () => {
 });
 
 /**
- * Giving up must be FINAL.
+ * A deadline is a deadline, not a verdict (T-01a): the fallback shows, the
+ * host stays, and Google's late answer still lands in it.
  *
- * Once the widget budget expires the fallback renders and the host div is
- * unmounted. Google's element is still alive inside the `gmp-load` listener
- * closure, so a slow place/photo fetch completing afterwards used to fire
- * into a listener that only checked `cancelled` (set by effect cleanup) —
- * flipping status back to 'ready' and re-rendering an EMPTY host: no
- * children, no height. On a google-live card our name and Maps link are
- * suppressed outside the fallback, so that is a nameless card with no Maps
- * action — replacing a perfectly good fallback. (santa: Claude/FABLE H-1.)
+ * Once the widget budget expires the fallback renders over a HIDDEN host.
+ * Google's element is still alive inside the `gmp-load` listener closure,
+ * so a slow place/photo fetch completing afterwards flips status to 'ready'
+ * and reveals that same host — never a fresh, empty one, and never a second
+ * billable creation. (The pre-T-01a latch that kept the fallback for good
+ * was santa: Claude/FABLE H-1's fix for a detached-host resurrection.)
  */
 describe('a late widget replaces the fallback when it lands', () => {
   test('a gmp-load arriving after the timeout reveals the widget (T-01a)', async () => {
@@ -118,20 +117,9 @@ describe('a late widget replaces the fallback when it lands', () => {
         return el as Element;
       });
 
-      // Burn the whole widget budget and deliver Google's late answer INSIDE
-      // THE SAME act() — i.e. before React has flushed the unmount that the
-      // timeout's setStatus('unavailable') causes.
-      //
-      // The ordering is the whole point of this test (santa: Codex). If
-      // `gmp-load` is instead dispatched after an awaited flush, the host has
-      // already unmounted, `hostEl` has gone null, the effect has re-run and
-      // its cleanup has set `cancelled` — so the listener returns on
-      // `cancelled` alone and the test passes with or without the `gaveUp`
-      // latch. That version was coverage theatre: verified 2026-08-08 by
-      // deleting `|| gaveUp` from the listener and watching it still pass.
-      // Batched into one act(), `cancelled` is still false and `gaveUp` is
-      // the ONLY guard standing between a late widget and a resurrected,
-      // empty host.
+      // Burn the whole widget budget FIRST, then deliver Google's late answer:
+      // the two must be observable as separate states, or the test cannot
+      // tell "never gave up" from "recovered".
       // The deadline passes first: fallback visible, host kept (hidden).
       act(() => {
         vi.advanceTimersByTime(WIDGET_LOAD_TIMEOUT_MS + 1_000);

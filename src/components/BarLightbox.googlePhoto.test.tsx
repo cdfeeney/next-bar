@@ -202,3 +202,20 @@ describe('BarLightbox Google media', () => {
     expect(photo.getAttribute('data-surface')).toBe('bar-lightbox');
   });
 });
+
+describe('BarLightbox hours (T-01a2)', () => {
+  test('a bar without a schedule says "Hours unavailable" instead of nothing', async () => {
+    vi.mocked(resolveMedia).mockReturnValue({ source: 'glyph' });
+    render(<BarLightbox bar={BAR} onClose={() => {}} />);
+    expect(await screen.findByTestId('lightbox-hours-unavailable')).toHaveTextContent('Hours unavailable');
+    expect(screen.queryByRole('heading', { name: 'Hours' })).toBeNull();
+  });
+
+  test('a bar with a schedule shows the table and not the line', async () => {
+    vi.mocked(resolveMedia).mockReturnValue({ source: 'glyph' });
+    const hours = Object.fromEntries([0, 1, 2, 3, 4, 5, 6].map((d) => [d, [{ open: '17:00', close: '02:00' }]]));
+    render(<BarLightbox bar={{ ...BAR, hours: hours as never }} onClose={() => {}} />);
+    expect(await screen.findByRole('heading', { name: 'Hours' })).toBeTruthy();
+    expect(screen.queryByTestId('lightbox-hours-unavailable')).toBeNull();
+  });
+});

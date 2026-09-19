@@ -440,6 +440,12 @@ export default function BarLightbox({
               Hours are best-effort — confirm before a special trip.
             </p>
           </div>
+        ) : hoursFor?.barId === bar.id ? (
+          // The sheet never opens onto nothing (T-01a panel): a bar without a
+          // schedule says so, once the client-only hours state has settled.
+          <p data-testid="lightbox-hours-unavailable" className="text-xs text-muted">
+            Hours unavailable
+          </p>
         ) : null}
 
         {venueTags.length > 0 ? (

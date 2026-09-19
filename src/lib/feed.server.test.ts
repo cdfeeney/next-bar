@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { FEED_COMMENTS_PER_POST, fetchFeedComments, fetchFeedPosts } from './feed.server';
+import { FEED_COMMENTS_PER_POST, fetchFeedComments, fetchFeedPosts, publishFeedPost } from './feed.server';
 
 /**
  * The night-token read is the one this file exists for.
@@ -305,5 +305,26 @@ describe('fetchFeedComments — the thread read is bounded PER POST, and honest 
       result.ok,
       'a refused thread was reported as a successful read with a hole in it',
     ).toBe(false);
+  });
+});
+
+describe('publishFeedPost refusal copy (T-01a2)', () => {
+  const denied = vi.fn(async () => ({ data: null, error: { code: '42501', message: 'that media is not yours to post' } }));
+  const client = { rpc: denied } as never;
+
+  it('names the media on a plain friends post, where 0069 runs no mutual check', async () => {
+    const result = await publishFeedPost(client, { mediaId: 'm1', audience: 'friends' });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toMatch(/isn't yours to post/);
+  });
+
+  it('names the mutual-follow rule when recipients or tags are involved', async () => {
+    const custom = await publishFeedPost(client, { mediaId: 'm1', audience: 'custom', audienceIds: ['u2'] });
+    const tagged = await publishFeedPost(client, { mediaId: 'm1', audience: 'friends', tagIds: ['u2'] });
+    for (const r of [custom, tagged]) {
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.message).toMatch(/follows you back/);
+    }
   });
 });

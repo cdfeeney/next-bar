@@ -168,7 +168,8 @@ export default function GooglePlacePhoto({
      * when the div actually attaches.
      *
      * With a plain ref this was a permanent dead end (santa: Codex, High):
-     * once an attempt gave up, the fallback rendered and the host unmounted.
+     * once an attempt hit 'unavailable', the fallback rendered and the host
+     * unmounted (a 'late' attempt now keeps its host — see Status above).
      * A later `placeId` change — which happens if a parent ever reconciles
      * cards by position rather than identity; ResultsView.tsx:387 currently
      * keys by `bar.id`, so this path is defensive today — re-ran this effect
@@ -336,7 +337,8 @@ export default function GooglePlacePhoto({
       observer.disconnect();
       window.clearTimeout(timer);
     };
-    // Only placeId, allowed, and surface. Re-running this effect can issue a
+    // Only the identity inputs (placeId, allowed, surface, openNowStatus) and
+    // the host node. Re-running this effect can issue a
     // billable request, so it must never be triggered by unrelated prop churn
     // — see the stuck-'pending' bug documented on onBillableRequestRef above.
     // `surface` is static per callsite; if it ever genuinely changed, the
