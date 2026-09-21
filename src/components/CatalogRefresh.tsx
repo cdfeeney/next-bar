@@ -79,7 +79,9 @@ function writeSnapshot(rows: BarsTableRow[], now: number): void {
 type PageResult = { data: BarsTableRow[] | null; error: unknown; count?: number | null };
 
 export default function CatalogRefresh(): JSX.Element | null {
-  const [status, setStatus] = useState<'loading' | 'ready' | 'fallback'>('loading');
+  // 'stale' (T-01e): the refresh failed but a saved snapshot is on screen —
+  // OperationalState's "saved data stays visible with a small label".
+  const [status, setStatus] = useState<'loading' | 'ready' | 'fallback' | 'stale'>('loading');
   useEffect(() => {
     const supabase = getBrowserSupabase();
     if (!supabase) {
@@ -96,10 +98,10 @@ export default function CatalogRefresh(): JSX.Element | null {
       replaceCatalog(snapshotCatalog);
       setStatus('ready');
     }
-    // A failed refresh degrades to the snapshot when there is one, and to the
-    // emergency set (with the pill) when there is not.
+    // A failed refresh degrades to the snapshot when there is one (labelled,
+    // never silent — T-01c panel), and to the emergency set when there is not.
     const fail = () => {
-      if (!cancelled && !hasSnapshot) setStatus('fallback');
+      if (!cancelled) setStatus(hasSnapshot ? 'stale' : 'fallback');
     };
 
     void (async () => {
@@ -173,8 +175,10 @@ export default function CatalogRefresh(): JSX.Element | null {
       className="pointer-events-none fixed inset-x-4 bottom-[calc(76px+env(safe-area-inset-bottom))] z-[1400] mx-auto max-w-md rounded-full border border-border bg-surface/95 px-4 py-2 text-center text-xs text-muted shadow-lg"
     >
       {status === 'loading'
-        ? 'Loading the Manhattan catalog…'
-        : 'Catalog refresh unavailable — showing the emergency set.'}
+        ? 'Loading more bars…'
+        : status === 'stale'
+          ? 'Showing a saved bar list.'
+          : "Couldn't load the full bar list. Showing a short one."}
     </p>
   );
 }

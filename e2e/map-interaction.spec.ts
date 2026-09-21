@@ -18,7 +18,7 @@ import { test, expect } from './helpers/catalogTest';
 
 async function gotoLoadedMap(page: Page): Promise<void> {
   await page.goto('/map');
-  await expect(page.getByText(/Loading the Manhattan catalog/)).toHaveCount(0);
+  await expect(page.getByText(/Loading more bars/)).toHaveCount(0);
 }
 
 /**

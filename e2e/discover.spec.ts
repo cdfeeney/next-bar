@@ -28,7 +28,7 @@ async function readWantToGo(page: Page): Promise<WantToGoEntry[] | null> {
 /** The current top card's bar id + displayed name. */
 async function topCard(page: Page): Promise<{ id: string; name: string }> {
   await expect(
-    page.getByText(/Loading the Manhattan catalog/),
+    page.getByText(/Loading more bars/),
   ).toHaveCount(0);
   const card = page.getByTestId('discover-card');
   await expect(card).toBeVisible({ timeout: 15_000 });

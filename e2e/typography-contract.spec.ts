@@ -63,7 +63,7 @@ for (const route of ['/', '/rankings', '/map']) {
   test(`typography contract on ${route}: approved faces loaded, roles resolve, no synthetic weights`, async ({ page }) => {
     await denyGeolocation(page.context());
     await page.goto(route);
-    await expect(page.getByText(/Loading the Manhattan catalog/)).toHaveCount(0);
+    await expect(page.getByText(/Loading more bars/)).toHaveCount(0);
 
     const faces = await loadedFaces(page);
     // The approved pair is DECLARED at exactly the weights the layout ships, and

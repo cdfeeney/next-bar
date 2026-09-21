@@ -203,19 +203,18 @@ describe('CatalogRefresh paging (PostgREST 1,000-row cap)', () => {
     pageError = true;
     render(<CatalogRefresh />);
     expect(await screen.findByRole('status')).toHaveTextContent(
-      'Catalog refresh unavailable',
+      "Couldn't load the full bar list",
     );
     expect(replaced).toHaveLength(0);
   });
 
-  test('a failed refresh over a good snapshot keeps the snapshot and shows no pill', async () => {
+  test('a failed refresh over a good snapshot keeps the snapshot and says so (T-01e)', async () => {
     pageError = true;
     seedSnapshot(1500);
     render(<CatalogRefresh />);
     expect(replaced).toHaveLength(1);
-    await waitFor(() => expect(ranges.length).toBe(1));
-    await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByRole('status')).toBeNull();
+    expect(await screen.findByRole('status')).toHaveTextContent('Showing a saved bar list.');
     expect(replaced).toHaveLength(1);
   });
 });

@@ -117,6 +117,12 @@ jobs:
             fastlane ios beta
           fi
 
+      # The decoded certificate must not outlive the lane, even though this
+      # runner is ephemeral: a self-hosted runner would keep it otherwise.
+      - name: Remove signing material
+        if: always()
+        run: rm -rf "$HOME/signing" "$HOME/asc"
+
       # A FAILED LANE IS NOT AUTOMATICALLY A FAILED UPLOAD. The build and the
       # upload are one lane, so a non-zero exit can mean the IPA never built, or
       # that it uploaded and something after it failed. Re-running blind is how

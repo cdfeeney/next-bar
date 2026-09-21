@@ -34,6 +34,7 @@ export type RailSize = 'tonight' | 'feed';
 export default function StoriesRail({
   groups,
   pinnedIds,
+  pinnedBars,
   onOpen,
   onAddStory,
   size = 'feed',
@@ -46,10 +47,18 @@ export default function StoriesRail({
    * needed a placeholder constant on both sides.
    */
   pinnedIds: readonly string[];
+  /** Profile id → the bar they pinned, when the catalog knows it (T-01e). */
+  pinnedBars?: ReadonlyMap<string, string>;
   onOpen: (authorId: string) => void;
   onAddStory: () => void;
   size?: RailSize;
 }): JSX.Element {
+  // "at <Bar>" when the catalog resolves the pin; "Pinned" is the honest
+  // fallback for an id the local catalog does not know.
+  const pinText = (id: string): string => {
+    const bar = pinnedBars?.get(id);
+    return bar ? `at ${bar}` : 'Pinned';
+  };
   const you = groups.find((group) => group.isYou);
   const friends = groups.filter((group) => !group.isYou && group.items.length > 0);
 
@@ -92,6 +101,7 @@ export default function StoriesRail({
           <YourCell
             group={you}
             pinned={pinnedIds.includes(you.id)}
+            pinLabel={pinText(you.id)}
             onOpen={() => onOpen(you.id)}
             onAddStory={onAddStory}
             size={size}
@@ -102,6 +112,7 @@ export default function StoriesRail({
             key={group.id}
             group={group}
             pinned={pinnedIds.includes(group.id)}
+            pinLabel={pinText(group.id)}
             onOpen={() => onOpen(group.id)}
             size={size}
           />
@@ -115,6 +126,7 @@ function Cell({
   children,
   label,
   pinned = false,
+  pinLabel = 'Pinned',
   wide = false,
   size,
 }: {
@@ -122,6 +134,8 @@ function Cell({
   label: string;
   /** Shared bar presence tonight: a second small line under the name. */
   pinned?: boolean;
+  /** "at <Bar>" (owner, 2026-09-20) or "Pinned" when the bar is unknown. */
+  pinLabel?: string;
   /** Your cell once a story exists: it carries a second 44px target beside the
       avatar, so it needs the room. The label stays centred on the AVATAR
       rather than on the widened cell. */
@@ -149,9 +163,9 @@ function Cell({
       {pinned ? (
         <span
           data-testid="story-pin-badge"
-          className={`text-[10px] text-muted leading-none -mt-1 ${wide ? 'w-14 text-center' : ''}`}
+          className={`text-[10px] text-muted leading-none -mt-1 max-w-full truncate ${wide ? 'w-14 text-center' : ''}`}
         >
-          Pinned<span className="sr-only"> a spot tonight</span>
+          {pinLabel}<span className="sr-only"> — pinned a spot tonight</span>
         </span>
       ) : null}
     </li>
@@ -167,19 +181,21 @@ function Cell({
 function YourCell({
   group,
   pinned,
+  pinLabel,
   onOpen,
   onAddStory,
   size,
 }: {
   group: StoryGroup;
   pinned: boolean;
+  pinLabel: string;
   onOpen: () => void;
   onAddStory: () => void;
   size: RailSize;
 }): JSX.Element {
   const hasStory = group.items.length > 0;
   return (
-    <Cell label="You" pinned={pinned} wide={hasStory} size={size}>
+    <Cell label="You" pinned={pinned} pinLabel={pinLabel} wide={hasStory} size={size}>
       {/* Two 44px targets cannot both fit on one 56px avatar. The original
           shape put the add button at `left-3 top-3 w-11 h-11`, i.e. over
           (12,12)-(56,56) of the 56px cell — which contains the avatar's own
@@ -264,16 +280,18 @@ function YourCell({
 function FriendCell({
   group,
   pinned,
+  pinLabel,
   onOpen,
   size,
 }: {
   group: StoryGroup;
   pinned: boolean;
+  pinLabel: string;
   onOpen: () => void;
   size: RailSize;
 }): JSX.Element {
   return (
-    <Cell label={group.name.split(/\s+/)[0]} pinned={pinned} size={size}>
+    <Cell label={group.name.split(/\s+/)[0]} pinned={pinned} pinLabel={pinLabel} size={size}>
       <span className="relative block w-14 h-14">
         <button
           type="button"

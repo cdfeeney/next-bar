@@ -96,6 +96,10 @@ describe('V8-R-CMP-001 — three steps, and Bar/People are branches not steps', 
       expect(row.querySelector('svg')).not.toBeNull();
       expect(row.textContent).not.toMatch(/[◎◑]/);
     }
+    // T-01e (owner): an empty row names its action ONCE — "Choose" / "Add" used
+    // to print as both the value and the action.
+    expect((screen.getByTestId('composer-bar').textContent?.match(/choose/gi) ?? []).length).toBeLessThanOrEqual(1);
+    expect((screen.getByTestId('composer-people').textContent?.match(/\badd\b/gi) ?? []).length).toBeLessThanOrEqual(1);
   });
 
   test('the People picker is a sheet over Compose and returns straight to it', async () => {
@@ -1275,7 +1279,7 @@ describe('V8-R-CMP-013 — the bar tag is a decision, never a detection', () => 
   test('starts empty, and an empty venue is a finished state', async () => {
     const user = userEvent.setup();
     mount();
-    expect(screen.getByTestId('composer-bar').getAttribute('data-value')).toBe('Choose');
+    expect(screen.getByTestId('composer-bar').getAttribute('data-value')).toBe('');
     await toDestinations(user);
     await user.click(screen.getByTestId('composer-destination-feed'));
     await user.click(screen.getByTestId('composer-share'));

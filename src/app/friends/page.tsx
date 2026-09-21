@@ -130,6 +130,17 @@ export default function SocialPage(): JSX.Element {
     if (youId !== null && myPresence?.barId != null) ids.push(youId);
     return ids;
   }, [presenceRows, myPresence, youId]);
+  // The rail reads "at <Bar>" under a pinned person (owner, 2026-09-20). Ids
+  // the local catalog cannot resolve are simply absent and fall back to "Pinned".
+  const pinnedBars = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of presenceRows ?? []) {
+      const name = row.barId !== null ? getBarById(row.barId)?.name : undefined;
+      if (name) map.set(row.userId, name);
+    }
+    if (youId !== null && pinnedBarName !== null) map.set(youId, pinnedBarName);
+    return map;
+  }, [presenceRows, youId, pinnedBarName]);
   // The queue only ever contains people who have something to show. Memoised
   // so the viewer's navigation callbacks are not rebuilt on every render.
   const queue = useMemo(
@@ -149,6 +160,7 @@ export default function SocialPage(): JSX.Element {
       <StoriesRail
         groups={stories.groups}
         pinnedIds={pinnedIds}
+        pinnedBars={pinnedBars}
         onOpen={openStories}
         onAddStory={() => setAddingStory(true)}
         size={size}

@@ -35,7 +35,7 @@ test(`street travel cards at ${textSize}% text (${coarse ? 'approximate' : 'prec
   await page.goto('/');
   await page.addStyleTag({ content: `html { font-size: ${textSize}%; }` });
   await expect(page.getByTestId('result-card').first()).toContainText('Distance Fixture');
-  await expect(page.getByText('Catalog refresh unavailable — showing the emergency set.')).toHaveCount(0);
+  await expect(page.getByText(/Couldn't load the full bar list|Showing a saved bar list/)).toHaveCount(0);
   if (coarse) await expect(page.getByText('Approximate — based on Chelsea', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Calculate travel times' })).toHaveCount(0);
   const cards = page.getByTestId('result-card');

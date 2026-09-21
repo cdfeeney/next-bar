@@ -52,8 +52,10 @@ email before step 2.
 appstoreconnect.apple.com → Users and Access → Integrations → App Store
 Connect API → Team Keys → **Generate API Key**.
 
-- Name: `github-actions` · Access: **Admin** (required — App Manager cannot
-  create the distribution certificate that cloud signing needs).
+- Name: `github-actions` · Access: **App Manager** is enough since CERT-01
+  (the key only uploads builds now; the certificate comes from a secret). It
+  was **Admin** while cloud signing had to mint certificates — an existing
+  Admin key keeps working, and downgrading it is optional housekeeping.
 - Download the `.p8` file — **downloadable exactly once**; keep it somewhere
   safe (password manager).
 - Note the **Key ID** and the **Issuer ID** (top of the page).
@@ -121,8 +123,12 @@ Testers install the free **TestFlight** app, tap the invite, done.
 
 ## Troubleshooting
 
-- **"No profiles / signing" errors** → API key isn't Admin, or
-  `APPLE_TEAM_ID` is wrong.
+- **"No profiles / signing" errors** → since CERT-01 the lane never lets
+  Xcode mint anything, so look at the secrets: `IOS_PROFILE_BASE64` or
+  `IOS_DIST_P12_BASE64` expired (both 2027-09-21) or do not match each
+  other (the profile must embed the imported certificate), or
+  `IOS_DIST_P12_PASSWORD` is wrong. `APPLE_TEAM_ID` wrong is the other
+  cause. The API key's role is NOT a signing cause any more.
 - **altool/upload 409 duplicate build** → `BUILD_NUMBER` collision; re-run
   the workflow (run_number always increments).
 - **App shows blank/offline page** → `native/shell/index.html` rendered,

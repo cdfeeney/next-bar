@@ -35,6 +35,7 @@ describe('StoriesRail pin (T-01b)', () => {
     );
     const pins = screen.getAllByTestId('story-pin-badge');
     expect(pins).toHaveLength(1);
+    // No bar map → the honest fallback.
     expect(pins[0]).toHaveTextContent(/^Pinned/);
     expect(pins[0].className).toContain('text-muted');
     // It is the sibling AFTER the name label inside the same cell.
@@ -43,6 +44,19 @@ describe('StoriesRail pin (T-01b)', () => {
     expect(labels.indexOf('Claire')).toBeLessThan(labels.findIndex((t) => /^Pinned/.test(t ?? '')));
     // No positioned square anywhere in the rail.
     expect(document.querySelector('.rounded-\\[3px\\]')).toBeNull();
+  });
+
+  test('with the bar known, the line reads "at <Bar>" (T-01e, owner)', () => {
+    render(
+      <StoriesRail
+        groups={[group({})]}
+        pinnedIds={['p1']}
+        pinnedBars={new Map([['p1', 'Attaboy']])}
+        onOpen={() => {}}
+        onAddStory={() => {}}
+      />,
+    );
+    expect(screen.getByTestId('story-pin-badge')).toHaveTextContent(/^at Attaboy/);
   });
 
   test('an unpinned rail renders no pin text at all', () => {

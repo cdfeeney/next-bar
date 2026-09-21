@@ -97,7 +97,12 @@ platform :ios do
       skip_waiting_for_build_processing: true
     )
   ensure
-    # Never leave the certificate on the runner past the lane, even on failure.
-    delete_keychain(name: keychain_name) if keychain_name && File.exist?(File.expand_path("~/Library/Keychains/#{keychain_name}"))
+    # Never leave the keychain on the runner past the lane, even on failure —
+    # and never let the cleanup's own error hide the lane's real one.
+    begin
+      delete_keychain(name: keychain_name) if keychain_name && File.exist?(File.expand_path("~/Library/Keychains/#{keychain_name}"))
+    rescue StandardError => e
+      UI.important("keychain cleanup failed: #{e.message}")
+    end
   end
 end

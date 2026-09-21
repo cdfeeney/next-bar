@@ -244,8 +244,8 @@ test.describe('mobile controls are reachable', () => {
       await fulfillCatalog(route);
     });
     await page.goto('/');
-    await expect(page.getByText(/Loading the Manhattan catalog/)).toBeVisible();
-    await expect(page.getByText(/Loading the Manhattan catalog/)).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.getByText(/Loading more bars/)).toBeVisible();
+    await expect(page.getByText(/Loading more bars/)).toHaveCount(0, { timeout: 15_000 });
     const lastControl = page.getByRole('button', { name: /Not listed/ });
     await lastControl.scrollIntoViewIfNeeded();
     await expect(lastControl).toBeVisible();
@@ -270,7 +270,7 @@ test.describe('mobile controls are reachable', () => {
       // A catalog swap after scrolling moves the bottom of the picker.
       // The saved WebKit trace placed its final page response inside the old
       // 500ms measurement pause. Measure only after the list has settled.
-      await expect(page.getByText(/Loading the Manhattan catalog/)).toHaveCount(0, { timeout: 15_000 });
+      await expect(page.getByText(/Loading more bars/)).toHaveCount(0, { timeout: 15_000 });
       await waitForStableControls(page);
     }
 

@@ -157,7 +157,7 @@ export default function ComposeStep({
           testId="composer-bar"
           icon={<Glyph><MartiniGlyphPaths /></Glyph>}
           label="Bar"
-          value={bar?.name ?? 'Choose'}
+          value={bar?.name ?? ''}
           action={bar === null ? 'Choose' : 'Change'}
           onClick={() => setSheet('bar')}
         />
@@ -258,7 +258,9 @@ export function ExitButton({
 }
 
 function peopleLabel(people: readonly TaggedPerson[]): string {
-  if (people.length === 0) return 'Add';
+  // Empty: the row's ACTION already says "Add"; printing it twice read as two
+  // controls on the phone (owner, 2026-09-20).
+  if (people.length === 0) return '';
   const first = people[0].name.split(/\s+/)[0];
   return people.length === 1 ? first : `${first} + ${people.length - 1}`;
 }
