@@ -10,7 +10,7 @@ Capacitor wraps the live site in a native iOS shell (`ios/` +
 `capacitor.config.ts`). Web deploys update the app instantly. The native
 shell only rebuilds when config, plugins, or icons change — via
 `.github/workflows/ios-testflight.yml` on a macOS runner with Xcode cloud
-signing (no certs stored anywhere).
+signing (no certs stored anywhere) — until CERT-01 (2026-09-20): now one fixed certificate + profile from secrets, see step 5.
 
 **Origin (2026-08-03):** the shell's origin is config-driven and defaults
 to the canonical **`https://next-bar.com`**. Until next-bar.com DNS points
@@ -73,6 +73,23 @@ gh secret set ASC_KEY_P8_BASE64 --body ([Convert]::ToBase64String([IO.File]::Rea
 # or Git Bash:
 gh secret set ASC_KEY_P8_BASE64 --body "$(base64 -w0 AuthKey_XXXX.p8)"
 ```
+
+### 5. The fixed signing certificate + profile (CERT-01, 2026-09-20) — three more secrets
+
+Xcode cloud signing on a fresh runner minted a NEW Apple Distribution certificate every run (the runner
+never holds the previous private key), and Apple caps those per team: build 13 failed with "maximum number
+of certificates". The lane now imports ONE certificate and ONE App Store profile from secrets:
+
+| Secret | What it is | Made how |
+| --- | --- | --- |
+| `IOS_DIST_P12_BASE64` | the Apple Distribution certificate + its private key, PKCS#12, base64 | key + CSR generated with openssl on Windows (`~/.config/next-bar/ios-distribution.key`, never in the repo); CSR uploaded at developer.apple.com → Certificates → + → Apple Distribution; `.cer` + key → `.p12` |
+| `IOS_DIST_P12_PASSWORD` | the .p12 password | random, kept beside the key |
+| `IOS_PROFILE_BASE64` | the App Store provisioning profile for com.nextbar.app, base64 | developer.apple.com → Profiles → + → App Store Connect → com.nextbar.app → that certificate → "Next Bar App Store" |
+
+The lane reads the profile's Name from the file itself, so the portal name is a label only. Both the
+certificate and the profile expire one year after creation (**2027-09-21** for the current pair); renewing =
+repeat the two portal steps with the SAME CSR/key, rebuild the .p12, re-set the three secrets. Old CI-minted
+certificates in the portal are dead weight — revoke them (revoking never affects builds already on TestFlight).
 
 ## Every build after that (one command)
 

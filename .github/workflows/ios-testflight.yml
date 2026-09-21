@@ -57,12 +57,31 @@ jobs:
           mkdir -p "$HOME/asc"
           echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$HOME/asc/AuthKey.p8"
 
+      # CERT-01 (2026-09-20): one fixed distribution certificate + one App Store
+      # profile, from secrets. Xcode cloud signing minted a new certificate on
+      # every run of this fresh runner and hit Apple's per-team cap (build 13).
+      - name: Write signing certificate and profile
+        env:
+          IOS_DIST_P12_BASE64: ${{ secrets.IOS_DIST_P12_BASE64 }}
+          IOS_PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$IOS_DIST_P12_BASE64" || { echo "::error::IOS_DIST_P12_BASE64 secret is empty"; exit 1; }
+          test -n "$IOS_PROFILE_BASE64" || { echo "::error::IOS_PROFILE_BASE64 secret is empty"; exit 1; }
+          mkdir -p "$HOME/signing"
+          echo "$IOS_DIST_P12_BASE64" | base64 --decode > "$HOME/signing/distribution.p12"
+          echo "$IOS_PROFILE_BASE64" | base64 --decode > "$HOME/signing/AppStore.mobileprovision"
+          # Say WHICH certificate and profile this run signs with (public halves only).
+          security cms -D -i "$HOME/signing/AppStore.mobileprovision" | plutil -extract Name raw - | sed 's/^/profile: /'
+          security cms -D -i "$HOME/signing/AppStore.mobileprovision" | plutil -extract ExpirationDate raw - | sed 's/^/profile expires: /'
+
       - name: Build and upload to TestFlight
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_DIST_P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: |
           # CHOOSE THE LAUNCHER, THEN RUN THE LANE EXACTLY ONCE.
@@ -87,6 +106,8 @@ jobs:
           # status is fastlane's own.
           set -euo pipefail
           export ASC_KEY_PATH="$HOME/asc/AuthKey.p8"
+          export IOS_DIST_P12_PATH="$HOME/signing/distribution.p12"
+          export IOS_PROFILE_PATH="$HOME/signing/AppStore.mobileprovision"
 
           if [ -f Gemfile ] && bundle check >/dev/null 2>&1; then
             echo "fastlane launcher: bundle exec (Gemfile present and satisfied)"
