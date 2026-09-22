@@ -703,12 +703,17 @@ test.describe('Add to Story — signed in', () => {
     await expect(page.getByTestId('camera-step')).toHaveText(/1 of 2/);
     await waitForCameraFrame(page);
     expect(await cameraCalls(page)).toEqual(['environment']);
+    // T-01f (owner): the rear lens previews as-is…
+    await expect(page.getByTestId('camera-preview')).toHaveAttribute('data-mirrored', 'false');
 
     // First shutter → the stage flips to the FRONT camera for the second shot.
     await page.getByTestId('camera-shutter').click();
     await expect(page.getByTestId('camera-step')).toHaveText(/2 of 2/);
     await waitForCameraFrame(page);
     expect(await cameraCalls(page)).toEqual(['environment', 'user']);
+    // …and the front lens previews like a mirror.
+    await expect(page.getByTestId('camera-preview')).toHaveAttribute('data-mirrored', 'true');
+    await expect(page.getByTestId('camera-preview')).toHaveClass(/-scale-x-100/);
 
     // Second shutter → the paired review: inset present at 92px, 2×2 buttons.
     await page.getByTestId('camera-shutter').click();

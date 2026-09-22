@@ -99,9 +99,16 @@ export default function CameraStage({
         <video
           ref={camera.videoRef}
           data-testid="camera-preview"
+          data-mirrored={(camera.actualFacing ?? facing) === 'user' ? 'true' : 'false'}
           playsInline
           muted
-          className="w-full h-full object-cover"
+          // The front lens previews like a mirror (owner, 2026-09-21), the way
+          // every phone camera does; the captured frame is flipped to match
+          // in useCamera.capture so what you saw is what you get.
+          className={[
+            'w-full h-full object-cover',
+            (camera.actualFacing ?? facing) === 'user' ? '-scale-x-100' : '',
+          ].join(' ')}
         />
         {lensMismatch ? (
           <p

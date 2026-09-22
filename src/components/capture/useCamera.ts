@@ -209,6 +209,13 @@ export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
     canvas.height = height;
     const context = canvas.getContext('2d');
     if (context === null) return null;
+    // The front lens is previewed mirrored (CameraStage); flip the saved
+    // frame the same way so the photo matches what the person composed.
+    // Same rule as the preview: what the device SAID it served, else what we asked for.
+    if ((actualFacing ?? facing) === 'user') {
+      context.translate(width, 0);
+      context.scale(-1, 1);
+    }
     context.drawImage(video, 0, 0, width, height);
     try {
       return canvas.toDataURL('image/jpeg', CAPTURE_QUALITY);
@@ -217,7 +224,7 @@ export function useCamera(facing: CameraFacing, active: boolean): UseCamera {
       // than letting the shutter throw into the render.
       return null;
     }
-  }, []);
+  }, [actualFacing, facing]);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 

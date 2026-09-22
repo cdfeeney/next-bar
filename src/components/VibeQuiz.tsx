@@ -59,7 +59,10 @@ export default function VibeQuiz({ onComplete }: VibeQuizProps) {
   };
 
   return (
-    <section className="min-h-screen flex flex-col px-6 py-10">
+    // pb-28 clears the FIXED bottom nav (R5): without it the section filled
+    // the viewport, the centred block ran under the tab bar, and the last
+    // answer was visible but not tappable (owner, 2026-09-21, T-01f).
+    <section className="min-h-screen flex flex-col px-6 pt-10 pb-28">
       <div className="h-1 bg-border w-full max-w-3xl mx-auto rounded-full overflow-hidden">
         <div
           className="h-1 bg-accent transition-all duration-300"

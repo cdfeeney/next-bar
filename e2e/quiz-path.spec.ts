@@ -67,6 +67,31 @@ test.describe('Quiz path', () => {
   // still fails, just on the assertion rather than on the clock.
   test.slow();
 
+  test('every answer on question 1 is tappable — none sits under the fixed tab bar (T-01f)', async ({ page }) => {
+    // Owner, 2026-09-21: "the person can't choose the button". The quiz section
+    // filled the viewport with no clearance for the fixed 5-tab nav, so the
+    // last answer sat under it: visible, not tappable. elementFromPoint at
+    // the answer's centre tells us who would actually receive the tap.
+    await page.goto('/quiz');
+    const answers = page.getByRole('main').getByRole('button').filter({ hasNotText: /Skip|Back|Next/ });
+    await expect(answers.first()).toBeVisible();
+    const count = await answers.count();
+    expect(count).toBeGreaterThanOrEqual(2);
+    for (let i = 0; i < count; i++) {
+      const answer = answers.nth(i);
+      await answer.scrollIntoViewIfNeeded();
+      const hit = await answer.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        return at !== null && el.contains(at);
+      });
+      expect(hit, `answer ${i + 1} of ${count} is covered (by the tab bar?) at its centre`).toBe(true);
+    }
+    // And the last one really advances the quiz when tapped.
+    await answers.nth(count - 1).click();
+    await expect(page.getByText(/Question 2 of/i)).toBeVisible();
+  });
+
   test('navigates to /quiz, completes 6-question quiz, picks neighborhood, sees 3 result cards', async ({ page }) => {
     await reachQuizResults(page);
 
