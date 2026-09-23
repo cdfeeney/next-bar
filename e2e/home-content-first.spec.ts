@@ -66,6 +66,16 @@ test.describe('Home — content first (NB-01)', () => {
     await expect(page.getByTestId('result-card').first()).toBeVisible();
   });
 
+  test('a saved neighbourhood the catalogue no longer knows falls back to the picker', async ({
+    page,
+    context,
+  }) => {
+    await seedNeighbourhood(context, 'Atlantis');
+    await page.goto('/');
+    await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: /find bars near you/i })).toHaveCount(0);
+  });
+
   test('undecided permission + nothing saved: the bar picker, never a blank screen', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible({ timeout: 15_000 });

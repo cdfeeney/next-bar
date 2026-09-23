@@ -293,11 +293,13 @@ export default function ResultsView({
     location.kind === 'coords' && preferredNeighborhoods.length > 0;
   const locationLabel =
     location.kind === 'neighborhood'
-      ? `Near ${displayHood(location.neighborhood)}`
+      ? `In ${displayHood(location.neighborhood)}`
       : location.originLabel
       ? location.originLabel
       : location.snappedTo
-      ? `Approximate — based on ${location.snappedTo}`
+      // NB-01: coarse fixes read "Near you · <neighbourhood>", the same
+      // line shape as the precise path (round-1 panel, Codex MEDIUM).
+      ? `Near you · ${displayHood(location.snappedTo)}`
       : neighborhoodFiltered
         ? 'Near you · limited to your picked neighborhoods'
         : 'Near you';

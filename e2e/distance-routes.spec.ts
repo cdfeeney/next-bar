@@ -36,12 +36,14 @@ test(`street travel cards at ${textSize}% text (${coarse ? 'approximate' : 'prec
   await page.addStyleTag({ content: `html { font-size: ${textSize}%; }` });
   await expect(page.getByTestId('result-card').first()).toContainText('Distance Fixture');
   await expect(page.getByText(/Couldn't load the full bar list|Showing a saved bar list/)).toHaveCount(0);
-  if (coarse) await expect(page.getByText('Approximate — based on Chelsea', { exact: true })).toBeVisible();
+  // NB-01: a coarse fix reads "Near you · <neighbourhood>", same shape as the precise line.
+  if (coarse) await expect(page.getByText('Near you · Chelsea', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Calculate travel times' })).toHaveCount(0);
   const cards = page.getByTestId('result-card');
   await expect(cards).toHaveCount(3);
   await expect(cards.first()).toContainText('Walk ~10 min');
-  await expect(cards.first()).toContainText('Drive ~5 min');
+  // NB-01: the drive line left the card (the lightbox carries the other mode).
+  await expect(cards.first()).not.toContainText('Drive ~5 min');
   await expect(page.getByRole('heading', { name: 'A little farther away' })).toHaveCount(0);
   const explanation = page.getByText('Times are estimates; driving excludes traffic and pickup waits.', { exact: true });
   await expect(explanation).toBeHidden();
@@ -53,14 +55,21 @@ test(`street travel cards at ${textSize}% text (${coarse ? 'approximate' : 'prec
   const initialPosts = posts;
   expect(initialPosts).toBeGreaterThanOrEqual(1);
   expect(initialPosts).toBeLessThanOrEqual(2);
-  const href = await cards.first().getByRole('link', { name: 'Walk Maps' }).getAttribute('href');
+  // NB-01: both directions links live in the lightbox now — "View on Maps"
+  // follows the selected mode (walking here) and the quiet link is the other.
+  await cards.first().getByRole('button', { name: /^Photos & hours$/ }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  const href = await dialog.getByRole('link', { name: 'View on Maps' }).getAttribute('href');
   const url = new URL(href!);
   expect(url.searchParams.get('origin')).toBe(`${origin.lat},${origin.lng}`);
   expect(url.searchParams.get('travelmode')).toBe('walking');
-  const drive = new URL((await cards.first().getByRole('link', { name: 'Drive directions' }).getAttribute('href'))!);
+  const drive = new URL((await dialog.getByRole('link', { name: 'Drive directions' }).getAttribute('href'))!);
   expect(drive.searchParams.get('destination')).toBe(url.searchParams.get('destination'));
   expect(drive.searchParams.get('origin')).toBe(url.searchParams.get('origin'));
   expect(drive.searchParams.get('travelmode')).toBe('driving');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
   const layout = await page.evaluate(() => ({
     width: document.documentElement.clientWidth,
     content: document.documentElement.scrollWidth,

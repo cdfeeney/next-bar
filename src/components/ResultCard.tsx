@@ -37,7 +37,7 @@ type ResultCardProps = {
 /**
  * QA5-S1 (operator 2026-07-26): the full-bleed photo HERO card returns
  * (E2.3 semantics), but with the identity text kept SMALL — readable,
- * never truncated (wrap allowed). The hero leads 21/9; name +
+ * never truncated (wrap allowed). The hero leads 16/9 (NB-01); name +
  * neighborhood + $ sit on a bottom gradient overlay; tapping the hero
  * opens the BarLightbox (carousel, hours, review). Broken photos advance
  * through the carousel then fall back to the glyph tile.

@@ -13,7 +13,7 @@ import dynamic from 'next/dynamic';
 export default dynamic(() => import('@/components/GooglePlacePhoto'), {
   ssr: false,
   /**
-   * Reserve the 21/9 strip from FIRST PAINT, not from mount.
+   * Reserve the 16/9 strip from FIRST PAINT, not from mount.
    *
    * Without this the media band is 0px tall until the dynamic chunk
    * resolves, then snaps to the reservation when GooglePlacePhoto mounts
@@ -26,5 +26,5 @@ export default dynamic(() => import('@/components/GooglePlacePhoto'), {
    * Purely a placeholder box — it renders no Google content and issues no
    * request, so it cannot affect billing.
    */
-  loading: () => <div className="w-full aspect-[21/9]" />,
+  loading: () => <div className="w-full aspect-[16/9]" />,
 });

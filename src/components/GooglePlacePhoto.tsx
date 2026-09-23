@@ -359,25 +359,25 @@ export default function GooglePlacePhoto({
       hidden={status === 'late'}
       // NEVER clip, and never impose a fixed height on a loaded widget.
       //
-      // This used to be `aspect-[21/9] overflow-hidden`, which reserved a
+      // This used to be `aspect-[16/9] overflow-hidden`, which reserved a
       // tidy box and then CUT OFF everything Google rendered past it —
       // including the attribution (measured live: 365px of content in a
       // 145.7px box). A reservation that truncates the provider's required
       // credit is worse than a little layout shift.
       //
-      // So: while PENDING, reserve the SAME 21/9 strip the fallback and the
+      // So: while PENDING, reserve the SAME 16/9 strip the fallback and the
       // loaded card use; once the widget is READY, the container takes its
       // natural height and the content decides.
       //
       // The reservation used to be `min-h-[146px]` — a number that matched
-      // nothing. The fallback renders `aspect-[21/9]`, which is ~153px at a
+      // nothing. The fallback renders `aspect-[16/9]`, which is ~153px at a
       // 358px card and ~170px at 398px, so every degradation moved the card
       // by a different amount at every width. Reserving the ratio instead of
       // a magic height makes pending and fallback identical at ALL widths,
       // which is what "the aspect ratio holds and does not collapse or jump
       // during load" actually requires (g-65ba768e criterion 4).
       //
-      // `aspect-[21/9]` sets height from width without capping it: once the
+      // `aspect-[16/9]` sets height from width without capping it: once the
       // status flips to 'ready' the class is dropped entirely, so a tall
       // widget still expands freely and nothing is clipped (the 145.7-vs-365
       // regression google-photo-layout.spec.ts pins).
@@ -390,7 +390,7 @@ export default function GooglePlacePhoto({
       // (santa: Claude/FABLE M-2.)
       className={[
         'w-full',
-        status === 'pending' ? 'aspect-[21/9]' : '',
+        status === 'pending' ? 'aspect-[16/9]' : '',
         className ?? '',
       ]
         .filter(Boolean)

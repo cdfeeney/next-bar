@@ -26,6 +26,7 @@ import { deriveNightPhase } from '@/lib/nightPhase';
 import { loadIntent, wasOutLastNight } from '@/lib/intent';
 import { loadPhaseOverride } from '@/lib/phaseOverride';
 import { NEIGHBORHOOD_CENTROIDS, RADIUS_WALK, RESULTS_COUNT } from '@/lib/constants';
+import { displayHood } from '@/lib/hoodDisplay';
 import { advanceShownIds } from '@/lib/resultsRefresh';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
@@ -489,8 +490,15 @@ export default function WhereNextFlow() {
     // browser prompt (still gesture-bound — load-time prompts get
     // reflex-dismissed and iOS remembers that as a permanent deny).
     // Nothing saved → the picker, never a blank screen.
+    // Ranked FROM the neighbourhood's centroid as coords, never as a
+    // `neighborhood` location: that kind hands the ranker a neighbourhood
+    // FILTER (matching.ts), which empties the "Worth a cab" and "Anywhere"
+    // bands (round-1 panel, Fable HIGH). A stored value the catalogue no
+    // longer knows (loadProfile validates strings only) has no centroid →
+    // the picker (Codex MEDIUM).
     const homeHood = profile.preferredNeighborhoods[0];
-    if (!homeHood) return renderPickBar();
+    const homeCentroid = homeHood ? NEIGHBORHOOD_CENTROIDS[homeHood] : undefined;
+    if (!homeHood || !homeCentroid) return renderPickBar();
     return (
       <main>
         <div className="px-6 pt-4 flex items-center justify-center">
@@ -499,7 +507,7 @@ export default function WhereNextFlow() {
             onClick={() =>
               setStep({
                 kind: 'tweakVibeAuto',
-                coords: NEIGHBORHOOD_CENTROIDS[homeHood],
+                coords: homeCentroid,
                 returnTo: 'askLocation',
               })
             }
@@ -516,7 +524,13 @@ export default function WhereNextFlow() {
         </div>
         <ResultsView
           profile={autoProfile}
-          location={{ kind: 'neighborhood', neighborhood: homeHood }}
+          location={{
+            kind: 'coords',
+            coords: homeCentroid,
+            band: 'snapped',
+            snappedTo: homeHood,
+            originLabel: `Near ${displayHood(homeHood)}`,
+          }}
           locationAction={
             <button
               type="button"

@@ -83,7 +83,8 @@ test.describe('E3.2 distance chips', () => {
     // route times are disabled. It must not reuse the nearest-15 walk shortlist.
     await expect(cards.locator('h3')).not.toHaveText(walkBatch);
     await expectDistanceBand(cards, null, RADIUS_CAB);
-    await expect(cards.first()).toContainText(/Drive ~/);
+    // NB-01: the card carries the walk line only; drive time lives in the lightbox.
+    await expect(cards.first()).not.toContainText(/Drive ~/);
     await expect(page).toHaveURL('/');
 
     await anywhere.click();

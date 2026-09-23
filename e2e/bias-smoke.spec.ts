@@ -58,7 +58,9 @@ test.describe('Bias smoke — Midtown geolocation', () => {
     // old 3s race window was the real cause of the "drift" here — results
     // arrived WHILE we waited for a button that never comes on the granted
     // path). Race BOTH outcomes with one generous window, then branch.
-    const resultsHeading = page.getByRole('heading', { name: /Your next \d+ bars?/i });
+    // NB-01: no "Your next N bars" headline any more — the first result
+    // card is the granted-path signal.
+    const resultsHeading = page.getByTestId('result-card').first();
     const useLocationBtn = page.getByRole('button', { name: /Use my location/i });
 
     await expect(resultsHeading.or(useLocationBtn).first()).toBeVisible({

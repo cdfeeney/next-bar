@@ -34,10 +34,8 @@ async function reachAutoResults(
   await grantGeolocation(context, LES);
   await page.clock.setFixedTime(FRIDAY_NIGHT);
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /Your next/i })).toBeVisible({
-    timeout: 15_000,
-  });
-  await expect(cards(page).first()).toBeVisible();
+  // NB-01: no "Your next N bars" headline — the first card is the signal.
+  await expect(cards(page).first()).toBeVisible({ timeout: 15_000 });
 }
 
 async function openTweak(page: Page): Promise<void> {
@@ -67,7 +65,6 @@ async function toggleChip(
 
 async function applyTweak(page: Page): Promise<void> {
   await page.getByRole('button', { name: /^Apply$/ }).click();
-  await expect(page.getByRole('heading', { name: /Your next/i })).toBeVisible();
   await expect(cards(page).first()).toBeVisible();
 }
 

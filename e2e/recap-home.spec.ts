@@ -48,11 +48,8 @@ test.describe('E4.2/E4.5 recap home', () => {
     await page.clock.setFixedTime(SUNDAY_9AM);
     await page.goto('/');
 
-    // Phase derives from the night log alone (no intent seeded).
-    await expect(
-      page.getByRole('button', { name: /Night phase: Last night/i }),
-    ).toBeVisible();
-
+    // Phase derives from the night log alone (no intent seeded). NB-01
+    // removed the header chip, so the recap card itself is the evidence.
     const recap = page.getByTestId('recap-card');
     await expect(recap).toBeVisible();
 

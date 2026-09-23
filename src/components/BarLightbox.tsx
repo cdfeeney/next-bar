@@ -506,6 +506,18 @@ export default function BarLightbox({
             {wantsToGo ? 'On your list' : 'Want to go'}
           </button>
         </div>
+        {/* NB-01: the result card no longer carries its two directions
+            links, so the OTHER travel mode must be reachable here — "View on
+            Maps" above follows the selected mode; this quiet link is the
+            other one (round-1 panel, Fable + Codex). */}
+        <a
+          href={directionsHref(origin, bar, directionsMode === 'walking' ? 'driving' : 'walking')}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block text-center text-xs text-accent min-h-[44px] leading-[44px] touch-manipulation hover:underline underline-offset-4"
+        >
+          {directionsMode === 'walking' ? 'Drive directions' : 'Walk directions'}
+        </a>
       </div>
     </div>
   );
