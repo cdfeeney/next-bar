@@ -59,7 +59,8 @@ test.describe('Hero result card', () => {
 
     // The catalog fixture supplies confirmed routes; disabled routing has its own distance test.
     await expect(cards.first().getByText(/^Walk ~/)).toBeVisible();
-    await expect(cards.first().getByText(/^Drive ~/)).toBeVisible();
+    // NB-01: the drive line left the card (it lives in the lightbox).
+    await expect(cards.first().getByText(/^Drive ~/)).toHaveCount(0);
 
     // Tap the hero → lightbox (carousel + hours).
     await cards

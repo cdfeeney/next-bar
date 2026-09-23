@@ -142,7 +142,8 @@ it('V9-01: a taste-ordered walkable search can confirm only three because the 15
     } });
     rerender(<ResultsView {...props} profile={taste} />);
     expect(screen.getAllByRole('article')).toHaveLength(3);
-    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Your next 3 bars');
+    // NB-01: the "Your next N bars" headline is gone; the count is the cards.
+    expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
     // V9-01: the surface no longer narrates its routing budget.
     expect(screen.queryByText(/routes confirmed in this search/)).toBeNull();
     expect(screen.queryByText(/candidates; this is not an exhaustive search/)).toBeNull();

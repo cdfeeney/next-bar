@@ -18,12 +18,13 @@ test.describe('Home — location-first', () => {
     await grantGeolocation(context, { latitude: 40.725, longitude: -73.985 });
     await page.goto('/');
 
-    // Suggestions render straight away, ranked from the user's location.
-    await expect(page.getByRole('heading', { name: /Your next/i })).toBeVisible({
+    // Suggestions render straight away, ranked from the user's location
+    // (NB-01: the "Your next N bars" headline is gone; the location line
+    // and the cards are the evidence).
+    await expect(page.getByTestId('result-card').first()).toBeVisible({
       timeout: 15_000,
     });
     await expect(page.getByText('Near you', { exact: true })).toBeVisible();
-    await expect(page.getByTestId('result-card').first()).toBeVisible();
 
     // The manual seed prompt is NOT the surface shown when we can locate you.
     await expect(
@@ -83,41 +84,18 @@ test('a DENIED location explains itself with recovery steps instead of failing s
   await expect(page.getByRole('button', { name: /try again/i })).toBeVisible();
 });
 
-test('an UNDECIDED permission shows the primer — the real prompt fires from the tap, not on load', async ({
-  page,
-}) => {
-  // Default context: permission state 'prompt' (never asked). The app must
-  // NOT auto-fire the browser prompt on load — it primes with its own
-  // value proposition and a gesture-bound button (web research: load-time
-  // prompts get reflex-dismissed and iOS remembers that as a permanent
-  // deny; gesture-bound asks get approved).
-  await page.goto('/');
-
-  await expect(
-    page.getByRole('heading', { name: /find bars near you/i }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole('button', { name: /share my location/i }),
-  ).toBeVisible();
-
-  // The manual path stays one tap away.
-  await page.getByRole('button', { name: /pick a bar instead/i }).click();
-  await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible();
-});
-
+// An UNDECIDED permission no longer shows a primer wall (NB-01, owner
+// 2026-09-23): with a saved neighbourhood the home opens on results, without
+// one it opens on the picker, and "Use my location" is the gesture-bound tap
+// in both — covered by e2e/home-content-first.spec.ts. The browser prompt
+// still never fires on load.
 test('the manual screen keeps "use my location" one tap away (no reload needed)', async ({
   page,
 }) => {
   await page.goto('/');
-  // Wait for the PRIMER to settle before clicking — the spinner screen has
-  // its own "Pick a bar instead" whose mid-swap coordinates land on the
-  // primer's "Share my location" (detachment race caught in CI).
-  await expect(
-    page.getByRole('heading', { name: /find bars near you/i }),
-  ).toBeVisible();
-  await page.getByRole('button', { name: /pick a bar instead/i }).click();
-  await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible();
-  // …and the location path is still right there.
+  // Nothing saved → the picker is the home screen itself.
+  await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible({ timeout: 15_000 });
+  // …and the location path is right there.
   await expect(
     page.getByRole('button', { name: /use my location/i }),
   ).toBeVisible();

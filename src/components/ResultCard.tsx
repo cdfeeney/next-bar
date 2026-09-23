@@ -90,7 +90,7 @@ export default function ResultCard({ bar, rank, selectedVibes, showShare, origin
           placeId={decision.placeId}
           surface="result-card"
           fallback={(
-            <div className="relative w-full aspect-[21/9] flex items-center justify-center" style={{ backgroundColor: fallbackVisual.bg, color: fallbackVisual.fg }}>
+            <div className="relative w-full aspect-[16/9] flex items-center justify-center" style={{ backgroundColor: fallbackVisual.bg, color: fallbackVisual.fg }}>
               <span aria-hidden="true" className="font-display text-4xl">{fallbackVisual.glyph}</span>
               <div className="absolute inset-x-0 bottom-0 px-4 pb-3 pt-12 flex items-end justify-between gap-3 bg-gradient-to-t from-black/85 via-black/40 to-transparent text-white">
                 <div className="min-w-0">
@@ -126,10 +126,11 @@ export default function ResultCard({ bar, rank, selectedVibes, showShare, origin
               data-testid="bar-visual"
               // Rank 1's hero is the likely LCP element — eager.
               loading={rank === 1 ? 'eager' : 'lazy'}
-              // Operator 2026-07-27: the old 16/10 banner was "super
-              // large" — a shorter 21/9 strip keeps the photo lead while
-              // fitting more of the 5-card list on one screen.
-              className="w-full aspect-[21/9] object-cover"
+              // Operator 2026-07-27 shortened the 16/10 banner to 21/9;
+              // NB-01 (owner 2026-09-23: "larger photos, not thumbnails")
+              // settles on 16/9 — taller than the strip, shorter than the
+              // banner that was "super large".
+              className="w-full aspect-[16/9] object-cover"
               onError={() =>
                 heroIdx + 1 < photos.length
                   ? setHeroIdx(heroIdx + 1)
@@ -181,35 +182,35 @@ export default function ResultCard({ bar, rank, selectedVibes, showShare, origin
           </div>
         ) : null}
 
-        {/* One meta line: the loud walk/ride time, plus the match count when —
-            and only when — the user has an explicit vibe selection active.
-            With no selection there is no honest fraction to print, so the
-            badge is omitted rather than shown as "0/1". Specs identify a card
+        {/* NB-01 (owner-approved mock v3, 2026-09-23): ONE meta line —
+            open status · walk time (· vibe match, only under an explicit
+            vibe selection; with none there is no honest fraction to print)
+            — and ONE action. The drive line and the Maps/directions links
+            left the card; they live in the lightbox. Specs identify a card
             by data-testid="result-card", never by this text. */}
-        <p className="text-sm">
+        <p className="text-sm flex items-center gap-2 flex-wrap">
+          <OpenNowBadge bar={bar} />
           <span className="font-display text-accent">{travelLoading ? 'Calculating walk…' : routeCopy(travel?.walking, 'walking')}</span>
           {badge ? (
             <span className="text-muted" data-testid="vibe-match">
-              {' '}· Vibe match {badge.num}/{badge.den}
+              · Vibe match {badge.num}/{badge.den}
             </span>
           ) : null}
         </p>
-        <p className="text-xs text-muted">
-          {travelLoading ? 'Calculating drive…' : routeCopy(travel?.driving, 'driving')}
-        </p>
 
-        {/* flex-wrap (review HIGH): open-badge + rating + Send + Maps can
-            exceed a 390px card — wrap instead of clipping under the
-            article's overflow-hidden. */}
+        {/* flex-wrap (review HIGH): action + rating + Send can exceed a
+            390px card — wrap instead of clipping under the article's
+            overflow-hidden. */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2 flex-wrap">
-            <OpenNowBadge bar={bar} />
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={openLightbox}
+              className="text-sm text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4"
+            >
+              Photos &amp; hours
+            </button>
             <RatingBadge barId={bar.id} />
-            {isGoogleLive ? (
-              <button type="button" onClick={openLightbox} className="text-xs text-accent font-display min-h-[44px] inline-flex items-center">
-                Photos &amp; hours
-              </button>
-            ) : null}
           </div>
           {showShare ? (
             <ShareButton
@@ -219,18 +220,6 @@ export default function ResultCard({ bar, rank, selectedVibes, showShare, origin
               ariaLabel={`Send ${bar.name} to friends`}
             />
           ) : null}
-          {!isGoogleLive ? <a
-            href={mapsHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-accent font-display min-h-[44px] inline-flex items-center touch-manipulation hover:underline underline-offset-4 shrink-0"
-          >
-            {directionsMode === 'walking' ? 'Walk' : 'Drive'} Maps →
-          </a> : null}
-          <a href={directionsHref(origin, bar, directionsMode === 'walking' ? 'driving' : 'walking')}
-            target="_blank" rel="noopener noreferrer" className="text-xs text-accent min-h-[44px] inline-flex items-center">
-            {directionsMode === 'walking' ? 'Drive' : 'Walk'} directions
-          </a>
         </div>
       </div>
 

@@ -90,10 +90,9 @@ test.describe('QA-6 — the one results view', () => {
     await page.clock.setFixedTime(FRIDAY_NIGHT);
     await page.goto('/');
 
-    await expect(
-      page.getByRole('heading', { name: /Your next/i }),
-    ).toBeVisible({ timeout: 15_000 });
+    // NB-01: no "Your next N bars" headline — the cards are the evidence.
     const cards = cardsOf(page);
+    await expect(cards.first()).toBeVisible({ timeout: 15_000 });
     await expect(cards).toHaveCount(3);
 
     // Operator fix 2026-07-27: home opens on Walkable — closest bars

@@ -3,11 +3,10 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import WhereNextFlow from '@/components/WhereNextFlow';
-import PhaseChip from '@/components/PhaseChip';
 import RecapCard from '@/components/RecapCard';
 import { deriveNightPhase, type NightPhase } from '@/lib/nightPhase';
 import { loadIntent, wasOutLastNight } from '@/lib/intent';
-import { loadPhaseOverride, savePhaseOverride } from '@/lib/phaseOverride';
+import { loadPhaseOverride } from '@/lib/phaseOverride';
 import { assembleNight, lastNightKey, loadNightVisits } from '@/lib/nightLog';
 import { composeRecap, type Recap } from '@/lib/recap';
 import { useBars } from '@/lib/useBars';
@@ -17,10 +16,10 @@ export default function HomePage() {
   // E2.4/E3.4 phase-adaptive home (EPICS-v0.6, locked decision 1: content
   // adapts, the 5-tab nav never does). Derived on mount — SSR has neither
   // storage nor a clock worth trusting; until then the default flow
-  // renders, which IS the fail-safe 'out' content (R10). The chip's
-  // choice persists for the night (R11) via phaseOverride, and the
-  // storage listener keeps the phase honest when intent changes in
-  // another tab.
+  // renders, which IS the fail-safe 'out' content (R10). A stored override
+  // (phaseOverride) is still honoured for the night; NB-01 (owner
+  // 2026-09-23) removed the header chip that set it, so the phase is now
+  // derived only — the recap card is the one phase-specific surface left.
   const [phase, setPhase] = useState<NightPhase | null>(null);
   // The recap composes for THIS key — state (not read at render) so a
   // rollover in a long-lived tab re-keys the effect even when the phase
@@ -63,11 +62,6 @@ export default function HomePage() {
     setRecap(composeRecap(assembleNight(recapNightKey), bars));
   }, [phase, recapNightKey, bars]);
 
-  const selectPhase = (p: NightPhase) => {
-    savePhaseOverride(p);
-    setPhase(p);
-  };
-
   // Recap LEADS with its card but keeps the find-a-bar flow on the
   // screen below it: a misdetected phase (or a planner who changes
   // their mind) never loses the app's core surface (R5 — no dead ends;
@@ -76,23 +70,17 @@ export default function HomePage() {
   // startResultsFrom (E2.2).
   return (
     <main>
-      {/* flex-wrap: with three items the row overflows ~320-360px
-          viewports — the chip+link pair wraps under the wordmark there
-          instead of breaking the wordmark itself (review finding). */}
-      <header className="px-6 py-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border">
-        <p className="font-display text-accent text-sm uppercase tracking-[0.3em] whitespace-nowrap">
-          Next Bar
-        </p>
-        <div className="flex items-center gap-3">
-          {phase ? <PhaseChip phase={phase} onSelect={selectPhase} /> : null}
-        </div>
+      {/* NB-01 (owner-approved mock v3, 2026-09-23): the header is the
+          wordmark alone — sentence case, no tracking, no phase chip. */}
+      <header className="px-6 py-4 border-b border-border">
+        <p className="font-display text-lg font-semibold">Next Bar</p>
       </header>
       {/* Operator 2026-07-26: NO install/get-the-app teasers on home —
           this IS the mobile UI (native wrap incoming). /install still
           exists as the marketing landing for external traffic. */}
       {/* QA5-S1 (operator 2026-07-26): NO planning-phase lead card here —
-          the Friends tab owns Plan Night Out. The chip still shows
-          Planning; the find-a-bar flow below is the whole screen. */}
+          the Friends tab owns Plan Night Out. The find-a-bar flow below is
+          the whole screen. */}
       {phase === 'recap' ? (
         <div className="px-6 pt-4" data-testid="phase-card-recap">
           {recap ? (

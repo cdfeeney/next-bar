@@ -25,7 +25,7 @@ import { useNightRefresh } from '@/hooks/useIntent';
 import { deriveNightPhase } from '@/lib/nightPhase';
 import { loadIntent, wasOutLastNight } from '@/lib/intent';
 import { loadPhaseOverride } from '@/lib/phaseOverride';
-import { RADIUS_WALK, RESULTS_COUNT } from '@/lib/constants';
+import { NEIGHBORHOOD_CENTROIDS, RADIUS_WALK, RESULTS_COUNT } from '@/lib/constants';
 import { advanceShownIds } from '@/lib/resultsRefresh';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
@@ -60,7 +60,11 @@ type Step =
   // surface seeds from tonight's cached vibe (falling back to the quiz
   // profile), and Apply writes the same night cache the manual flow uses
   // (E2.2 — one vibe per night, whichever surface picked it).
-  | { kind: 'tweakVibeAuto'; coords: Coords }
+  // `returnTo` (NB-01): the content-first home (askLocation, ranked from the
+  // saved neighbourhood) opens the same surface and must come BACK to
+  // itself — landing on coords-ranked autoResults would relabel a centroid
+  // as "Near you".
+  | { kind: 'tweakVibeAuto'; coords: Coords; returnTo?: 'askLocation' }
   | { kind: 'pickBar' }
   | { kind: 'freeTextSeed' }
   // `isExplicitVibe` travels with the tags because the RANKER needs to know
@@ -396,12 +400,20 @@ export default function WhereNextFlow() {
     saveNightVibe(nextTags);
     setNightVibe(nextTags);
     setShownIds([]);
-    setStep({ kind: 'autoResults', coords: step.coords });
+    setStep(
+      step.returnTo === 'askLocation'
+        ? { kind: 'askLocation' }
+        : { kind: 'autoResults', coords: step.coords },
+    );
   };
 
   const handleCancelAutoTweak = () => {
     if (step.kind !== 'tweakVibeAuto') return;
-    setStep({ kind: 'autoResults', coords: step.coords });
+    setStep(
+      step.returnTo === 'askLocation'
+        ? { kind: 'askLocation' }
+        : { kind: 'autoResults', coords: step.coords },
+    );
   };
 
   // The displayed starting point owns both ranking and directions.
@@ -415,39 +427,127 @@ export default function WhereNextFlow() {
     return { lat: step.seedBar.lat, lng: step.seedBar.lng };
   }, [step]);
 
-  if (step.kind === 'askLocation') {
-    return (
-      <section className="min-h-screen px-6 py-16 flex flex-col items-center justify-center text-center">
-        <p className="text-accent uppercase tracking-[0.25em] text-xs mb-4">
-          Next Bar?
-        </p>
-        <h1 className="font-display text-3xl md:text-4xl mb-3 max-w-sm">
-          Find bars near you
+  // The manual "pick the bar you're at" surface. Rendered for the pickBar
+  // step AND as the content-first fallback when nothing is saved to rank
+  // from (NB-01) — one JSX tree, never two drifting copies.
+  const renderPickBar = () => (
+    <section className="min-h-screen px-4 py-8 md:px-6">
+      <div className="max-w-2xl mx-auto">
+        <h1 className="font-display text-3xl md:text-4xl text-center mb-2">
+          Where are you?
         </h1>
-        <p className="text-muted text-sm mb-8 max-w-xs leading-relaxed">
-          Find nearby bars. Route calculations ask separately before sharing
-          your starting point with our routing provider. We do not save a location history.
+        <p className="text-muted text-sm text-center mb-6">
+          Pick the bar you&apos;re at — we&apos;ll find the next one.
         </p>
-        <button
-          type="button"
-          onClick={() => {
-            // The REAL browser prompt fires from inside this tap —
-            // gesture-bound asks are the ones users see and approve.
-            geo.request();
-            setStep({ kind: 'locating' });
-          }}
-          className="bg-accent hover:bg-accentDim transition-colors text-bg font-display text-lg px-8 py-3 rounded-full min-h-[44px] touch-manipulation mb-4"
-        >
-          Share my location
-        </button>
-        <button
-          type="button"
-          onClick={() => setStep({ kind: 'pickBar' })}
-          className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"
-        >
-          Pick a bar instead
-        </button>
-      </section>
+        {/* Location blocked (operator report: iOS "never asks"): explain
+            the iOS settings paths instead of failing silently. The picker
+            below stays fully usable either way. */}
+        {geo.state.status === 'denied' || geo.permissionState === 'denied' ? (
+          <div className="mb-6">
+            <LocationAccessHelp
+              onRetry={() => {
+                geo.reset();
+                setStep({ kind: 'locating' });
+              }}
+            />
+          </div>
+        ) : (
+          // Location is always ONE TAP away (operator ask 2026-07-25):
+          // someone who skipped the primer — or landed here any other
+          // way — can still share their location without reloading. The
+          // request fires from this tap (gesture-bound prompt).
+          <div className="mb-6 text-center">
+            <button
+              type="button"
+              onClick={() => {
+                geo.request();
+                setStep({ kind: 'locating' });
+              }}
+              className="text-accent font-display text-sm min-h-[44px] touch-manipulation hover:underline underline-offset-4"
+            >
+              📍 Or use my location
+            </button>
+          </div>
+        )}
+        {/* autoHideSearchOnScroll: this is the one call site where the
+            picker fills the document scroller — a permanently pinned search
+            bar leaves whichever row rests under it untappable at any deep
+            scroll position (g-90f908bc, mobile-controls pass 2). */}
+        <BarPicker
+          onPick={handlePickBar}
+          onNotListed={handleNotListed}
+          autoHideSearchOnScroll
+        />
+      </div>
+    </section>
+  );
+
+  if (step.kind === 'askLocation') {
+    // NB-01 (owner-approved mock v3, 2026-09-23): NO permission wall. With
+    // a neighbourhood saved in onboarding the screen opens on results
+    // ranked from it; "Use my location" is the tap that fires the real
+    // browser prompt (still gesture-bound — load-time prompts get
+    // reflex-dismissed and iOS remembers that as a permanent deny).
+    // Nothing saved → the picker, never a blank screen.
+    const homeHood = profile.preferredNeighborhoods[0];
+    if (!homeHood) return renderPickBar();
+    return (
+      <main>
+        <div className="px-6 pt-4 flex items-center justify-center">
+          <button
+            type="button"
+            onClick={() =>
+              setStep({
+                kind: 'tweakVibeAuto',
+                coords: NEIGHBORHOOD_CENTROIDS[homeHood],
+                returnTo: 'askLocation',
+              })
+            }
+            className="min-h-[44px] touch-manipulation rounded-full border border-border px-4 text-sm font-display hover:border-accent transition-colors"
+          >
+            Tweak the vibe
+          </button>
+        </div>
+        <div className="px-6 pt-3">
+          <DistanceChips
+            value={selectedRadius}
+            onChange={handleRadiusChange}
+          />
+        </div>
+        <ResultsView
+          profile={autoProfile}
+          location={{ kind: 'neighborhood', neighborhood: homeHood }}
+          locationAction={
+            <button
+              type="button"
+              onClick={() => {
+                geo.request();
+                setStep({ kind: 'locating' });
+              }}
+              className="text-accent font-display min-h-[44px] touch-manipulation hover:underline underline-offset-4"
+            >
+              Use my location
+            </button>
+          }
+          minMilesExclusive={minMilesExclusive}
+          maxMiles={selectedRadius.maxMiles}
+          maxResults={RESULTS_COUNT}
+          hideClosedNow
+          excludeIds={autoExcludeIds}
+          onRanked={handleRanked}
+          showShare={isPlanning}
+        />
+        <div className="px-6 pt-2 text-center">
+          <button
+            type="button"
+            onClick={handleRunAgain}
+            className="min-h-[48px] touch-manipulation rounded-full border border-border px-6 font-display text-base hover:border-accent transition-colors"
+          >
+            ↻ Run it again
+          </button>
+        </div>
+        <div className="pb-28" />
+      </main>
     );
   }
 
@@ -459,12 +559,9 @@ export default function WhereNextFlow() {
           aria-label="Finding bars near you"
           className="h-10 w-10 rounded-full border-2 border-border border-t-accent animate-spin mb-6"
         />
-        <h1 className="font-display text-2xl md:text-3xl mb-2">
+        <h1 className="font-display text-2xl md:text-3xl mb-8">
           Finding bars near you…
         </h1>
-        <p className="text-muted text-sm mb-8 max-w-xs">
-          Using your location to suggest your next spot.
-        </p>
         <button
           type="button"
           onClick={() => setStep({ kind: 'pickBar' })}
@@ -530,59 +627,7 @@ export default function WhereNextFlow() {
     );
   }
 
-  if (step.kind === 'pickBar') {
-    return (
-      <section className="min-h-screen px-4 py-8 md:px-6">
-        <div className="max-w-2xl mx-auto">
-          <h1 className="font-display text-3xl md:text-4xl text-center mb-2">
-            Where are you?
-          </h1>
-          <p className="text-muted text-sm text-center mb-6">
-            Pick the bar you&apos;re at — we&apos;ll find the next one.
-          </p>
-          {/* Location blocked (operator report: iOS "never asks"): explain
-              the iOS settings paths instead of failing silently. The picker
-              below stays fully usable either way. */}
-          {geo.state.status === 'denied' || geo.permissionState === 'denied' ? (
-            <div className="mb-6">
-              <LocationAccessHelp
-                onRetry={() => {
-                  geo.reset();
-                  setStep({ kind: 'locating' });
-                }}
-              />
-            </div>
-          ) : (
-            // Location is always ONE TAP away (operator ask 2026-07-25):
-            // someone who skipped the primer — or landed here any other
-            // way — can still share their location without reloading. The
-            // request fires from this tap (gesture-bound prompt).
-            <div className="mb-6 text-center">
-              <button
-                type="button"
-                onClick={() => {
-                  geo.request();
-                  setStep({ kind: 'locating' });
-                }}
-                className="text-accent font-display text-sm min-h-[44px] touch-manipulation hover:underline underline-offset-4"
-              >
-                📍 Or use my location
-              </button>
-            </div>
-          )}
-          {/* autoHideSearchOnScroll: this is the one call site where the
-              picker fills the document scroller — a permanently pinned search
-              bar leaves whichever row rests under it untappable at any deep
-              scroll position (g-90f908bc, mobile-controls pass 2). */}
-          <BarPicker
-            onPick={handlePickBar}
-            onNotListed={handleNotListed}
-            autoHideSearchOnScroll
-          />
-        </div>
-      </section>
-    );
-  }
+  if (step.kind === 'pickBar') return renderPickBar();
 
   if (step.kind === 'freeTextSeed') {
     return (
