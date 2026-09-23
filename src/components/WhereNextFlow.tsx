@@ -25,8 +25,7 @@ import { useNightRefresh } from '@/hooks/useIntent';
 import { deriveNightPhase } from '@/lib/nightPhase';
 import { loadIntent, wasOutLastNight } from '@/lib/intent';
 import { loadPhaseOverride } from '@/lib/phaseOverride';
-import { NEIGHBORHOOD_CENTROIDS, RADIUS_WALK, RESULTS_COUNT } from '@/lib/constants';
-import { displayHood } from '@/lib/hoodDisplay';
+import { RADIUS_WALK, RESULTS_COUNT } from '@/lib/constants';
 import { advanceShownIds } from '@/lib/resultsRefresh';
 import BarPicker from '@/components/BarPicker';
 import FreeTextSeed from '@/components/FreeTextSeed';
@@ -61,11 +60,7 @@ type Step =
   // surface seeds from tonight's cached vibe (falling back to the quiz
   // profile), and Apply writes the same night cache the manual flow uses
   // (E2.2 — one vibe per night, whichever surface picked it).
-  // `returnTo` (NB-01): the content-first home (askLocation, ranked from the
-  // saved neighbourhood) opens the same surface and must come BACK to
-  // itself — landing on coords-ranked autoResults would relabel a centroid
-  // as "Near you".
-  | { kind: 'tweakVibeAuto'; coords: Coords; returnTo?: 'askLocation' }
+  | { kind: 'tweakVibeAuto'; coords: Coords }
   | { kind: 'pickBar' }
   | { kind: 'freeTextSeed' }
   // `isExplicitVibe` travels with the tags because the RANKER needs to know
@@ -401,20 +396,12 @@ export default function WhereNextFlow() {
     saveNightVibe(nextTags);
     setNightVibe(nextTags);
     setShownIds([]);
-    setStep(
-      step.returnTo === 'askLocation'
-        ? { kind: 'askLocation' }
-        : { kind: 'autoResults', coords: step.coords },
-    );
+    setStep({ kind: 'autoResults', coords: step.coords });
   };
 
   const handleCancelAutoTweak = () => {
     if (step.kind !== 'tweakVibeAuto') return;
-    setStep(
-      step.returnTo === 'askLocation'
-        ? { kind: 'askLocation' }
-        : { kind: 'autoResults', coords: step.coords },
-    );
+    setStep({ kind: 'autoResults', coords: step.coords });
   };
 
   // The displayed starting point owns both ranking and directions.
@@ -428,9 +415,7 @@ export default function WhereNextFlow() {
     return { lat: step.seedBar.lat, lng: step.seedBar.lng };
   }, [step]);
 
-  // The manual "pick the bar you're at" surface. Rendered for the pickBar
-  // step AND as the content-first fallback when nothing is saved to rank
-  // from (NB-01) — one JSX tree, never two drifting copies.
+  // The manual "pick the bar you're at" surface (one JSX tree).
   const renderPickBar = () => (
     <section className="min-h-screen px-4 py-8 md:px-6">
       <div className="max-w-2xl mx-auto">
@@ -484,84 +469,42 @@ export default function WhereNextFlow() {
   );
 
   if (step.kind === 'askLocation') {
-    // NB-01 (owner-approved mock v3, 2026-09-23): NO permission wall. With
-    // a neighbourhood saved in onboarding the screen opens on results
-    // ranked from it; "Use my location" is the tap that fires the real
-    // browser prompt (still gesture-bound — load-time prompts get
-    // reflex-dismissed and iOS remembers that as a permanent deny).
-    // Nothing saved → the picker, never a blank screen.
-    // Ranked FROM the neighbourhood's centroid as coords, never as a
-    // `neighborhood` location: that kind hands the ranker a neighbourhood
-    // FILTER (matching.ts), which empties the "Worth a cab" and "Anywhere"
-    // bands (round-1 panel, Fable HIGH). A stored value the catalogue no
-    // longer knows (loadProfile validates strings only) has no centroid →
-    // the picker (Codex MEDIUM).
-    const homeHood = profile.preferredNeighborhoods[0];
-    const homeCentroid = homeHood ? NEIGHBORHOOD_CENTROIDS[homeHood] : undefined;
-    if (!homeHood || !homeCentroid) return renderPickBar();
+    // The PRIMER stays (owner 2026-09-23, after the NB-01 staging look: "I
+    // like share my location being the first thing they see if they don't
+    // have shared location — they need to do that"). Its tap fires the
+    // real browser prompt — gesture-bound asks are the ones users see and
+    // approve; load-time prompts get reflex-dismissed and iOS remembers
+    // that as a permanent deny.
     return (
-      <main>
-        <div className="px-6 pt-4 flex items-center justify-center">
-          <button
-            type="button"
-            onClick={() =>
-              setStep({
-                kind: 'tweakVibeAuto',
-                coords: homeCentroid,
-                returnTo: 'askLocation',
-              })
-            }
-            className="min-h-[44px] touch-manipulation rounded-full border border-border px-4 text-sm font-display hover:border-accent transition-colors"
-          >
-            Tweak the vibe
-          </button>
-        </div>
-        <div className="px-6 pt-3">
-          <DistanceChips
-            value={selectedRadius}
-            onChange={handleRadiusChange}
-          />
-        </div>
-        <ResultsView
-          profile={autoProfile}
-          location={{
-            kind: 'coords',
-            coords: homeCentroid,
-            band: 'snapped',
-            snappedTo: homeHood,
-            originLabel: `Near ${displayHood(homeHood)}`,
+      <section className="min-h-screen px-6 py-16 flex flex-col items-center justify-center text-center">
+        <p className="text-accent uppercase tracking-[0.25em] text-xs mb-4">
+          Next Bar?
+        </p>
+        <h1 className="font-display text-3xl md:text-4xl mb-3 max-w-sm">
+          Find bars near you
+        </h1>
+        <p className="text-muted text-sm mb-8 max-w-xs leading-relaxed">
+          Find nearby bars. Route calculations ask separately before sharing
+          your starting point with our routing provider. We do not save a location history.
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            geo.request();
+            setStep({ kind: 'locating' });
           }}
-          locationAction={
-            <button
-              type="button"
-              onClick={() => {
-                geo.request();
-                setStep({ kind: 'locating' });
-              }}
-              className="text-accent font-display min-h-[44px] touch-manipulation hover:underline underline-offset-4"
-            >
-              Use my location
-            </button>
-          }
-          minMilesExclusive={minMilesExclusive}
-          maxMiles={selectedRadius.maxMiles}
-          maxResults={RESULTS_COUNT}
-          hideClosedNow
-          excludeIds={autoExcludeIds}
-          onRanked={handleRanked}
-          showShare={isPlanning}
-        />
-        <div className="px-6 pt-2 text-center">
-          <button
-            type="button"
-            onClick={handleRunAgain}
-            className="min-h-[48px] touch-manipulation rounded-full border border-border px-6 font-display text-base hover:border-accent transition-colors"
-          >
-            ↻ Run it again
-          </button>
-        </div>
-        <div className="pb-28" />
-      </main>
+          className="bg-accent hover:bg-accentDim transition-colors text-bg font-display text-lg px-8 py-3 rounded-full min-h-[44px] touch-manipulation mb-4"
+        >
+          Share my location
+        </button>
+        <button
+          type="button"
+          onClick={() => setStep({ kind: 'pickBar' })}
+          className="text-accent underline-offset-4 hover:underline text-sm min-h-[44px] touch-manipulation"
+        >
+          Pick a bar instead
+        </button>
+      </section>
     );
   }
 

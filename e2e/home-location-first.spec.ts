@@ -84,18 +84,59 @@ test('a DENIED location explains itself with recovery steps instead of failing s
   await expect(page.getByRole('button', { name: /try again/i })).toBeVisible();
 });
 
-// An UNDECIDED permission no longer shows a primer wall (NB-01, owner
-// 2026-09-23): with a saved neighbourhood the home opens on results, without
-// one it opens on the picker, and "Use my location" is the gesture-bound tap
-// in both — covered by e2e/home-content-first.spec.ts. The browser prompt
-// still never fires on load.
+test('an UNDECIDED permission shows the primer — the real prompt fires from the tap, not on load', async ({
+  page,
+  context,
+}) => {
+  // Default context: permission state 'prompt' (never asked). The app must
+  // NOT auto-fire the browser prompt on load — it primes with its own
+  // value proposition and a gesture-bound button (web research: load-time
+  // prompts get reflex-dismissed and iOS remembers that as a permanent
+  // deny; gesture-bound asks get approved). Owner 2026-09-23 (NB-01b):
+  // this screen stays as the first thing an un-located user sees.
+  // Count the real requests so "from the tap, not on load" is tested.
+  await context.addInitScript(() => {
+    const w = window as unknown as { __geoRequests: number };
+    w.__geoRequests = 0;
+    const geo = navigator.geolocation;
+    const original = geo.getCurrentPosition.bind(geo);
+    geo.getCurrentPosition = (...args) => {
+      w.__geoRequests += 1;
+      return original(...args);
+    };
+  });
+  const geoRequests = () => page.evaluate(() => (window as unknown as { __geoRequests: number }).__geoRequests);
+  await page.goto('/');
+
+  await expect(
+    page.getByRole('heading', { name: /find bars near you/i }),
+  ).toBeVisible();
+  const share = page.getByRole('button', { name: /share my location/i });
+  await expect(share).toBeVisible();
+  expect(await geoRequests()).toBe(0);
+
+  // The tap is the ask.
+  await grantGeolocation(context, { latitude: 40.725, longitude: -73.985 });
+  await page.waitForTimeout(500);
+  expect(await geoRequests()).toBe(0);
+  await share.click();
+  await expect(page.getByTestId('result-card').first()).toBeVisible({ timeout: 15_000 });
+  expect(await geoRequests()).toBeGreaterThanOrEqual(1);
+});
+
 test('the manual screen keeps "use my location" one tap away (no reload needed)', async ({
   page,
 }) => {
   await page.goto('/');
-  // Nothing saved → the picker is the home screen itself.
-  await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible({ timeout: 15_000 });
-  // …and the location path is right there.
+  // Wait for the PRIMER to settle before clicking — the spinner screen has
+  // its own "Pick a bar instead" whose mid-swap coordinates land on the
+  // primer's "Share my location" (detachment race caught in CI).
+  await expect(
+    page.getByRole('heading', { name: /find bars near you/i }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: /pick a bar instead/i }).click();
+  await expect(page.getByRole('textbox', { name: 'Search bars' })).toBeVisible();
+  // …and the location path is still right there.
   await expect(
     page.getByRole('button', { name: /use my location/i }),
   ).toBeVisible();

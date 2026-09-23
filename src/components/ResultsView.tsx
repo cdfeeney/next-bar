@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AccuracyBand,
   Coords,
@@ -48,17 +48,10 @@ type ResultsViewProps = {
   onRanked?: (ids: string[], settled: boolean) => void;
   /** Planning phase (operator 2026-07-27): cards carry a "Send" share. */
   showShare?: boolean;
-  /**
-   * NB-01: an action rendered inline after the location line ("Near Lower
-   * East Side · Use my location"). The content-first home passes the
-   * gesture-bound geolocation tap here; nothing else needs it.
-   */
-  locationAction?: ReactNode;
 };
 
 export default function ResultsView({
   profile,
-  locationAction,
   location,
   maxMiles,
   nearbyFirst,
@@ -308,17 +301,9 @@ export default function ResultsView({
     <section className="px-6 py-8">
       <div className="max-w-2xl mx-auto">
         {/* NB-01: the location line is the whole header — sentence case,
-            one line, with the optional inline action. The "Your next N
-            bars" headline is gone (owner-approved mock v3, 2026-09-23). */}
-        <p className="text-muted text-sm text-center mb-2 flex items-center justify-center gap-2 flex-wrap">
-          <span>{locationLabel}</span>
-          {locationAction ? (
-            <>
-              <span aria-hidden="true">·</span>
-              {locationAction}
-            </>
-          ) : null}
-        </p>
+            one line. The "Your next N bars" headline is gone
+            (owner-approved mock v3, 2026-09-23). */}
+        <p className="text-muted text-sm text-center mb-2">{locationLabel}</p>
         <div className="text-sm text-muted text-center mb-4" aria-live="polite">
           {travel.status === 'disabled' ? <p>Route times unavailable. Walkable and cab results need a confirmed walking route.</p> : null}
           {travel.status === 'loading' ? <p>Checking street routes…</p> : null}
