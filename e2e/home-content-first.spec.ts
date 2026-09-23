@@ -47,6 +47,19 @@ test.describe('Home — content first (NB-01)', () => {
     context,
   }) => {
     await seedNeighbourhood(context, 'LES');
+    // Count real geolocation requests so the gesture-bound claim is tested,
+    // not assumed: none may fire before the tap (round-2 panel, Codex).
+    await context.addInitScript(() => {
+      const w = window as unknown as { __geoRequests: number };
+      w.__geoRequests = 0;
+      const geo = navigator.geolocation;
+      const original = geo.getCurrentPosition.bind(geo);
+      geo.getCurrentPosition = (...args) => {
+        w.__geoRequests += 1;
+        return original(...args);
+      };
+    });
+    const geoRequests = () => page.evaluate(() => (window as unknown as { __geoRequests: number }).__geoRequests);
     await page.goto('/');
 
     // Content, not the wall.
@@ -61,9 +74,13 @@ test.describe('Home — content first (NB-01)', () => {
     // The tap is the gesture that asks; grant right before it and the list
     // re-ranks from coordinates.
     await grantGeolocation(context, { latitude: 40.725, longitude: -73.985 });
+    // Granting alone must not fetch — only the tap asks.
+    await page.waitForTimeout(500);
+    expect(await geoRequests()).toBe(0);
     await useMine.click();
     await expect(page.getByText('Near you', { exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('result-card').first()).toBeVisible();
+    expect(await geoRequests()).toBeGreaterThanOrEqual(1);
   });
 
   test('a saved neighbourhood the catalogue no longer knows falls back to the picker', async ({

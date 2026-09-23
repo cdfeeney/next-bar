@@ -476,6 +476,20 @@ export default function BarLightbox({
             the row clears the home indicator. The filled/outline pair was the
             other way round, which made the app's own funnel the loudest thing
             on a panel whose job is getting the user to the bar. */}
+        {/* NB-01: the result card no longer carries its two directions
+            links, so the OTHER travel mode must be reachable here — "View on
+            Maps" below follows the selected mode; this quiet link is the
+            other one (round-1 panel, Fable + Codex). It sits ABOVE the action
+            row so the row's safe-area padding stays the last thing in the
+            panel (round-2 panel, Codex). */}
+        <a
+          href={directionsHref(origin, bar, directionsMode === 'walking' ? 'driving' : 'walking')}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block text-center text-xs text-accent min-h-[44px] leading-[44px] touch-manipulation hover:underline underline-offset-4"
+        >
+          {directionsMode === 'walking' ? 'Drive directions' : 'Walk directions'}
+        </a>
         <div className="flex items-center gap-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <a
             href={mapsHref}
@@ -506,18 +520,6 @@ export default function BarLightbox({
             {wantsToGo ? 'On your list' : 'Want to go'}
           </button>
         </div>
-        {/* NB-01: the result card no longer carries its two directions
-            links, so the OTHER travel mode must be reachable here — "View on
-            Maps" above follows the selected mode; this quiet link is the
-            other one (round-1 panel, Fable + Codex). */}
-        <a
-          href={directionsHref(origin, bar, directionsMode === 'walking' ? 'driving' : 'walking')}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="block text-center text-xs text-accent min-h-[44px] leading-[44px] touch-manipulation hover:underline underline-offset-4"
-        >
-          {directionsMode === 'walking' ? 'Drive directions' : 'Walk directions'}
-        </a>
       </div>
     </div>
   );

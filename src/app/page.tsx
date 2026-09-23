@@ -73,7 +73,9 @@ export default function HomePage() {
       {/* NB-01 (owner-approved mock v3, 2026-09-23): the header is the
           wordmark alone — sentence case, no tracking, no phase chip. */}
       <header className="px-6 py-4 border-b border-border">
-        <p className="font-display text-lg font-semibold">Next Bar</p>
+        {/* No explicit font-* utility: .font-display resolves to 700 in
+            globals.css and typography-contract.spec pins that on '/'. */}
+        <p className="font-display text-lg">Next Bar</p>
       </header>
       {/* Operator 2026-07-26: NO install/get-the-app teasers on home —
           this IS the mobile UI (native wrap incoming). /install still
