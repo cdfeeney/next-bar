@@ -313,7 +313,15 @@ export default function ResultsView({
           </> : null}
           {travel.data?.incomplete ? <p>Some route checks failed; only confirmed estimates are shown.</p> : null}
         </div>
-        {ranked.length === 0 ? (
+        {ranked.length === 0 && travel.status === 'loading' ? (
+          // Routes pending is not an empty search (owner 2026-09-24: the empty
+          // copy sat on screen for 3-5 s before the cards landed).
+          <div role="status" aria-label="Finding your next bars…" className="flex flex-col gap-4">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="w-full aspect-[16/9] rounded-2xl bg-border/60 animate-pulse" />
+            ))}
+          </div>
+        ) : ranked.length === 0 ? (
           <p className="text-muted text-center">
             {/* Say WHY it is empty. Under an active vibe selection the honest
                 answer is that nothing matched the picks — blaming the routing

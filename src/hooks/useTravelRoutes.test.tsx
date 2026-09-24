@@ -84,7 +84,9 @@ it('ignores a previous travel selection answering after the current one', async 
       useTravelRoutes(origin, [bar], mode, walkable),
     { initialProps: { mode: 'walking', walkable: true } as { mode: 'walking' | 'driving'; walkable: boolean } },
   );
-  await waitFor(() => expect(result.current.status).toBe('loading'));
+  // 'loading' now also covers the capability probe, so wait for the walkable
+  // POST itself (probe + one search) before switching bands.
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
   rerender({ mode: 'driving', walkable: false });
   expect(complete).toHaveLength(2);
   await act(async () => complete[1](answer(222)));
@@ -92,4 +94,16 @@ it('ignores a previous travel selection answering after the current one', async 
   await act(async () => complete[0](answer(111)));
   expect(result.current.data?.routes[0].driving?.seconds).toBe(222);
   expect(result.current.status).toBe('ready');
+});
+
+it('reports loading, not disabled, while the capability probe is still in flight', async () => {
+  // Owner 2026-09-24: the home flashed "Route times unavailable" for the first
+  // paint because `enabled` started false. Unknown is not disabled.
+  let answer: ((r: Response) => void) | undefined;
+  vi.stubGlobal('fetch', vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { answer = resolve; }))
+    .mockResolvedValue(new Response(JSON.stringify(data))));
+  const { result } = renderHook(() => useTravelRoutes(origin, [bar], 'walking', true));
+  expect(result.current.status).toBe('loading');
+  await act(async () => answer!(new Response('{"enabled":false}')));
+  expect(result.current.status).toBe('disabled');
 });

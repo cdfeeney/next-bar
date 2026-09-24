@@ -183,3 +183,15 @@ it('V9-01: at bar o\'clock the late-night bias alone fills the 15 slots with far
     bars.splice(0, bars.length, ...original);
   }
 });
+
+it('shows a loading placeholder, never the empty copy, while street routes are pending', () => {
+  // Owner 2026-09-24 on staging: "No eligible bars found" sat on screen for
+  // 3-5 s until the routes came back and the cards appeared.
+  routing.mockReturnValue({ status: 'loading', calculate: vi.fn() });
+  render(<ResultsView {...props} profile={{ tags: [], archetype: '', preferredNeighborhoods: [] }} />);
+  expect(screen.queryByText(/No eligible bars found/)).toBeNull();
+  expect(screen.getByRole('status', { name: /Finding your next bars/ })).toBeInTheDocument();
+  routing.mockReturnValue({ status: 'ready', calculate: vi.fn(), data: { routes: [], checked: 15, limited: false, incomplete: false } });
+  render(<ResultsView {...props} profile={{ tags: [], archetype: '', preferredNeighborhoods: [] }} />);
+  expect(screen.getByText(/Not enough routes could be confirmed/)).toBeInTheDocument();
+});

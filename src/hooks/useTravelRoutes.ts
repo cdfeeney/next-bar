@@ -7,7 +7,9 @@ import { isRouteEstimate, matchesTravelBand, ROUTE_RESULT_CAP, type TravelBand, 
 /** Search-local memory only: no coordinate history, cross-user cache or retries. */
 export function useTravelRoutes(origin: Coords, candidates: Bar[], mode: TravelMode, walkableOnly: boolean,
   band: TravelBand = walkableOnly ? 'walkable' : mode === 'driving' ? 'cab' : 'anywhere') {
-  const [enabled, setEnabled] = useState(false);
+  // null = capability probe still in flight. Unknown reads as loading, not
+  // disabled (owner 2026-09-24: the home flashed "Route times unavailable").
+  const [enabled, setEnabled] = useState<boolean | null>(null);
   const [revision, setRevision] = useState(0);
   const originKey = `${origin.lat},${origin.lng}`;
   const key = JSON.stringify([originKey, candidates.map(b => [b.id, b.lat, b.lng]), mode, walkableOnly, band, revision]);
@@ -63,7 +65,7 @@ export function useTravelRoutes(origin: Coords, candidates: Bar[], mode: TravelM
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, enabled]);
 
-  const status = !enabled ? 'disabled' :
+  const status = enabled === false ? 'disabled' :
     state?.key === key ? state.status : candidates.length ? 'loading' : 'empty';
   return {
     status,
