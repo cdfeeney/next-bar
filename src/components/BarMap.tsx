@@ -119,7 +119,11 @@ const ratedIcon = L.divIcon({
 
 /** Everything else: 8px light-grey dot at ~60% opacity, lowest z-order. */
 const otherIcon = L.divIcon({
-  className: '',
+  // `nb-quiet` + the container's `nb-quiet-dots` class = pointer-events none
+  // below street zoom (globals.css). A CSS gate, NOT `interactive: false` with
+  // a remount: remounting the pins on the zoom threshold destroyed the popup a
+  // search had just opened (the V9-07 venue-detail journeys).
+  className: 'nb-quiet',
   html: '<div data-tier="other" style="width:8px;height:8px;background:#9ca3af;opacity:0.6;border-radius:9999px;"></div>',
   iconSize: [8, 8],
   iconAnchor: [4, 4],
@@ -298,7 +302,8 @@ function FocusBar({
  * Catalogue pins are DRAWING ONLY until street zoom. At city zoom 2,107 8px
  * targets merge into one blob and none can be tapped (iOS UI pass 2026-09-23,
  * bug 6); at >= STREET_ZOOM each dot has room to be a target. The dots stay
- * on screen at every zoom (owner: "it's fun to see all the markers").
+ * on screen at every zoom (owner: "it's fun to see all the markers"). Applied
+ * as a container class so no marker is ever recreated on the threshold.
  */
 const STREET_ZOOM = 15;
 function ZoomWatcher({ onChange }: { onChange: (street: boolean) => void }) {
@@ -375,6 +380,7 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
             (e.g. leaflet.markercluster) — DOM divIcons don't scale past that.
           */}
           <MapContainer
+            className={streetZoom ? undefined : 'nb-quiet-dots'}
             center={[center.lat, center.lng]}
             zoom={13}
             minZoom={1}
@@ -432,16 +438,11 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
                 : isHighlighted
                 ? highlightIcon
                 : barIcon;
-              // A quiet catalogue dot is inert below street zoom. Leaflet fixes
-              // `interactive` at creation, so the key flips to remount it when
-              // the threshold is crossed.
-              const tappable = !isTiered || tier !== 'other' || streetZoom;
               return (
                 <Marker
-                  key={tappable ? bar.id : `${bar.id}-quiet`}
+                  key={bar.id}
                   position={[bar.lat, bar.lng]}
                   icon={icon}
-                  interactive={tappable}
                   zIndexOffset={isTiered ? TIER_Z_OFFSET[tier] : 0}
                   ref={(marker) => {
                     if (marker) markerRefs.current.set(bar.id, marker);

@@ -22,10 +22,13 @@ test.describe('iOS UI pass bug batch', () => {
     await page.goto('/map');
     const icons = page.locator('.leaflet-marker-icon');
     await expect(icons.first()).toBeVisible({ timeout: 15_000 });
-    const quiet = page.locator('.leaflet-marker-icon:not(.leaflet-interactive) [data-tier="other"]');
-    expect(await quiet.count(), 'no inert catalogue dot at city zoom').toBeGreaterThan(0);
-    const tappableOther = page.locator('.leaflet-marker-icon.leaflet-interactive [data-tier="other"]');
-    expect(await tappableOther.count(), 'an 8px catalogue dot is still a tap target at city zoom').toBe(0);
+    // City zoom (13 at load): every catalogue dot is inert; a tap goes to the map.
+    const quiet = page.locator('.leaflet-marker-icon.nb-quiet');
+    expect(await quiet.count(), 'no catalogue dots rendered').toBeGreaterThan(0);
+    const tappable = await quiet.evaluateAll((els) =>
+      els.filter((el) => getComputedStyle(el).pointerEvents !== 'none').length,
+    );
+    expect(tappable, 'an 8px catalogue dot is still a tap target at city zoom').toBe(0);
   });
 
   test('settings carries no sample night and no install promo (bug 8)', async ({ page }) => {
