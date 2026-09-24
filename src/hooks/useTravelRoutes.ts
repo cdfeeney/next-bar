@@ -18,7 +18,8 @@ export function useTravelRoutes(origin: Coords, candidates: Bar[], mode: TravelM
   const capability = useRef<Promise<boolean> | null>(null);
   useEffect(() => {
     let current = true;
-    capability.current ??= fetch('/api/travel', { cache: 'no-store' })
+    // A probe that never answers must not leave the home on placeholders (Codex review).
+    capability.current ??= fetch('/api/travel', { cache: 'no-store', signal: AbortSignal.timeout(10_000) })
       .then(async r => r.ok && (await r.json()).enabled === true).catch(() => false);
     void capability.current.then(value => { if (current) setEnabled(value); });
     return () => { current = false; };

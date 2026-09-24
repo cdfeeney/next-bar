@@ -107,3 +107,10 @@ it('reports loading, not disabled, while the capability probe is still in flight
   await act(async () => answer!(new Response('{"enabled":false}')));
   expect(result.current.status).toBe('disabled');
 });
+
+it('a capability probe that fails settles to disabled instead of loading forever', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timeout', 'TimeoutError')));
+  const { result } = renderHook(() => useTravelRoutes(origin, [bar], 'walking', true));
+  expect(result.current.status).toBe('loading');
+  await waitFor(() => expect(result.current.status).toBe('disabled'));
+});
