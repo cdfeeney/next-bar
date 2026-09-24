@@ -204,7 +204,8 @@ function SignedInAccount({
           </p>
         </SlotRow>
         <SlotRow>
-          <SetPassword />
+          {/* An account that signs in with a password already has one (iOS UI pass 2026-09-23). */}
+          <SetPassword label="Change password" />
         </SlotRow>
         {/* V8-R-ACC-011 draws a device count. Supabase exposes other sessions
             only through the admin API, which is service-role and server-side —
@@ -213,7 +214,7 @@ function SignedInAccount({
         <StatusRow
           label="Active sessions"
           value="This device"
-          description="Signing out ends the session on this device. Next Bar cannot list your other devices on this build."
+          description="Signing out ends the session on this device."
         />
         {/* Sign out is an ordinary secondary action and is deliberately NOT
             grouped with deletion (V8-R-ACC-011). It is also on Settings home.

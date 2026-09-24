@@ -386,7 +386,10 @@ describe('FeedSection — a superseded refresh may not roll back a confirmed wri
   test('an account switch mid-flight still discards the previous account’s answer', async () => {
     // The epoch guard is the OTHER half and must survive the ordering rework.
     const held = deferred<Result<FeedPostView[]>>();
-    postPlan = [held.promise];
+    // The abandoned answer is DISCARDED and the read is ASKED AGAIN (UI pass
+    // bug 1): the second answer is the one that may paint.
+    postPlan = [held.promise, { ok: true, value: [] }];
+    commentPlan = [{ ok: true, value: new Map() }];
     render(<FeedSection entries={[]} onOpenStory={() => {}} />);
 
     epoch = 2;
@@ -397,6 +400,10 @@ describe('FeedSection — a superseded refresh may not roll back a confirmed wri
       screen.queryByText('another account'),
       "a post read for the previous account was painted into this one's Feed",
     ).toBeNull();
+    expect(
+      await screen.findByTestId('feed-empty'),
+      'the abandoned read was never re-asked, so the Feed never settled',
+    ).toBeTruthy();
   });
 });
 
@@ -860,5 +867,29 @@ describe('FeedSection — the card actions (S-04, README §3)', () => {
     await user.type(screen.getByTestId('feed-comment-input'), 'hello');
     await user.click(screen.getByTestId('feed-comment-submit'));
     await waitFor(() => expect(toggle.textContent).toBe('Replies · 1'));
+  });
+});
+
+describe('FeedSection — a read abandoned for an epoch bump is retried, not forgotten', () => {
+  test('settles to "nothing here" when the cache epoch moves while the first read is in flight (UI pass bug 1)', async () => {
+    // A fresh sign-in on a device that held another account's cache runs
+    // guardAgainstForeignCache → clearAccountCache → epoch + 1 AFTER this
+    // component has already started its first read. The abandon guard then
+    // dropped that answer and nothing asked again: no posts, no empty state,
+    // no banner, forever.
+    const first = deferred<Result<FeedPostView[]>>();
+    postPlan = [first.promise, { ok: true, value: [] }];
+    commentPlan = [{ ok: true, value: new Map() }];
+    render(<FeedSection entries={[]} onOpenStory={() => {}} />);
+
+    epoch += 1;
+    await act(async () => {
+      first.resolve({ ok: true, value: [] });
+    });
+
+    expect(
+      await screen.findByTestId('feed-empty'),
+      'the Feed never settled after its first read was abandoned for an epoch bump',
+    ).toBeTruthy();
   });
 });

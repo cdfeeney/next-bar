@@ -84,6 +84,11 @@ body::before {
 
 .leaflet-container { background: var(--nb-bg); }
 
+/* Catalogue pins are drawing-only below street zoom (BarMap STREET_ZOOM):
+   at city zoom 2,107 8px targets merge into one blob (iOS UI pass
+   2026-09-23, bug 6). */
+.nb-quiet-dots .leaflet-marker-icon.nb-quiet { pointer-events: none; }
+
 /* Leaflet renders the zoom buttons at 30x30 on touch (`.leaflet-touch
    .leaflet-bar a` in leaflet.css) — the eighth member of the control family
    8a46aee sized up to the 44px minimum. These are controls, not markers, so

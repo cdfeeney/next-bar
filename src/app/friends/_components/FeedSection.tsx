@@ -150,6 +150,15 @@ export default function FeedSection({
    * term: only the newest request may write, whoever answers first.
    */
   const requestSeq = useRef(0);
+  /**
+   * Bumped when a read was abandoned for an epoch move while still the newest
+   * request. STATE, not a ref and not a direct re-call: the effect below then
+   * runs the CURRENT `refresh`, bound to whoever is on screen now — so a wipe
+   * under the same account re-asks for that account, and a switch re-asks for
+   * the new one (a duplicate of its own mount read, ordered by `requestSeq`),
+   * never for the old.
+   */
+  const [reask, setReask] = useState(0);
 
   /**
    * Whose Feed is currently ON SCREEN.
@@ -253,7 +262,18 @@ export default function FeedSection({
     const stale = (): boolean => seq !== requestSeq.current || getCacheEpoch() !== epoch;
 
     const loaded = await fetchFeedPosts(supabase);
-    if (stale()) return;
+    if (stale()) {
+      // ABANDONED, NOT SUPERSEDED. When the epoch moved but no newer request
+      // started, the cache was wiped under this read for the SAME account — a
+      // fresh sign-in's foreign-cache guard does exactly that a beat after
+      // mount — and dropping the answer left nothing to ask again: no posts,
+      // no empty state, no banner, for as long as the tab stayed open (iOS UI
+      // pass 2026-09-23, bug 1). Ask again; a genuinely superseded read still
+      // just returns. ponytail: one re-ask per bump, no cap — a bump per read
+      // would loop, and nothing bumps the epoch on a read.
+      if (seq === requestSeq.current) setReask((n) => n + 1);
+      return;
+    }
     // The read has ANSWERED, one way or the other. Only now may "nothing here"
     // be said: before this, an empty list is "not loaded yet", not "empty".
     setSettled(true);
@@ -326,7 +346,7 @@ export default function FeedSection({
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, reask]);
 
   /** Post authors and commenters in one lookup for the thread bylines. */
   const authors = useMemo(() => {

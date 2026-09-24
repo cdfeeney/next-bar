@@ -62,7 +62,11 @@ const TABS: Tab[] = [
     // stays /friends so every existing link, test, and share target keeps working.
     label: 'Social',
     isActive: (pathname) =>
-      pathname.startsWith('/friends') || pathname.startsWith('/u/'),
+      pathname.startsWith('/friends') ||
+      pathname.startsWith('/u/') ||
+      // Saved nights out are social history; without this the archive
+      // highlighted no tab at all (iOS UI pass 2026-09-23).
+      pathname.startsWith('/nights'),
     glyph: (
       <>
         <circle cx="9" cy="8" r="3.2" />
@@ -99,6 +103,12 @@ export default function BottomNav(): JSX.Element | null {
     pathname === '/install' ||
     pathname === '/join' ||
     pathname === '/auth' ||
+    // Onboarding is a blocking linear flow: with the tabs live a new user
+    // could tap out halfway (iOS UI pass 2026-09-23, bug 4).
+    pathname.startsWith('/onboarding') ||
+    // A group thread is a pushed conversation with its own Back; the tabs
+    // hide under it like Messages (iOS UI pass 2026-09-23, bug 5).
+    pathname.startsWith('/friends/groups/') ||
     pathname.startsWith('/share') ||
     pathname.startsWith('/api') ||
     pathname.startsWith('/settings/')

@@ -93,7 +93,7 @@ describe('what the confirmation email carries (same profile only — see the hea
     const redirect = new URL(
       signUp.mock.calls[0][0].options.emailRedirectTo,
     ).searchParams.get('redirect_to');
-    expect(redirect, 'an ordinary signup was rerouted').toBe('/settings');
+    expect(redirect, 'an ordinary signup was rerouted').toBe('/');
   });
 
   test('the reset-password link does NOT carry it — recovery keeps its own destination', async () => {

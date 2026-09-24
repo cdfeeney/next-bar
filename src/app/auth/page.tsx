@@ -40,9 +40,10 @@ type Status =
 // users get our copy, not a raw API error.
 const MIN_PASSWORD_LENGTH = 6;
 
-/** Where every successful auth path lands — the account card makes the
- *  signed-in state visible immediately (vs. the anonymous-looking home). */
-const AFTER_AUTH_PATH = '/settings';
+/** Where every successful auth path lands: Next Bar? is THE feature, and a
+ *  new user's first sight of the app must not be an empty Account tab
+ *  (iOS UI pass 2026-09-23, bug 3). */
+const AFTER_AUTH_PATH = '/';
 
 /**
  * Where an EMAIL callback lands when it is not carrying an invite.
@@ -57,7 +58,7 @@ const AFTER_AUTH_PATH = '/settings';
 const RECOVERY_PATH = '/settings?from=recovery';
 
 const UNCONFIGURED_MESSAGE =
-  'Sign-in is unavailable — Supabase env vars are missing on this build.';
+  'Sign-in isn’t available right now. Try again in a minute.';
 
 function isEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);

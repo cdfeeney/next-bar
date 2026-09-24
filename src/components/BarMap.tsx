@@ -119,7 +119,11 @@ const ratedIcon = L.divIcon({
 
 /** Everything else: 8px light-grey dot at ~60% opacity, lowest z-order. */
 const otherIcon = L.divIcon({
-  className: '',
+  // `nb-quiet` + the container's `nb-quiet-dots` class = pointer-events none
+  // below street zoom (globals.css). A CSS gate, NOT `interactive: false` with
+  // a remount: remounting the pins on the zoom threshold destroyed the popup a
+  // search had just opened (the V9-07 venue-detail journeys).
+  className: 'nb-quiet',
   html: '<div data-tier="other" style="width:8px;height:8px;background:#9ca3af;opacity:0.6;border-radius:9999px;"></div>',
   iconSize: [8, 8],
   iconAnchor: [4, 4],
@@ -294,6 +298,35 @@ function FocusBar({
   return null;
 }
 
+/**
+ * Catalogue pins are DRAWING ONLY until street zoom. At city zoom 2,107 8px
+ * targets merge into one blob and none can be tapped (iOS UI pass 2026-09-23,
+ * bug 6); at >= STREET_ZOOM each dot has room to be a target. The dots stay
+ * on screen at every zoom (owner: "it's fun to see all the markers"). Applied
+ * as a container class so no marker is ever recreated on the threshold.
+ */
+const STREET_ZOOM = 15;
+const QUIET_DOTS_CLASS = 'nb-quiet-dots';
+function ZoomWatcher() {
+  const map = useMap();
+  useEffect(() => {
+    // ON THE DOM, NOT THROUGH MapContainer's className: React rewriting that
+    // attribute wipes the classes Leaflet added to the same element
+    // (`leaflet-container`, `leaflet-touch`), and the toggle never landed.
+    const el = map.getContainer();
+    const publish = (): void => {
+      el.classList.toggle(QUIET_DOTS_CLASS, map.getZoom() < STREET_ZOOM);
+    };
+    map.on('zoomend', publish);
+    publish();
+    return () => {
+      map.off('zoomend', publish);
+      el.classList.remove(QUIET_DOTS_CLASS);
+    };
+  }, [map]);
+  return null;
+}
+
 export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusNonce, highlightIds, suggestedIds, fitToBars, oneFingerPan, fill }: BarMapProps) {
   // Marker instances by bar id, so map search opens a bar's OWN popup instead
   // of building a second one (one venue popup — see BarPopupContent).
@@ -378,6 +411,7 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
           >
             <ZoomControl position={fill ? 'bottomright' : 'topleft'} />
             <MapPose />
+            <ZoomWatcher />
             {oneFingerPan ? null : <GestureController />}
             {fitToBars ? <FitBounds bars={bars} /> : null}
             {panToUser ? <PanToUser coords={userCoords} /> : null}

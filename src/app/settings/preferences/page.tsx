@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import InstallPrompt from '@/components/InstallPrompt';
 import { OperationalState } from '@/components/states/OperationalState';
 import { useOperationalLoad } from '@/components/states/useOperationalLoad';
 import { useAuth } from '@/hooks/useAuth';
@@ -121,7 +120,6 @@ export default function SettingsHomePage(): JSX.Element {
             below-the-fold utilities, so they live in the below-the-fold group
             rather than inventing a section for themselves. */}
         <Group label="Help">
-          <AppRows ratingsCount={ratings.length} />
           <LinkRow
             href="mailto:hi@next-bar.app?subject=Bar+correction"
             label="Tell us if something's wrong"
@@ -370,17 +368,17 @@ function PrivacyGroup({
       <StatusRow
         label="Default story audience"
         value="Friends"
-        description="Chosen on the post itself. This build stores no separate default, so every story starts at Friends and the audience is confirmed when you share."
+        description="Chosen on each post. Every story starts at Friends."
       />
       <StatusRow
         label="Default pin audience"
         value="Friends"
-        description="A separate setting from the story audience, and never changed by it. Like stories, it is confirmed at the moment of sharing on this build."
+        description="Chosen on each post, separately from stories."
       />
       <StatusRow
         label="Tags & mentions"
         value="Always removable"
-        description="Anyone you tag can remove themselves from the story, and that is enforced whatever the consent switches say. The switches themselves need per-account storage this build does not have."
+        description="Anyone you tag can remove themselves from the story."
       />
     </Group>
   );
@@ -424,67 +422,3 @@ function NotificationsGroup(): JSX.Element {
   );
 }
 
-/**
- * Install prompt + the demo sample night. Self-contained: the seeded flag is
- * read and written only here, so it stays out of the settings list itself.
- * `ratingsCount` re-reads the flag after a clear-ratings wipe, which also
- * removes the sample night.
- */
-function AppRows({ ratingsCount }: { ratingsCount: number }): JSX.Element {
-  const [seeded, setSeeded] = useState(false);
-
-  useEffect(() => {
-    setSeeded(isDemoSeeded());
-  }, [ratingsCount]);
-
-  return (
-    <>
-      <SlotRow>
-        <div className="flex items-center justify-between gap-4">
-          <p className="text-sm text-muted leading-relaxed">
-            Add Next Bar to your home screen for the full app experience.
-          </p>
-          <InstallPrompt />
-        </div>
-      </SlotRow>
-      <SlotRow>
-        <p className="text-xs text-muted leading-relaxed">
-          Load a sample night of ratings to see Rankings and the group
-          &ldquo;Where should we go?&rdquo; picks come alive — no sign-in
-          needed.
-        </p>
-        {seeded ? (
-          <div className="flex items-center gap-4 flex-wrap">
-            <Link
-              href="/rankings"
-              className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-2 rounded-full min-h-[44px] touch-manipulation"
-            >
-              View rankings →
-            </Link>
-            <button
-              type="button"
-              onClick={() => {
-                clearSampleNight();
-                setSeeded(false);
-              }}
-              className="text-muted text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
-            >
-              Remove sample night
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => {
-              seedSampleNight();
-              setSeeded(true);
-            }}
-            className="inline-flex items-center justify-center bg-accent text-bg font-display text-sm px-5 py-2 rounded-full min-h-[44px] touch-manipulation"
-          >
-            Load sample night →
-          </button>
-        )}
-      </SlotRow>
-    </>
-  );
-}
