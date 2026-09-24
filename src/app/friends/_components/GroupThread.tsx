@@ -627,6 +627,15 @@ function MessageRow({
         )
       ) : null}
 
+      {/* Behind a per-message menu, not on every bubble: the web stand-in for
+          iOS long-press (iOS UI pass 2026-09-23, bug 5). */}
+      <details className="self-end" data-testid="group-message-menu">
+        <summary
+          aria-label="Message options"
+          className="list-none cursor-pointer min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-full text-muted touch-manipulation"
+        >
+          &#8230;
+        </summary>
       <div className="flex items-center gap-2">
         {canDelete ? (
           <button
@@ -649,6 +658,7 @@ function MessageRow({
           Report
         </button>
       </div>
+      </details>
     </li>
   );
 }

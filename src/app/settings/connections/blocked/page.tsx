@@ -104,7 +104,7 @@ function BlockedList(): JSX.Element {
     ) : (
       <Group
         label="Blocked"
-        footnote="Blocking works in both directions and is enforced by the server. Usernames are not shown here: this build cannot turn a blocked account's id back into a handle."
+        footnote="Blocking works in both directions."
       >
         {visible.map((id) => (
           <div

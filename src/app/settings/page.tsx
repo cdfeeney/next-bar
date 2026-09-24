@@ -191,8 +191,7 @@ function SignedOutIdentity({
         <p className="font-display text-xl">Not signed in</p>
         {authStatus === 'unavailable' ? (
           <p className="text-muted text-xs leading-relaxed">
-            Sign-in is unavailable on this build — Supabase env vars are
-            missing. Ratings stay on this device only.
+            Sign-in isn&apos;t available right now. Your ratings are kept on this device.
           </p>
         ) : (
           <Link

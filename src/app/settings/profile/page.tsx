@@ -174,8 +174,8 @@ export default function EditProfilePage(): JSX.Element {
             <Group label="Photo">
               <StatusRow
                 label="Profile photo"
-                value="Not on this build"
-                description="Next Bar doesn't store profile photos yet — your avatar is generated from your username. Uploading arrives with the storage that keeps it."
+                value="Coming soon"
+                description="Your avatar uses your initials for now."
               />
             </Group>
 

@@ -294,10 +294,31 @@ function FocusBar({
   return null;
 }
 
+/**
+ * Catalogue pins are DRAWING ONLY until street zoom. At city zoom 2,107 8px
+ * targets merge into one blob and none can be tapped (iOS UI pass 2026-09-23,
+ * bug 6); at >= STREET_ZOOM each dot has room to be a target. The dots stay
+ * on screen at every zoom (owner: "it's fun to see all the markers").
+ */
+const STREET_ZOOM = 15;
+function ZoomWatcher({ onChange }: { onChange: (street: boolean) => void }) {
+  const map = useMap();
+  useEffect(() => {
+    const publish = (): void => onChange(map.getZoom() >= STREET_ZOOM);
+    map.on('zoomend', publish);
+    publish();
+    return () => {
+      map.off('zoomend', publish);
+    };
+  }, [map, onChange]);
+  return null;
+}
+
 export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusNonce, highlightIds, suggestedIds, fitToBars, oneFingerPan, fill }: BarMapProps) {
   // Marker instances by bar id, so map search opens a bar's OWN popup instead
   // of building a second one (one venue popup — see BarPopupContent).
   const markerRefs = useRef(new Map<string, L.Marker>());
+  const [streetZoom, setStreetZoom] = useState(false);
   const getMarker = useCallback((id: string) => markerRefs.current.get(id), []);
   // V9-07: the venue whose photos & hours are open. The map stays mounted
   // underneath, so center, zoom, the open popup and the caller's filters are
@@ -378,6 +399,7 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
           >
             <ZoomControl position={fill ? 'bottomright' : 'topleft'} />
             <MapPose />
+            <ZoomWatcher onChange={setStreetZoom} />
             {oneFingerPan ? null : <GestureController />}
             {fitToBars ? <FitBounds bars={bars} /> : null}
             {panToUser ? <PanToUser coords={userCoords} /> : null}
@@ -410,11 +432,16 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
                 : isHighlighted
                 ? highlightIcon
                 : barIcon;
+              // A quiet catalogue dot is inert below street zoom. Leaflet fixes
+              // `interactive` at creation, so the key flips to remount it when
+              // the threshold is crossed.
+              const tappable = !isTiered || tier !== 'other' || streetZoom;
               return (
                 <Marker
-                  key={bar.id}
+                  key={tappable ? bar.id : `${bar.id}-quiet`}
                   position={[bar.lat, bar.lng]}
                   icon={icon}
+                  interactive={tappable}
                   zIndexOffset={isTiered ? TIER_Z_OFFSET[tier] : 0}
                   ref={(marker) => {
                     if (marker) markerRefs.current.set(bar.id, marker);

@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import FindFriends from '@/components/FindFriends';
 import { RequestRow } from '@/components/FollowRows';
 import { useAuth } from '@/hooks/useAuth';
@@ -27,7 +28,7 @@ import {
   MAX_GROUP_NAME_LENGTH,
   type Group,
 } from '@/lib/groups.server';
-import GroupThread, { type AddableFriend } from './GroupThread';
+
 
 export const GROUPS_AND_PEOPLE_ID = 'groups-and-people';
 
@@ -167,6 +168,7 @@ function GroupsSection({
   followers: readonly { id: string; handle: string; displayName: string | null }[];
 }): JSX.Element {
   const auth = useAuth();
+  const router = useRouter();
   const client = useMemo(() => getBrowserSupabase(), []);
   const [groups, setGroups] = useState<Group[]>([]);
   const [unread, setUnread] = useState<Map<string, number>>(new Map());
@@ -174,29 +176,12 @@ function GroupsSection({
   const [notice, setNotice] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
-  const [openId, setOpenId] = useState<string | null>(null);
   // README §10: the create control is a 44px outlined "New group" pill that
   // reveals the name field, so an empty Groups block is one sentence, not a form.
   const [creating, setCreating] = useState(false);
 
   const viewerId = auth.status === 'signed-in' ? auth.user.id : null;
-  const accessToken = auth.status === 'signed-in' ? auth.session.access_token : null;
 
-  /**
-   * Mutual friends, for the administrator's add control (V8-R-GRP-005).
-   *
-   * A mutual friend is a follow edge in BOTH directions, so this is the
-   * intersection of the circle and the followers — which is the same rule
-   * `is_mutual_friend` applies server-side, minus the block, which only the
-   * server can see. Offering someone the server then refuses is a stated
-   * failure, not a wrong grant.
-   */
-  const addable = useMemo<AddableFriend[]>(() => {
-    const followerIds = new Set(followers.map((f) => f.id));
-    return circle
-      .filter((f) => followerIds.has(f.id))
-      .map((f) => ({ id: f.id, handle: f.handle, displayName: f.displayName }));
-  }, [circle, followers]);
 
   const load = useCallback(async (): Promise<void> => {
     if (!isServer) return;
@@ -237,13 +222,11 @@ function GroupsSection({
       }
       setName('');
       await load();
-      setOpenId(result.value);
+      router.push(`/friends/groups/${result.value}`);
     } finally {
       setBusy(false);
     }
   };
-
-  const open = groups.find((group) => group.id === openId) ?? null;
 
   if (!isServer) {
     return (
@@ -271,21 +254,6 @@ function GroupsSection({
           </Link>
         </div>
       </section>
-    );
-  }
-
-  if (open !== null && viewerId !== null) {
-    return (
-      <GroupThread
-        client={client}
-        accessToken={accessToken}
-        groupId={open.id}
-        groupName={open.name}
-        viewerId={viewerId}
-        addable={addable}
-        onClose={() => setOpenId(null)}
-        onChanged={() => void load()}
-      />
     );
   }
 
@@ -335,7 +303,9 @@ function GroupsSection({
             <li key={group.id}>
               <button
                 type="button"
-                onClick={() => setOpenId(group.id)}
+                // ITS OWN SCREEN, not an inline expansion under the counts and
+                // search (iOS UI pass 2026-09-23, bug 5).
+                onClick={() => router.push(`/friends/groups/${group.id}`)}
                 data-testid="group-row"
                 className="w-full flex items-center justify-between gap-3 bg-surface border border-border rounded-[20px] px-4 py-3.5 min-h-[44px] touch-manipulation hover:border-accent transition-colors text-left"
               >

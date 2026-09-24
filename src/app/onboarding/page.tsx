@@ -161,7 +161,7 @@ export default function OnboardingPage(): JSX.Element {
     if (!supabase) {
       setStatus({
         kind: 'error',
-        message: 'Sign-in is unavailable on this build.',
+        message: 'Sign-in isn’t available right now.',
       });
       return;
     }
@@ -214,8 +214,7 @@ export default function OnboardingPage(): JSX.Element {
         <div className="bg-surface border border-border rounded-3xl p-5">
           {auth.status === 'unavailable' ? (
             <p className="text-muted text-xs leading-relaxed">
-              Sign-in is unavailable on this build — Supabase env vars are
-              missing.{' '}
+              Sign-in isn&apos;t available right now.{' '}
               <Link href="/" className="text-accent underline-offset-4 hover:underline">
                 Back home
               </Link>

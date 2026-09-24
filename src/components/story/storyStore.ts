@@ -29,6 +29,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { useFollows } from '@/hooks/useFollows';
+import { fetchOwnProfile } from '@/lib/profile.server';
 // ONE CLIENT FOR THE WHOLE STORIES OPERATION, and it must be the one that holds
 // the session. This used to import the plain `@/lib/supabase` singleton — a bare
 // `createClient`, whose session lives in localStorage — while this app signs in
@@ -264,6 +265,29 @@ function toItem(view: StoryView, tagged: TaggedPerson[]): StoryItem {
 export function useStories(): UseStories {
   const auth = useAuth();
   const { mutuals, circleReady, mode } = useFollows();
+  /**
+   * Your own display name, for the "You" cell's initials. They came from the
+   * EMAIL local part while Account and the profile used the display name, so
+   * one person wore two monograms (iOS UI pass 2026-09-23). Null until read,
+   * or when there is nothing to read; the email fallback then stands.
+   */
+  const [ownName, setOwnName] = useState<string | null>(null);
+  const ownId = auth.status === 'signed-in' ? auth.user.id : null;
+  useEffect(() => {
+    const client = getBrowserSupabase();
+    if (ownId === null || client === null) {
+      setOwnName(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchOwnProfile(client).then((profile) => {
+      if (cancelled) return;
+      setOwnName(profile ? (profile.displayName ?? profile.handle) : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ownId]);
   const signedIn = auth.status === 'signed-in';
   const youId = signedIn ? auth.user.id : null;
 
@@ -344,11 +368,11 @@ export function useStories(): UseStories {
         // produced links to a profile that does not exist.
         handle: null,
         name: 'You',
-        initials: initialsFor(email ? email.split('@')[0] : 'You'),
+        initials: initialsFor(ownName ?? (email ? email.split('@')[0] : 'You')),
       });
     }
     return map;
-  }, [mutuals, youId, signedIn, auth]);
+  }, [mutuals, youId, signedIn, auth, ownName]);
 
   const friends = useMemo<TaggedPerson[]>(
     () => mutuals.map((profile) => {

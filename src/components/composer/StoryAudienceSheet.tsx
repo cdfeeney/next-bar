@@ -82,7 +82,7 @@ export default function StoryAudienceSheet({
         <AudienceOption
           option="friends"
           label="Friends"
-          hint="All accepted friends · your Account default"
+          hint="Friends who follow you back"
           value={value}
           onChange={onChangeChoice}
         />
@@ -139,7 +139,7 @@ export default function StoryAudienceSheet({
 
       <p data-testid="composer-audience-count" className="text-muted text-[11px] mt-4">
         {value === 'friends'
-          ? 'Everyone who follows you back'
+          ? 'Friends who follow you back will see this story'
           : `${resolvedCount} ${resolvedCount === 1 ? 'person' : 'people'} will see this story`}
       </p>
 

@@ -46,7 +46,7 @@ export default function ClaimHandle({ onClaimed }: Props): JSX.Element {
     }
     const supabase = getBrowserSupabase();
     if (!supabase) {
-      setStatus({ kind: 'error', message: 'Sign-in is unavailable on this build.' });
+      setStatus({ kind: 'error', message: 'Sign-in isn’t available right now.' });
       return;
     }
     setStatus({ kind: 'claiming' });

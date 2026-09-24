@@ -158,6 +158,7 @@ export default function ProfilePage({
 
   const ready = state as Extract<ProfileState, { kind: 'ready' }>;
   const p = ready.profile;
+  const isOwn = auth.status === 'signed-in' && auth.user.id === p.id;
   const ranked = tierRank(friendRatings ?? []);
 
   return (
@@ -180,19 +181,32 @@ export default function ProfilePage({
           ) : null}
 
           <div className="flex items-center gap-3 mt-6">
-            <button
-              type="button"
-              aria-pressed={following}
-              onClick={() => toggleFollow(p.handle)}
-              className={[
-                'min-h-[44px] touch-manipulation px-6 rounded-full font-display text-sm border transition-colors',
-                following
-                  ? 'bg-transparent border-border text-muted hover:text-text'
-                  : 'bg-accent border-accent text-bg',
-              ].join(' ')}
-            >
-              {following ? 'Following' : 'Follow'}
-            </button>
+            {isOwn ? (
+              // YOUR OWN PROFILE IS NOT A STRANGER'S. Without this the owner
+              // saw Follow and "Follow @you to see their list" on a fresh
+              // sign-in (iOS UI pass 2026-09-23, bug 2).
+              <Link
+                href="/settings/profile"
+                data-testid="profile-edit"
+                className="min-h-[44px] touch-manipulation px-6 rounded-full font-display text-sm border border-border inline-flex items-center hover:text-text"
+              >
+                Edit profile
+              </Link>
+            ) : (
+              <button
+                type="button"
+                aria-pressed={following}
+                onClick={() => toggleFollow(p.handle)}
+                className={[
+                  'min-h-[44px] touch-manipulation px-6 rounded-full font-display text-sm border transition-colors',
+                  following
+                    ? 'bg-transparent border-border text-muted hover:text-text'
+                    : 'bg-accent border-accent text-bg',
+                ].join(' ')}
+              >
+                {following ? 'Following' : 'Follow'}
+              </button>
+            )}
             {/* The ranked list is the loop-starting artifact (goal E-week1):
                 a profile travels to people who aren't in the app yet, which
                 a pick card cannot do. */}
@@ -206,10 +220,19 @@ export default function ProfilePage({
         </div>
 
         <h2 className="font-label text-xs uppercase tracking-[0.25em] text-muted mt-12 mb-4">
-          {(p.displayName ?? p.handle).split(' ')[0]}&apos;s list
+          {isOwn ? 'Your list' : `${p.displayName ?? p.handle}’s list`}
         </h2>
 
-        {!following ? (
+        {isOwn ? (
+          <div className="bg-surface border border-border rounded-3xl p-6 text-center">
+            <Link
+              href="/rankings"
+              className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] inline-flex items-center touch-manipulation"
+            >
+              See your rankings →
+            </Link>
+          </div>
+        ) : !following ? (
           <div className="bg-surface border border-border rounded-3xl p-6 text-center">
             <p className="text-sm text-muted leading-relaxed">
               Follow @{p.handle} to see their ranked list.

@@ -27,7 +27,7 @@ type Status =
   | { kind: 'saved' }
   | { kind: 'error'; message: string };
 
-export default function SetPassword(): JSX.Element {
+export default function SetPassword({ label = 'Set a password' }: { label?: string } = {}): JSX.Element {
   const [password, setPassword] = useState('');
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
 
@@ -42,7 +42,7 @@ export default function SetPassword(): JSX.Element {
     }
     const supabase = getBrowserSupabase();
     if (!supabase) {
-      setStatus({ kind: 'error', message: 'Sign-in is unavailable on this build.' });
+      setStatus({ kind: 'error', message: 'Sign-in isn’t available right now.' });
       return;
     }
     setStatus({ kind: 'saving' });
@@ -65,7 +65,7 @@ export default function SetPassword(): JSX.Element {
         onClick={() => setStatus({ kind: 'editing' })}
         className="text-accent text-sm underline-offset-4 hover:underline min-h-[44px] touch-manipulation"
       >
-        Set a password
+        {label}
       </button>
     );
   }

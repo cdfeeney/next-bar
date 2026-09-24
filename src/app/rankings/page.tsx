@@ -109,8 +109,7 @@ export default function RankingsPage(): JSX.Element {
           <h2 className="font-display text-2xl mb-2">Nothing here yet.</h2>
           <p className="text-muted text-sm mb-6 max-w-sm">
             Rate a bar after you check it out and it&apos;ll show up here, scored
-            0–10 by your own taste. Your rankings stay on this device until the
-            app ships with sync.
+            0–10 by your own taste.
           </p>
           <div className="mb-4">
             <QuickAddBar initialBarId={deepLinkBarId} onInitialConsumed={clearDeepLink} />

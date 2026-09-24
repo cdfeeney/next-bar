@@ -170,7 +170,7 @@ test.describe('App-shell smoke', () => {
     await expect(
       page
         .getByRole('link', { name: /Sign in/i })
-        .or(page.getByText(/Sign-in is unavailable on this build/i)),
+        .or(page.getByText(/Sign-in isn.t available right now/i)),
     ).toBeVisible({ timeout: 10_000 });
     await expectNoConsoleErrors(page, '/settings');
   });
