@@ -681,6 +681,33 @@ test.describe('Social · Groups · signed in (stubbed transport, no database)', 
     await expect(page.getByTestId('group-message-photo-removed')).toHaveCount(0);
   });
 
+  test('Delete and Report sit behind a per-message menu; the menu opens them and the tab bar is hidden (UI pass bug 5)', async ({ page }) => {
+    await signInStub(page);
+    await stubGroups(page, {
+      groups: [GROUP_ROW],
+      members: ROSTER,
+      plans: [],
+      thread: [
+        { id: '55555555-5555-4555-8555-555555555555', sender_id: OTHER_ID, sender_handle: 'them',
+          sender_display_name: 'Them', body: 'menu me', media_id: null,
+          media_removed_at: null, created_at: '2026-09-01T00:00:00Z' },
+      ],
+    });
+    await openThread(page);
+
+    // The thread is its own pushed screen with no tab bar under it.
+    await expect(page).toHaveURL(new RegExp(`/friends/groups/${GROUP_ID}$`));
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(0);
+
+    const report = page.getByTestId('group-message-report');
+    await expect(page.getByTestId('group-message')).toContainText('menu me');
+    await expect(report, 'Report is exposed on the bubble instead of behind the menu').toBeHidden();
+    await page.getByLabel('Message options').first().click();
+    await expect(report).toBeVisible();
+    const box = (await report.boundingBox())!;
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  });
+
   test('a present account with no name is Someone, NOT a departed member (X5)', async ({ page }) => {
     // The two cases must not collapse: one account is gone, the other is merely unnamed.
     await signInStub(page);

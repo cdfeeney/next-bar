@@ -27,7 +27,14 @@ export default function GroupPage(): JSX.Element {
   const { circle, followers } = useFollows();
   const client = useMemo(() => getBrowserSupabase(), []);
   const [name, setName] = useState<string | null>(null);
-  const [missing, setMissing] = useState(false);
+  /**
+   * FAILED IS ITS OWN STATE, and it never displaces a live thread. Round 1
+   * (Fable HIGH, Codex MEDIUM): a transient groups-read failure rendered
+   * "That group isn't available", and because load() re-runs after every
+   * send, delete, rename and mark-read, a blip mid-conversation unmounted the
+   * thread under the member. Missing is claimed only from a SUCCESSFUL read.
+   */
+  const [status, setStatus] = useState<'loading' | 'ready' | 'missing' | 'failed'>('loading');
 
   const viewerId = auth.status === 'signed-in' ? auth.user.id : null;
   const accessToken = auth.status === 'signed-in' ? auth.session.access_token : null;
@@ -45,24 +52,30 @@ export default function GroupPage(): JSX.Element {
     if (viewerId === null) return;
     const mine = await fetchMyGroups(client);
     if (!mine.ok) {
-      setMissing(true);
+      // A thread already on screen stays; only a first load shows the failure.
+      setStatus((current) => (current === 'ready' ? current : 'failed'));
       return;
     }
     const group = mine.value.find((g) => g.id === params.id) ?? null;
     if (group === null) {
       // Left, deleted, or never yours: an honest missing state, not a blank thread.
-      setMissing(true);
+      setStatus('missing');
       return;
     }
-    setMissing(false);
     setName(group.name);
+    setStatus('ready');
   }, [client, params.id, viewerId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const back = (): void => router.push(PEOPLE);
+  // POP the pushed screen when there is one to pop (Codex round 1); a
+  // deep link with no history still lands on Groups & people.
+  const back = (): void => {
+    if (window.history.length > 1) router.back();
+    else router.push(PEOPLE);
+  };
 
   if (auth.status === 'loading') {
     return (
@@ -88,7 +101,33 @@ export default function GroupPage(): JSX.Element {
     );
   }
 
-  if (missing) {
+  if (status === 'failed') {
+    return (
+      <main className="min-h-screen px-6 pt-8 max-w-md mx-auto">
+        <p data-testid="group-load-failed" role="status" className="text-sm leading-relaxed">
+          That group could not be loaded.
+        </p>
+        <button
+          type="button"
+          onClick={() => void load()}
+          data-testid="group-load-retry"
+          className="mt-4 min-h-[44px] px-4 rounded-full bg-accent text-bg text-sm font-display touch-manipulation"
+        >
+          Try again
+        </button>
+        <div>
+          <Link
+            href={PEOPLE}
+            className="mt-4 inline-flex items-center min-h-[44px] text-accent text-sm underline-offset-4 hover:underline touch-manipulation"
+          >
+            ‹ Groups &amp; people
+          </Link>
+        </div>
+      </main>
+    );
+  }
+
+  if (status === 'missing') {
     return (
       <main className="min-h-screen px-6 pt-8 max-w-md mx-auto">
         <p data-testid="group-missing" className="text-sm leading-relaxed">
@@ -104,7 +143,7 @@ export default function GroupPage(): JSX.Element {
     );
   }
 
-  if (name === null) {
+  if (status !== 'ready' || name === null) {
     return (
       <main className="min-h-screen px-6 pt-8">
         <p className="text-muted text-sm" role="status">
