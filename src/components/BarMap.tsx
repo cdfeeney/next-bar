@@ -306,16 +306,24 @@ function FocusBar({
  * as a container class so no marker is ever recreated on the threshold.
  */
 const STREET_ZOOM = 15;
-function ZoomWatcher({ onChange }: { onChange: (street: boolean) => void }) {
+const QUIET_DOTS_CLASS = 'nb-quiet-dots';
+function ZoomWatcher() {
   const map = useMap();
   useEffect(() => {
-    const publish = (): void => onChange(map.getZoom() >= STREET_ZOOM);
+    // ON THE DOM, NOT THROUGH MapContainer's className: React rewriting that
+    // attribute wipes the classes Leaflet added to the same element
+    // (`leaflet-container`, `leaflet-touch`), and the toggle never landed.
+    const el = map.getContainer();
+    const publish = (): void => {
+      el.classList.toggle(QUIET_DOTS_CLASS, map.getZoom() < STREET_ZOOM);
+    };
     map.on('zoomend', publish);
     publish();
     return () => {
       map.off('zoomend', publish);
+      el.classList.remove(QUIET_DOTS_CLASS);
     };
-  }, [map, onChange]);
+  }, [map]);
   return null;
 }
 
@@ -323,7 +331,6 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
   // Marker instances by bar id, so map search opens a bar's OWN popup instead
   // of building a second one (one venue popup — see BarPopupContent).
   const markerRefs = useRef(new Map<string, L.Marker>());
-  const [streetZoom, setStreetZoom] = useState(false);
   const getMarker = useCallback((id: string) => markerRefs.current.get(id), []);
   // V9-07: the venue whose photos & hours are open. The map stays mounted
   // underneath, so center, zoom, the open popup and the caller's filters are
@@ -380,7 +387,6 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
             (e.g. leaflet.markercluster) — DOM divIcons don't scale past that.
           */}
           <MapContainer
-            className={streetZoom ? undefined : 'nb-quiet-dots'}
             center={[center.lat, center.lng]}
             zoom={13}
             minZoom={1}
@@ -405,7 +411,7 @@ export default function BarMap({ bars, userCoords, panToUser, focusBarId, focusN
           >
             <ZoomControl position={fill ? 'bottomright' : 'topleft'} />
             <MapPose />
-            <ZoomWatcher onChange={setStreetZoom} />
+            <ZoomWatcher />
             {oneFingerPan ? null : <GestureController />}
             {fitToBars ? <FitBounds bars={bars} /> : null}
             {panToUser ? <PanToUser coords={userCoords} /> : null}
