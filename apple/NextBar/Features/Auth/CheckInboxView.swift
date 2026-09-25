@@ -13,6 +13,8 @@ struct CheckInboxView: View {
 
     @Environment(\.session) private var session
     @State private var resendCooldown = 0
+    @State private var isResending = false
+    @State private var resendFailed = false
     private let resendWindow = 30
     private let mailURL = URL(string: "message://")!
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -56,8 +58,14 @@ struct CheckInboxView: View {
                     Text(resendCooldown > 0 ? "Resend email (\(resendCooldown)s)" : "Resend email")
                 }
                 .buttonStyle(NBOutlineButtonStyle())
-                .disabled(resendCooldown > 0)
+                .disabled(resendCooldown > 0 || isResending)
                 .accessibilityIdentifier("checkInbox.resend")
+                if resendFailed {
+                    Text("Couldn't resend. Try again.")
+                        .font(.nb(.regular, 13))
+                        .foregroundStyle(NBColor.orangeText)
+                        .accessibilityIdentifier("checkInbox.resendError")
+                }
 
                 Button("Wrong email? Change it") {
                     onChangeEmail()
@@ -76,10 +84,20 @@ struct CheckInboxView: View {
         .onAppear { resendCooldown = resendWindow }
     }
 
+    /// One send at a time; the cooldown only starts after a successful send
+    /// and a failure says so instead of pretending (Codex, 2026-09-25).
     private func resend() {
+        guard !isResending else { return }
+        isResending = true
+        resendFailed = false
         Task {
-            try? await session.requestMagicLink(email: email)
-            resendCooldown = resendWindow
+            do {
+                try await session.requestMagicLink(email: email)
+                resendCooldown = resendWindow
+            } catch {
+                resendFailed = true
+            }
+            isResending = false
         }
     }
 }

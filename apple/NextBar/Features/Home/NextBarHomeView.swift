@@ -43,7 +43,7 @@ struct NextBarHomeView: View {
                 if homeCoords != nil {
                     DistanceChips(selection: $band)
                         .padding(.horizontal, 24)
-                    Text("Near you \u{00B7} West Village")
+                    Text(locationLabel)
                         .font(.nb(.regular, 13))
                         .foregroundStyle(NBColor.textTertiary)
                         .padding(.horizontal, 24)
@@ -206,30 +206,43 @@ struct NextBarHomeView: View {
         phase = .ready(bars: ranked, routes: routes ?? [:], routesAvailable: routesAvailable)
     }
 
-    /// Races `Session.travel` against a 10s timeout (spec, screen 8): on a
-    /// stall, home still renders the cards without minutes, via the "Route
-    /// times unavailable" fallback, rather than staying on the loading
-    /// placeholders forever. `static` so it captures no view state.
+    /// "Near you · {neighborhood}" when the fix snaps to a centroid within
+    /// `maxSnapMiles` (same rule as the web's `snappedNeighborhood`), else
+    /// plain "Near you" — never a hardcoded name (Codex, 2026-09-25).
+    private var locationLabel: String {
+        guard let homeCoords else { return "Near you" }
+        let nearest = neighborhoodCentroids.min {
+            haversineMiles(homeCoords, $0.value) < haversineMiles(homeCoords, $1.value)
+        }
+        if let nearest, haversineMiles(homeCoords, nearest.value) <= maxSnapMiles {
+            return "Near you \u{00B7} \(nearest.key.rawValue)"
+        }
+        return "Near you"
+    }
+
+    /// Races `Session.travel` against a 10s deadline (spec, screen 8). A
+    /// task group would still wait for a child that ignores cancellation, so
+    /// this resumes a continuation exactly once — whichever side finishes
+    /// first — and cancels the loser (Codex, 2026-09-25).
     private static func travel(
         session: any Session,
         origin: Coords,
         destinationIDs: [String],
         band: TravelBand
     ) async -> [String: RouteEstimate]? {
-        await withTaskGroup(of: [String: RouteEstimate]?.self) { group in
-            group.addTask {
-                await session.travel(origin: origin, destinationIDs: destinationIDs, mode: .walking, walkableOnly: false, band: band)
+        let once = ResumeOnce()
+        return await withCheckedContinuation { continuation in
+            let work = Task {
+                let routes = await session.travel(origin: origin, destinationIDs: destinationIDs, mode: .walking, walkableOnly: false, band: band)
+                if await once.claim() { continuation.resume(returning: routes) }
             }
-            group.addTask {
+            Task {
                 try? await Task.sleep(for: .seconds(10))
-                return nil
+                if await once.claim() {
+                    work.cancel()
+                    continuation.resume(returning: nil)
+                }
             }
-            guard let first = await group.next() else {
-                group.cancelAll()
-                return nil
-            }
-            group.cancelAll()
-            return first
         }
     }
 
@@ -243,5 +256,16 @@ struct NextBarHomeView: View {
         await session.saveProfile(updated)
         profile = updated
         await load()
+    }
+}
+
+/// First caller wins; every later `claim()` is false. Keeps the travel
+/// continuation from resuming twice.
+private actor ResumeOnce {
+    private var claimed = false
+    func claim() -> Bool {
+        if claimed { return false }
+        claimed = true
+        return true
     }
 }
