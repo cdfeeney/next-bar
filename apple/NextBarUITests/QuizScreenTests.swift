@@ -35,4 +35,25 @@ final class QuizScreenTests: XCTestCase {
 
         XCTAssertTrue(app.buttons["findFriends.done"].waitForExistence(timeout: 5))
     }
+
+    func testBackKeepsThePreviousAnswerSelected() {
+        let app = launchApp()
+        goToUsername(app)
+        claimUsernameAndContinue(app, handle: "quizuserback")
+        skipLocationPrimer(app)
+
+        let next = app.buttons["quiz.next"]
+        XCTAssertTrue(next.waitForExistence(timeout: 5))
+        XCTAssertFalse(next.isEnabled)
+        app.buttons["quiz.option.1"].tap()
+        next.tap()
+        XCTAssertTrue(app.staticTexts["2 of 8"].waitForExistence(timeout: 3))
+        XCTAssertFalse(next.isEnabled)
+
+        app.buttons["quiz.back"].tap()
+        XCTAssertTrue(app.staticTexts["1 of 8"].waitForExistence(timeout: 3))
+        // The earlier pick is still the answer, so Next is enabled without re-tapping.
+        XCTAssertTrue(next.isEnabled)
+        attachScreenshot(app, name: "Quiz-BackKeepsAnswer")
+    }
 }

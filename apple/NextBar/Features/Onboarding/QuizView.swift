@@ -15,9 +15,13 @@ struct QuizView: View {
     private let questions = NextBarCore.quiz
 
     @State private var index = 0
-    @State private var collectedTags: [VibeTag] = []
+    /// One picked option per single-pick question, keyed by question index,
+    /// so Back keeps the earlier answer selected and re-answering replaces it
+    /// instead of appending its tags a second time (Codex, 2026-09-25).
+    @State private var answers: [Int: Int] = [:]
     @State private var selectedNeighborhoods: Set<Neighborhood> = []
-    @State private var singlePickIndex: Int?
+
+    private var singlePickIndex: Int? { answers[index] }
 
     private var isLastQuestion: Bool { index == questions.count - 1 }
 
@@ -57,6 +61,9 @@ struct QuizView: View {
             }
 
             Button(bottomButtonLabel) { advance() }
+                // The label flips Next → Done on the last question; without
+                // this the two labels cross-fade and can be captured overlapping.
+                .transaction { $0.animation = nil }
                 .buttonStyle(NBPrimaryButtonStyle(isDisabled: !canAdvance))
                 .disabled(!canAdvance)
                 .padding(.horizontal, 24)
@@ -78,18 +85,21 @@ struct QuizView: View {
     }
 
     /// On question 1 this is the only way out of the quiz, so it pops the
-    /// whole screen; every later question just steps back one.
-    ///
-    /// ponytail: going back does not restore the previous pick or drop the
-    /// tag already collected for it, so re-answering after Back can double
-    /// up a tag. Add a per-question answer history if that surfaces as a
-    /// real bug.
+    /// whole screen; every later question just steps back one, keeping the
+    /// earlier answer selected.
     private func goBack() {
         if index > 0 {
             index -= 1
-            singlePickIndex = nil
         } else {
             onBack()
+        }
+    }
+
+    /// Tags from every answered single-pick question, in question order.
+    private var collectedTags: [VibeTag] {
+        questions.indices.flatMap { i -> [VibeTag] in
+            guard case .single(_, let options) = questions[i], let picked = answers[i] else { return [] }
+            return options[picked].tags
         }
     }
 
@@ -128,7 +138,7 @@ struct QuizView: View {
             VStack(spacing: 10) {
                 ForEach(Array(options.enumerated()), id: \.offset) { offset, option in
                     Button {
-                        singlePickIndex = offset
+                        answers[index] = offset
                     } label: {
                         Text(option.label)
                             .font(.nb(.medium, 16))
@@ -189,14 +199,10 @@ struct QuizView: View {
     }
 
     private func advance() {
-        if case .single(_, let options) = questions[index], let picked = singlePickIndex {
-            collectedTags.append(contentsOf: options[picked].tags)
-        }
         if isLastQuestion {
             finishWithNeighborhoods()
         } else {
             index += 1
-            singlePickIndex = nil
         }
     }
 
