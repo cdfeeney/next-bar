@@ -1,0 +1,82 @@
+name: NextBar
+options:
+  bundleIdPrefix: com.nextbar
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: en
+
+configs:
+  Debug: debug
+  Release: release
+
+packages:
+  NextBarCore:
+    path: Packages/NextBarCore
+
+targets:
+  NextBar:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: NextBar
+    dependencies:
+      - package: NextBarCore
+    info:
+      path: Generated/NextBar-Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSLocationWhenInUseUsageDescription: >-
+          Next Bar uses your location to find the closest bars worth going to
+          tonight.
+        LSApplicationQueriesSchemes:
+          - message
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+    entitlements:
+      path: Generated/NextBar.entitlements
+      properties:
+        com.apple.developer.applesignin:
+          - Default
+        com.apple.developer.associated-domains:
+          - applinks:next-bar.com
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nextbar.app
+        PRODUCT_NAME: NextBar
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        ENABLE_PREVIEWS: YES
+
+  NextBarUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: NextBarUITests
+    dependencies:
+      - target: NextBar
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.nextbar.app.NextBarUITests
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        TEST_TARGET_NAME: NextBar
+
+schemes:
+  NextBar:
+    build:
+      targets:
+        NextBar: all
+        NextBarUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - NextBarUITests
+    archive:
+      config: Release

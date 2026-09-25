@@ -1,0 +1,84 @@
+name: iOS Swift app
+
+# Builds the native SwiftUI app under apple/ — XcodeGen -> swift test (the
+# NextBarCore port) -> XCUITest on a simulator -> screenshots as artifacts.
+# No signing, no TestFlight upload: that stays on ios-testflight.yml, which
+# builds the separate Capacitor shell under ios/App/.
+on:
+  workflow_dispatch:
+  push:
+    branches: ['swift-*']
+
+concurrency:
+  group: ios-swift
+  cancel-in-progress: false
+
+jobs:
+  build-and-test:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        run: xcodegen generate --spec project.yml
+        working-directory: apple
+
+      - name: swift test (NextBarCore)
+        run: swift test --package-path apple/Packages/NextBarCore
+
+      - name: List available simulators
+        run: xcrun simctl list devices available | head -40
+
+      # Pick the FIRST available iPhone destination xcodebuild itself
+      # reports for this scheme — never a hardcoded OS/device string, since
+      # the runner image's bundled simulators drift release to release.
+      - name: Pick a simulator destination
+        id: pick-sim
+        run: |
+          set -euo pipefail
+          DEST_LINE=$(xcodebuild -showdestinations -project apple/NextBar.xcodeproj -scheme NextBar 2>/dev/null \
+            | grep 'platform:iOS Simulator' | grep 'name:iPhone' | head -n1 || true)
+          echo "Picked: $DEST_LINE"
+          DEST_ID=$(echo "$DEST_LINE" | sed -E 's/.*id:([A-F0-9-]+).*/\1/')
+          if [ -z "$DEST_ID" ]; then
+            echo "::error::No available iPhone simulator destination found for scheme NextBar"
+            exit 1
+          fi
+          echo "id=$DEST_ID" >> "$GITHUB_OUTPUT"
+
+      - name: xcodebuild test (simulator, no signing)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project apple/NextBar.xcodeproj \
+            -scheme NextBar \
+            -destination "platform=iOS Simulator,id=${{ steps.pick-sim.outputs.id }}" \
+            -resultBundlePath build/NextBar.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
+      - name: Export screenshots from the result bundle
+        if: always()
+        run: |
+          mkdir -p build/screenshots
+          xcrun xcresulttool export attachments \
+            --path build/NextBar.xcresult \
+            --output-path build/screenshots || echo "::warning::No attachments to export (build/NextBar.xcresult missing or empty)"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nextbar-screenshots
+          path: build/screenshots
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nextbar-xcresult
+          path: build/NextBar.xcresult
+          retention-days: 7
