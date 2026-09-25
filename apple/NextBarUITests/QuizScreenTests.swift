@@ -16,10 +16,10 @@ final class QuizScreenTests: XCTestCase {
         }
         // Question 8 is the neighborhood multi-select; its own "Anywhere
         // works" button finishes the quiz with zero neighborhoods.
+        attachScreenshot(app, name: "Quiz-AllAnswered")
         app.buttons["quiz.neighborhoodSkip"].tap()
 
         XCTAssertTrue(app.buttons["findFriends.done"].waitForExistence(timeout: 5))
-        attachScreenshot(app, name: "Quiz-AllAnswered")
     }
 
     func testSkipOnFirstQuestionReachesFindFriends() {
@@ -30,9 +30,9 @@ final class QuizScreenTests: XCTestCase {
 
         let skip = app.buttons["quiz.skip"]
         XCTAssertTrue(skip.waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "Quiz-Skip")
         skip.tap()
 
         XCTAssertTrue(app.buttons["findFriends.done"].waitForExistence(timeout: 5))
-        attachScreenshot(app, name: "Quiz-Skip")
     }
 }

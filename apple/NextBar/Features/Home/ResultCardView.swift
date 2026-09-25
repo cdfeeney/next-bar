@@ -67,11 +67,13 @@ struct ResultCardView: View {
     }
 
     /// A stable, deterministic tint from the bar id — there is no Places
-    /// photo in this stub (Places UI Kit is NB-03's own push).
+    /// photo in this stub (Places UI Kit is NB-03's own push). `hashValue` is
+    /// randomized per process launch, so it's a sum of unicode scalars
+    /// instead: the same bar gets the same tint across every run.
     private var heroTint: Color {
         let palette: [Color] = [NBColor.raised, NBColor.fill, NBColor.selected]
-        let index = abs(bar.id.hashValue) % palette.count
-        return palette[index]
+        let sum = bar.id.unicodeScalars.reduce(0) { $0 + Int($1.value) }
+        return palette[sum % palette.count]
     }
 
     private var priceDollarSigns: String {

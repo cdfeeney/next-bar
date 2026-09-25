@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreLocation
+import NextBarCore
 
 /// Screen 5, copy ported verbatim from the web primer
 /// (`src/app/onboarding/location/page.tsx`). Push 1's iOS screen is the
@@ -8,14 +9,18 @@ import CoreLocation
 /// fix, not this screen's.
 ///
 /// Whether the permission is granted or denied, the flow always continues to
-/// the quiz next — this screen only ever asks once.
+/// the quiz next — this screen only ever asks once. `onContinue` carries the
+/// resolved coordinates when permission was granted, or `nil` when denied /
+/// "Not now"; the caller threads that into Next Bar? home.
 struct LocationPrimerView: View {
-    let onContinue: () -> Void
+    let onContinue: (Coords?) -> Void
 
     @StateObject private var locationRequester = LocationPermissionRequester()
 
     var body: some View {
         VStack(spacing: 24) {
+            OnboardingProgress(step: 2)
+
             Spacer()
 
             ZStack {
@@ -47,7 +52,7 @@ struct LocationPrimerView: View {
                 .accessibilityIdentifier("locationPrimer.share")
 
                 Button("Not now") {
-                    onContinue()
+                    onContinue(nil)
                 }
                 .font(.nb(.regular, 14))
                 .foregroundStyle(NBColor.textSecondary)
@@ -60,25 +65,51 @@ struct LocationPrimerView: View {
     }
 }
 
-/// Wraps `CLLocationManager`'s permission callback as a one-shot async-style
-/// call. Granted or denied, `onDecided` fires exactly once.
+/// Wraps `CLLocationManager`'s permission + location callbacks as a one-shot
+/// async-style call. Granted or denied, `onDecided` fires exactly once, with
+/// real coordinates on a grant or `nil` on a denial/failure. `.notDetermined`
+/// is the system alert still being answered — it must never advance the flow
+/// on its own.
 private final class LocationPermissionRequester: NSObject, ObservableObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
-    private var onDecided: (() -> Void)?
+    private var onDecided: ((Coords?) -> Void)?
 
-    func request(onDecided: @escaping () -> Void) {
-        guard manager.authorizationStatus == .notDetermined else {
-            onDecided()
-            return
-        }
+    func request(onDecided: @escaping (Coords?) -> Void) {
         self.onDecided = onDecided
-        manager.delegate = self
-        manager.requestWhenInUseAuthorization()
+        switch manager.authorizationStatus {
+        case .notDetermined:
+            manager.delegate = self
+            manager.requestWhenInUseAuthorization()
+        case .authorizedWhenInUse, .authorizedAlways:
+            manager.delegate = self
+            manager.requestLocation()
+        default:
+            finish(nil)
+        }
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        switch manager.authorizationStatus {
+        case .notDetermined:
+            return // still pending the system alert; do not advance
+        case .authorizedWhenInUse, .authorizedAlways:
+            manager.requestLocation()
+        default:
+            finish(nil)
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        finish(locations.last.map { Coords(lat: $0.coordinate.latitude, lng: $0.coordinate.longitude) })
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        finish(nil)
+    }
+
+    private func finish(_ coords: Coords?) {
         let decide = onDecided
         onDecided = nil
-        decide?()
+        decide?(coords)
     }
 }

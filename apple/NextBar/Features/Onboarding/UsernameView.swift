@@ -5,7 +5,7 @@ import SwiftUI
 /// Apple/Google buttons don't capture yet (no Supabase), so chips are static
 /// until that plumbing lands.
 struct UsernameView: View {
-    let onContinue: () -> Void
+    let onContinue: (String) -> Void
 
     private enum Availability: Equatable {
         case idle, checking, available, taken
@@ -138,7 +138,7 @@ struct UsernameView: View {
             defer { isClaiming = false }
             do {
                 try await session.claimHandle(handle)
-                onContinue()
+                onContinue(handle)
             } catch {
                 availability = .taken
             }

@@ -13,43 +13,76 @@ struct NextBarHomeView: View {
         case ready(bars: [Bar], routes: [String: RouteEstimate], routesAvailable: Bool)
     }
 
+    /// Real coordinates from screen 5's location primer, or `nil` when
+    /// permission was denied/"Not now" — `nil` opens the neighborhood picker
+    /// instead of "Near you" results (spec, screen 8).
+    let homeCoords: Coords?
+
     @Environment(\.session) private var session
     @State private var phase: Phase = .checkingRoutes
     @State private var band: DistanceBandChoice = .walkable
     @State private var profile = VibeProfile(tags: [], archetype: deriveArchetype([]), preferredNeighborhoods: [])
     @State private var showingTweakVibe = false
     @State private var isPulsing = false
-
-    // TODO(NB-plumbing): a fixed West Village stand-in until CoreLocation's
-    // fix from screen 5 is threaded down to Home — see LocationPrimerView.
-    private let origin = PreviewSession.previewOrigin
+    @State private var pickedNeighborhood: Neighborhood?
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    header
+            if homeCoords == nil, pickedNeighborhood == nil {
+                neighborhoodPicker
+            } else {
+                results
+            }
+        }
+    }
+
+    private var results: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                header
+                if homeCoords != nil {
                     DistanceChips(selection: $band)
                         .padding(.horizontal, 24)
                     Text("Near you \u{00B7} West Village")
                         .font(.nb(.regular, 13))
                         .foregroundStyle(NBColor.textTertiary)
                         .padding(.horizontal, 24)
+                } else if let pickedNeighborhood {
+                    Text(pickedNeighborhood.rawValue)
+                        .font(.nb(.regular, 13))
+                        .foregroundStyle(NBColor.textTertiary)
+                        .padding(.horizontal, 24)
+                }
 
-                    content
-                }
-                .padding(.vertical, 16)
+                content
             }
-            .background(NBColor.base.ignoresSafeArea())
-            .refreshable { await load() }
-            .task { await load() }
-            .onChange(of: band) { _, _ in Task { await load() } }
-            .sheet(isPresented: $showingTweakVibe) {
-                TweakVibeSheet(selectedTags: Set(profile.tags)) { tags in
-                    Task { await applyTweak(tags) }
-                }
+            .padding(.vertical, 16)
+        }
+        .background(NBColor.base.ignoresSafeArea())
+        .refreshable { await load() }
+        .task { await load() }
+        .onChange(of: band) { _, _ in Task { await load() } }
+        .sheet(isPresented: $showingTweakVibe) {
+            TweakVibeSheet(selectedTags: Set(profile.tags)) { tags in
+                Task { await applyTweak(tags) }
             }
         }
+    }
+
+    /// Shown when there is no location fix at all (denied/"Not now" and no
+    /// neighborhood chosen yet) — the web's neighborhood-picker fallback,
+    /// never a permission wall.
+    private var neighborhoodPicker: some View {
+        List(Neighborhood.allCases, id: \.self) { neighborhood in
+            Button(neighborhood.rawValue) {
+                pickedNeighborhood = neighborhood
+            }
+            .accessibilityIdentifier("home.neighborhood.\(neighborhood.rawValue)")
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(NBColor.base.ignoresSafeArea())
+        .navigationTitle("Pick a neighborhood")
     }
 
     @ViewBuilder
@@ -65,7 +98,11 @@ struct NextBarHomeView: View {
                         .foregroundStyle(NBColor.textTertiary)
                         .accessibilityIdentifier("home.routesUnavailable")
                 }
-                LazyVStack(spacing: 16) {
+                // Plain VStack, not LazyVStack: with only 5 results, laziness
+                // buys nothing and costs ranks 4-5 their place in the
+                // accessibility tree until scrolled into view (XCUITest
+                // queries the whole tree up front).
+                VStack(spacing: 16) {
                     ForEach(Array(bars.enumerated()), id: \.element.id) { offset, bar in
                         ResultCardView(
                             rank: offset + 1,
@@ -82,7 +119,7 @@ struct NextBarHomeView: View {
     private var header: some View {
         HStack {
             Text("Next Bar?")
-                .font(.nb(.semibold, 22))
+                .font(.nb(.bold, 22))
                 .foregroundStyle(NBColor.textPrimary)
             Spacer()
             Button {
@@ -130,12 +167,21 @@ struct NextBarHomeView: View {
         let currentProfile = session.currentProfile()
         profile = currentProfile
         let allBars = await session.bars()
-        let bounds = band.milesBounds
+
+        // With a real fix, rank by the quiz's preferred neighborhoods as
+        // usual and band by distance. Without one, there is no origin to
+        // band on — rank within the picked neighborhood alone instead
+        // (spec: "ranks with location: .neighborhood").
+        let origin = homeCoords
+        let preferredNeighborhoods = origin != nil
+            ? currentProfile.preferredNeighborhoods
+            : pickedNeighborhood.map { [$0] } ?? []
+        let bounds: (min: Double?, max: Double?) = origin != nil ? band.milesBounds : (nil, nil)
 
         let ranked = matches(MatchesArgs(
             profile: currentProfile,
             coords: origin,
-            preferredNeighborhoods: currentProfile.preferredNeighborhoods,
+            preferredNeighborhoods: preferredNeighborhoods,
             minMilesExclusive: bounds.min,
             maxMiles: bounds.max,
             distanceBands: false,
@@ -143,15 +189,48 @@ struct NextBarHomeView: View {
             maxResults: resultsCount
         ))
 
-        let routes = await session.travel(
+        guard let origin else {
+            // No coordinates at all: nothing to route from, so this is the
+            // "Route times unavailable" case by definition, not a timeout.
+            phase = .ready(bars: ranked, routes: [:], routesAvailable: false)
+            return
+        }
+
+        let routes = await Self.travel(
+            session: session,
             origin: origin,
             destinationIDs: ranked.map(\.id),
-            mode: .walking,
-            walkableOnly: false,
             band: band.coreBand
         )
-        let routesAvailable = routes.values.contains { isRouteEstimate($0) }
-        phase = .ready(bars: ranked, routes: routes, routesAvailable: routesAvailable)
+        let routesAvailable = routes?.values.contains { isRouteEstimate($0) } ?? false
+        phase = .ready(bars: ranked, routes: routes ?? [:], routesAvailable: routesAvailable)
+    }
+
+    /// Races `Session.travel` against a 10s timeout (spec, screen 8): on a
+    /// stall, home still renders the cards without minutes, via the "Route
+    /// times unavailable" fallback, rather than staying on the loading
+    /// placeholders forever. `static` so it captures no view state.
+    private static func travel(
+        session: any Session,
+        origin: Coords,
+        destinationIDs: [String],
+        band: TravelBand
+    ) async -> [String: RouteEstimate]? {
+        await withTaskGroup(of: [String: RouteEstimate]?.self) { group in
+            group.addTask {
+                await session.travel(origin: origin, destinationIDs: destinationIDs, mode: .walking, walkableOnly: false, band: band)
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(10))
+                return nil
+            }
+            guard let first = await group.next() else {
+                group.cancelAll()
+                return nil
+            }
+            group.cancelAll()
+            return first
+        }
     }
 
     private func applyTweak(_ tags: [VibeTag]) async {

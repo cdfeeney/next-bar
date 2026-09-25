@@ -5,7 +5,10 @@ final class CreateAccountScreenTests: XCTestCase {
     func testControlsPresentAndEmailValidation() {
         let app = launchApp()
 
-        XCTAssertTrue(app.buttons["createAccount.continueWithApple"].waitForExistence(timeout: 5))
+        // SignInWithAppleButton is UIKit-hosted inside SwiftUI, so it does not
+        // surface as an XCUIElementType.button — look it up as a descendant
+        // of any type instead.
+        XCTAssertTrue(app.descendants(matching: .any)["createAccount.continueWithApple"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["createAccount.continueWithGoogle"].exists)
         let emailField = app.textFields["createAccount.emailField"]
         XCTAssertTrue(emailField.exists)

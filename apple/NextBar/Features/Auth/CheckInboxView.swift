@@ -11,6 +11,7 @@ struct CheckInboxView: View {
     let onContinue: () -> Void
     let onChangeEmail: () -> Void
 
+    @Environment(\.session) private var session
     @State private var resendCooldown = 0
     private let resendWindow = 30
     private let mailURL = URL(string: "message://")!
@@ -76,6 +77,9 @@ struct CheckInboxView: View {
     }
 
     private func resend() {
-        resendCooldown = resendWindow
+        Task {
+            try? await session.requestMagicLink(email: email)
+            resendCooldown = resendWindow
+        }
     }
 }

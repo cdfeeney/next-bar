@@ -17,12 +17,12 @@ final class CheckInboxScreenTests: XCTestCase {
         XCTAssertFalse(resend.isEnabled)
         XCTAssertTrue(resend.label.contains("s)"), "expected a countdown in the resend label, got \(resend.label)")
 
+        attachScreenshot(app, name: "CheckInbox")
+
         app.buttons["checkInbox.changeEmail"].tap()
 
         let backEmailField = app.textFields["createAccount.emailField"]
         XCTAssertTrue(backEmailField.waitForExistence(timeout: 5))
         XCTAssertEqual(backEmailField.value as? String, email)
-
-        attachScreenshot(app, name: "CheckInbox")
     }
 }

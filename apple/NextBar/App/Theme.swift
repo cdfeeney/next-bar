@@ -30,18 +30,18 @@ enum NBColor {
     static let orangePressed = Color(hex: 0xe0482a)
 }
 
-/// The brand pair is Poppins 400/500/600. The TTF files are not in this
-/// repository yet — see apple/README.md — so `Font.custom` below falls back
-/// to the system font at runtime until they land; nothing here needs to
-/// change when they do.
+/// The brand pair is Poppins 400/500/600, plus 700 for the Next Bar? home
+/// wordmark (spec, screen 8). Bundled at `NextBar/Resources/Fonts/` and
+/// registered via `project.yml`'s `UIAppFonts` — see apple/README.md.
 enum NBWeight {
-    case regular, medium, semibold
+    case regular, medium, semibold, bold
 
     var postscriptName: String {
         switch self {
         case .regular: return "Poppins-Regular"
         case .medium: return "Poppins-Medium"
         case .semibold: return "Poppins-SemiBold"
+        case .bold: return "Poppins-Bold"
         }
     }
 }

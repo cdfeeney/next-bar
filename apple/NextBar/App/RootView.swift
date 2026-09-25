@@ -1,12 +1,15 @@
 import SwiftUI
+import NextBarCore
 
 /// Screen 1: the five-tab shell. Push 1 ships real content only on Next
 /// Bar?; the other four show a title and a one-line "coming in the next
 /// build" body, never a blank view.
 struct MainTabView: View {
+    let homeCoords: Coords?
+
     var body: some View {
         TabView {
-            NextBarHomeView()
+            NextBarHomeView(homeCoords: homeCoords)
                 .tabItem { Label("Next Bar?", systemImage: "house") }
                 .accessibilityIdentifier("tab.nextBar")
 

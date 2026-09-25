@@ -7,8 +7,9 @@ final class NextBarHomeScreenTests: XCTestCase {
         reachHome(app, handle: "homeuserone")
 
         // Loading contract: the pulsing placeholders exist before the first
-        // real card does.
-        XCTAssertTrue(app.otherElements["home.placeholder"].firstMatch.waitForExistence(timeout: 5))
+        // real card does. PreviewSession.travel() holds this phase for 1.5s
+        // under -uiTesting so this assertion has a real window to catch it.
+        XCTAssertTrue(app.otherElements["home.placeholder"].firstMatch.waitForExistence(timeout: 3))
 
         XCTAssertTrue(app.otherElements["home.card.1"].waitForExistence(timeout: 8))
         for rank in 1...5 {
@@ -40,5 +41,21 @@ final class NextBarHomeScreenTests: XCTestCase {
 
         XCTAssertTrue(app.otherElements["home.card.1"].waitForExistence(timeout: 8))
         attachScreenshot(app, name: "TweakVibeSheet")
+    }
+
+    /// Without a location fix, home must open on the neighborhood picker,
+    /// never "Near you" results (spec, screen 8).
+    func testNoLocationShowsNeighborhoodPicker() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-uiTesting", "-uiTestingNoLocation"]
+        app.launch()
+        reachHome(app, handle: "homeuserpicker")
+
+        let neighborhoodButton = app.buttons["home.neighborhood.West Village"]
+        XCTAssertTrue(neighborhoodButton.waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "NextBarHome-NeighborhoodPicker")
+
+        neighborhoodButton.tap()
+        XCTAssertTrue(app.otherElements["home.card.1"].waitForExistence(timeout: 8))
     }
 }

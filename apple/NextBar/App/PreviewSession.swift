@@ -59,11 +59,17 @@ public final class PreviewSession: Session {
         walkableOnly: Bool,
         band: TravelBand
     ) async -> [String: RouteEstimate] {
-        // A real suspension point (not a delay) so callers like
-        // NextBarHomeView genuinely render their "checking routes" phase for
-        // at least one run-loop turn instead of it being optimized away by
-        // an instantly-resolving stub.
-        await Task.yield()
+        if ProcessInfo.processInfo.arguments.contains("-uiTesting") {
+            // XCUITest needs the "checking routes" phase to be observable
+            // for a real wall-clock window, not just one run-loop turn.
+            try? await Task.sleep(for: .seconds(1.5))
+        } else {
+            // A real suspension point (not a delay) so callers like
+            // NextBarHomeView genuinely render their "checking routes" phase
+            // for at least one run-loop turn instead of it being optimized
+            // away by an instantly-resolving stub.
+            await Task.yield()
+        }
         return [:]
     }
 

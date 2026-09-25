@@ -16,10 +16,9 @@ final class FindFriendsScreenTests: XCTestCase {
         XCTAssertTrue(followButton.waitForExistence(timeout: 5))
         followButton.tap()
         XCTAssertEqual(followButton.label, "Following Maya")
+        attachScreenshot(app, name: "FindFriends")
 
         app.buttons["findFriends.done"].tap()
         XCTAssertTrue(app.tabBars.buttons["Next Bar?"].waitForExistence(timeout: 5))
-
-        attachScreenshot(app, name: "FindFriends")
     }
 }

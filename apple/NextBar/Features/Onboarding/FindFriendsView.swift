@@ -4,6 +4,10 @@ import UIKit
 /// Screen 7. Contacts import is out of scope for push 1 — no Contacts
 /// permission string exists yet.
 struct FindFriendsView: View {
+    /// The handle claimed on the Username screen. `nil` only if that step is
+    /// ever skipped in a future flow — the share link falls back to the
+    /// install page rather than a broken profile URL.
+    let handle: String?
     let onDone: () -> Void
 
     @Environment(\.session) private var session
@@ -12,7 +16,12 @@ struct FindFriendsView: View {
     @State private var following: Set<String> = []
     @State private var searchTask: Task<Void, Never>?
 
-    private let shareURL = URL(string: "https://next-bar.com/u/me")!
+    private var shareURL: URL {
+        if let handle, !handle.isEmpty {
+            return URL(string: "https://next-bar.com/u/\(handle)")!
+        }
+        return URL(string: "https://next-bar.com/install")!
+    }
 
     var body: some View {
         VStack(spacing: 0) {

@@ -33,7 +33,7 @@ struct RootRouter: View {
     var body: some View {
         Group {
             if appState.isSignedIn {
-                MainTabView()
+                MainTabView(homeCoords: appState.effectiveHomeCoords)
             } else {
                 OnboardingFlow()
             }

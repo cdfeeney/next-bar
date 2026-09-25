@@ -8,6 +8,9 @@ import NextBarCore
 /// tags at all, since every earlier answer still counts.
 struct QuizView: View {
     let onFinished: (VibeProfile) -> Void
+    /// Called only when Back is tapped on question 1 — pops out of the quiz
+    /// to Location, the one case a Back tap actually leaves the screen.
+    let onBack: () -> Void
 
     private let questions = NextBarCore.quiz
 
@@ -61,6 +64,33 @@ struct QuizView: View {
                 .accessibilityIdentifier("quiz.next")
         }
         .background(NBColor.base.ignoresSafeArea())
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    goBack()
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .accessibilityIdentifier("quiz.back")
+            }
+        }
+    }
+
+    /// On question 1 this is the only way out of the quiz, so it pops the
+    /// whole screen; every later question just steps back one.
+    ///
+    /// ponytail: going back does not restore the previous pick or drop the
+    /// tag already collected for it, so re-answering after Back can double
+    /// up a tag. Add a per-question answer history if that surfaces as a
+    /// real bug.
+    private func goBack() {
+        if index > 0 {
+            index -= 1
+            singlePickIndex = nil
+        } else {
+            onBack()
+        }
     }
 
     private var bottomButtonLabel: String {

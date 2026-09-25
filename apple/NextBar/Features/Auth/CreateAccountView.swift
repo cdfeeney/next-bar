@@ -119,7 +119,7 @@ struct CreateAccountView: View {
             Button("Terms") { safariURL = URL(string: "https://next-bar.com/terms") }
                 .font(.nb(.regular, 12))
             Text("and").font(.nb(.regular, 12)).foregroundStyle(NBColor.textTertiary)
-            Button("Privacy Policy") { safariURL = URL(string: "https://next-bar.com/privacy") }
+            Button("Privacy Policy.") { safariURL = URL(string: "https://next-bar.com/privacy") }
                 .font(.nb(.regular, 12))
         }
         .multilineTextAlignment(.center)

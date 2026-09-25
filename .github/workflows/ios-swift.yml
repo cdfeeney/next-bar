@@ -64,10 +64,21 @@ jobs:
       - name: Export screenshots from the result bundle
         if: always()
         run: |
+          set -euo pipefail
           mkdir -p build/screenshots
           xcrun xcresulttool export attachments \
             --path build/NextBar.xcresult \
-            --output-path build/screenshots || echo "::warning::No attachments to export (build/NextBar.xcresult missing or empty)"
+            --output-path build/screenshots
+          if ! find build/screenshots -name '*.png' -print -quit | grep -q .; then
+            echo "::error::No screenshot (.png) attachments were exported to build/screenshots"
+            exit 1
+          fi
+
+      - name: Export the test result summary
+        if: always()
+        run: |
+          xcrun xcresulttool get test-results summary --path build/NextBar.xcresult \
+            > build/screenshots/summary.json || true
 
       - uses: actions/upload-artifact@v4
         if: always()

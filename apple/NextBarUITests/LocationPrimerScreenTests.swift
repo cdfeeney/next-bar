@@ -10,6 +10,7 @@ final class LocationPrimerScreenTests: XCTestCase {
 
         let shareButton = app.buttons["locationPrimer.share"]
         XCTAssertTrue(shareButton.waitForExistence(timeout: 5))
+        attachScreenshot(app, name: "LocationPrimer")
 
         addUIInterruptionMonitor(withDescription: "Location permission") { alert in
             for label in ["Don’t Allow", "Don't Allow", "Don't Allow While Using App"] {
@@ -29,7 +30,5 @@ final class LocationPrimerScreenTests: XCTestCase {
 
         let quizSkip = app.buttons["quiz.skip"]
         XCTAssertTrue(quizSkip.waitForExistence(timeout: 8))
-
-        attachScreenshot(app, name: "LocationPrimer")
     }
 }
