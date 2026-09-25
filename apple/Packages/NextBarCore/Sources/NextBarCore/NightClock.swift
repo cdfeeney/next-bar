@@ -12,8 +12,9 @@ import Foundation
 /// test port represents one the same way Foundation itself allows — a `Date`
 /// built from `Double.nan` — so the fail-safe path stays exercised.
 public func nycHour(_ now: Date) -> Double {
-    if now.timeIntervalSince1970.isNaN { return .nan }
+    guard now.timeIntervalSince1970.isFinite,
+          let newYork = TimeZone(identifier: "America/New_York") else { return .nan }
     var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(identifier: "America/New_York")!
+    calendar.timeZone = newYork
     return Double(calendar.component(.hour, from: now))
 }

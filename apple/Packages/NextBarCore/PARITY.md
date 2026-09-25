@@ -167,3 +167,12 @@ a port of an existing TS case.
 - Everything else is a direct, same-shape port: same constants, same cascade order, same
   eligibility math, same weights (`EXPLICIT_VIBE_WEIGHT` = 0.8, late-night boost/penalty = 0.12,
   etc.).
+
+## Review round 2026-09-25 (Codex xhigh: 2 MEDIUM + 2 LOW → BLOCK; Claude/FABLE: APPROVE, 4 LOW)
+Fixed in the follow-up commit, each with a regression test in `ReviewRegressionTests.swift`:
+- Matching.swift: negative `maxResults` clamped to 0 (JS `slice(0, negative)` = []; Swift `prefix` trapped).
+- Freshness.swift: `parseISODate` now accepts any ISO-8601 offset and 1–6 fractional digits (was three fixed formats → `+infinity` → hard-filtered).
+- NightClock.swift: infinite dates return `.nan` like the TS failure path; the time zone is no longer force-unwrapped.
+- TravelTime.swift: `directionsHref` percent-encodes the comma in `lat,lng` like `URLSearchParams`.
+- MatchingExplicitVibeTests.swift: tolerances tightened from 1e-9 to 5e-11 to match `toBeCloseTo(x, 10)`.
+Not changed (Fable LOW): `%.1f` vs `toFixed(1)` half-way rounding — display copy, no fixture hits it.

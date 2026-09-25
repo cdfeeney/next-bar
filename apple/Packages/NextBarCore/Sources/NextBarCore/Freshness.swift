@@ -14,21 +14,32 @@ public func daysAgo(_ isoDate: String, now: Date = Date()) -> Double {
     return (diffMs / msPerDay).rounded(.down)
 }
 
-/// A small flexible ISO-8601 parser covering what `bars.ts` fixtures and test
-/// fixtures actually use: full timestamps and bare `yyyy-MM-dd` dates (the
-/// latter parsed as UTC midnight, matching JS `new Date('yyyy-MM-dd')`).
+/// ISO-8601 parsing as wide as JS `new Date(iso)` for the shapes Supabase can
+/// emit: an internet date-time with any offset (`Z`, `+00:00`), with or without
+/// fractional seconds of any length, or a bare `yyyy-MM-dd` (UTC midnight,
+/// matching JS). Codex review 2026-09-25: the earlier three-format parser sent
+/// valid offsets to `+infinity`, which the freshness gate then hard-filtered.
 func parseISODate(_ s: String) -> Date? {
-    let formats = [
-        "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
-        "yyyy-MM-dd'T'HH:mm:ss'Z'",
-        "yyyy-MM-dd",
-    ]
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(identifier: "UTC")
-    for format in formats {
-        formatter.dateFormat = format
-        if let date = formatter.date(from: s) { return date }
-    }
-    return nil
+    let withFraction = ISO8601DateFormatter()
+    withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = withFraction.date(from: normalisedFraction(s)) { return date }
+    let plain = ISO8601DateFormatter()
+    plain.formatOptions = [.withInternetDateTime]
+    if let date = plain.date(from: s) { return date }
+    let dateOnly = DateFormatter()
+    dateOnly.locale = Locale(identifier: "en_US_POSIX")
+    dateOnly.timeZone = TimeZone(identifier: "UTC")
+    dateOnly.dateFormat = "yyyy-MM-dd"
+    return dateOnly.date(from: s)
+}
+
+/// `ISO8601DateFormatter` accepts exactly three fractional digits; Postgres
+/// emits up to six. Trim or pad the fraction so both parse.
+private func normalisedFraction(_ s: String) -> String {
+    guard let dot = s.firstIndex(of: "."),
+          let end = s[dot...].firstIndex(where: { $0 == "Z" || $0 == "+" || $0 == "-" }) else { return s }
+    let digits = String(s[s.index(after: dot)..<end])
+    guard !digits.isEmpty, digits.allSatisfy(\.isNumber) else { return s }
+    let three = (digits + "000").prefix(3)
+    return String(s[..<dot]) + "." + three + String(s[end...])
 }

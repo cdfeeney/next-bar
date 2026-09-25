@@ -186,7 +186,9 @@ public func matches(_ args: MatchesArgs) -> [Bar] {
         }
     }
 
-    let cap = args.maxResultsOverride ?? maxResults
+    // JS `slice(0, cap)` with a negative cap is an empty list; Swift `prefix`
+    // traps. Clamp once so the two agree (Codex review 2026-09-25).
+    let cap = max(0, args.maxResultsOverride ?? maxResults)
 
     // ---- V8 P1 cascade -------------------------------------------------
     // Quiz tags are a COLD-START PRIOR, never an admission gate.

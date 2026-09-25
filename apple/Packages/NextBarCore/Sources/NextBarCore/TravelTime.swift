@@ -94,5 +94,9 @@ public func directionsHref(origin: Coords?, destination: Coords, mode: TravelMod
         )
     }
     components.queryItems = items
-    return components.url!.absoluteString
+    // URLSearchParams percent-encodes the comma in "lat,lng"; URLComponents
+    // leaves it. Match the TS href byte for byte (Fable review 2026-09-25).
+    components.percentEncodedQuery = components.percentEncodedQuery?
+        .replacingOccurrences(of: ",", with: "%2C")
+    return components.url?.absoluteString ?? ""
 }

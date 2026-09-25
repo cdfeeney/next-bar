@@ -115,8 +115,8 @@ struct ActiveTweakTests {
             },
             rated
         )
-        #expect(abs(taste.affinity[PICKED]! - (-0.8)) < 1e-9)
-        #expect(abs(taste.affinity[.wine]! - 0.8) < 1e-9)
+        #expect(abs(taste.affinity[PICKED]! - (-0.8)) < 5e-11)
+        #expect(abs(taste.affinity[.wine]! - 0.8) < 5e-11)
 
         let sharp = atMiles("sharp", 0.5, [PICKED])
         let broad = atMiles("broad", 0.6, [PICKED, .wine])
@@ -304,9 +304,9 @@ struct ExplicitVibeScoreTests {
     @Test("weights the picked vibe 80% and learned taste 20%")
     func weightsPickedVibe80PercentLearnedTaste20Percent() {
         let dive = makeBar(id: "d", tags: [HISTORY])
-        #expect(abs(explicitVibeScore(dive, vibeTags: [PICKED], taste: taste) - 0.2 * learnedTasteScore(dive, taste)) < 1e-9)
+        #expect(abs(explicitVibeScore(dive, vibeTags: [PICKED], taste: taste) - 0.2 * learnedTasteScore(dive, taste)) < 5e-11)
         let cocktail = makeBar(id: "c", tags: [PICKED])
-        #expect(abs(explicitVibeScore(cocktail, vibeTags: [PICKED], taste: taste) - 0.8) < 1e-9)
+        #expect(abs(explicitVibeScore(cocktail, vibeTags: [PICKED], taste: taste) - 0.8) < 5e-11)
     }
 
     @Test("is independent of confidence — the blend never shrinks with N")
@@ -314,6 +314,6 @@ struct ExplicitVibeScoreTests {
         let cocktail = makeBar(id: "c", tags: [PICKED])
         let cold = explicitVibeScore(cocktail, vibeTags: [PICKED], taste: emptyTaste)
         let seasoned = explicitVibeScore(cocktail, vibeTags: [PICKED], taste: diveHistoryTaste(500))
-        #expect(abs(cold - seasoned) < 1e-9)
+        #expect(abs(cold - seasoned) < 5e-11)
     }
 }
